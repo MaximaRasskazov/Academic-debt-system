@@ -17,6 +17,9 @@ type Querier interface {
 	// обеспечивается на уровне сервиса (сначала проверка существования).
 	AttachRoleToUser(ctx context.Context, arg AttachRoleToUserParams) (RoleUser, error)
 	CountUsers(ctx context.Context) (int64, error)
+	// ID генерируется на стороне сервиса (uuid.New()), потому что он же
+	// используется как jti в JWT-claims — необходимо знать значение до
+	// подписи токена.
 	CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) (AccessToken, error)
 	CreateAuditEntry(ctx context.Context, arg CreateAuditEntryParams) (AuditLog, error)
 	CreateChangeLog(ctx context.Context, arg CreateChangeLogParams) (ChangeLog, error)

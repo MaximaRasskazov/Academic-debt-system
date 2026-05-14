@@ -12,20 +12,25 @@ import (
 )
 
 const createAccessToken = `-- name: CreateAccessToken :one
-INSERT INTO access_tokens (user_id, token_hash, expires_at, ip_address)
-VALUES ($1, $2, $3, $4)
+INSERT INTO access_tokens (id, user_id, token_hash, expires_at, ip_address)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, user_id, token_hash, expires_at, is_revoked, created_at, last_used_at, ip_address
 `
 
 type CreateAccessTokenParams struct {
+	ID        pgtype.UUID        `json:"id"`
 	UserID    pgtype.UUID        `json:"user_id"`
 	TokenHash string             `json:"token_hash"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	IpAddress *string            `json:"ip_address"`
 }
 
+// ID генерируется на стороне сервиса (uuid.New()), потому что он же
+// используется как jti в JWT-claims — необходимо знать значение до
+// подписи токена.
 func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) (AccessToken, error) {
 	row := q.db.QueryRow(ctx, createAccessToken,
+		arg.ID,
 		arg.UserID,
 		arg.TokenHash,
 		arg.ExpiresAt,

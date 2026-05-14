@@ -1,6 +1,9 @@
 -- name: CreateAccessToken :one
-INSERT INTO access_tokens (user_id, token_hash, expires_at, ip_address)
-VALUES ($1, $2, $3, $4)
+-- ID генерируется на стороне сервиса (uuid.New()), потому что он же
+-- используется как jti в JWT-claims — необходимо знать значение до
+-- подписи токена.
+INSERT INTO access_tokens (id, user_id, token_hash, expires_at, ip_address)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetAccessTokenByHash :one
