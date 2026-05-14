@@ -6,11 +6,14 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-academic}
       POSTGRES_DB: ${DB_NAME:-academic_debts}
     ports:
-      - "5432:5432"
+      # Снаружи 15432, чтобы не конфликтовать с локально установленным postgres
+      # на стандартном порту (у разных членов команды может быть свой
+      # postgres). Внутри docker-сети по-прежнему 5432.
+      - "15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-academic}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
