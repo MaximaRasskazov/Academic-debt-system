@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-academic}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-academic}
+      POSTGRES_DB: ${DB_NAME:-academic_debts}
+    ports:
+      # Снаружи 15432, чтобы не конфликтовать с локально установленным postgres
+      # на стандартном порту (у разных членов команды может быть свой
+      # postgres). Внутри docker-сети по-прежнему 5432.
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-academic_debts}
+      DB_USER: ${DB_USER:-academic}
+      DB_PASSWORD: ${DB_PASSWORD:-academic}
+      # JWT_SECRET обязателен — обязательно задать в .env на хосте.
+      # Для запуска через compose положите .env рядом с этим файлом
+      # с содержимым: JWT_SECRET=...openssl rand -hex 32...
+      JWT_SECRET: ${JWT_SECRET}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      COOKIE_PATH: ${COOKIE_PATH:-/}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -1,0 +1,92 @@
+// Package repo предоставляет фасад над сгенерированным sqlc-кодом из
+// internal/repo/queries и реализует Unit of Work для атомарных мутаций.
+//
+// Сервисы получают *Store через DI и используют либо встроенный
+// *queries.Queries для одиночных запросов, либо Store.RunInTx для
+// последовательностей, требующих транзакции (мутация сущности + запись
+// в change_logs / audit_log).
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+)
+
+// Store — точка входа в слой доступа к данным.
+//
+// Встраивает *queries.Queries поверх пула соединений, поэтому все
+// методы, сгенерированные sqlc, доступны напрямую как методы Store —
+// например, store.GetUserByEmail(ctx, "u@example.com"). Внутри
+// транзакции работа идёт через локальный *queries.Queries, который
+// передаётся в RunInTx-callback.
+type Store struct {
+	*queries.Queries
+
+	pool *pgxpool.Pool
+}
+
+// NewStore оборачивает уже открытый пул соединений.
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{
+		Queries: queries.New(pool),
+		pool:    pool,
+	}
+}
+
+// Pool возвращает нижележащий пул. Нужно тонкому кругу клиентов —
+// например, healthcheck-у для Ping. Большинству сервисов pool не нужен.
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
+// RunInTx выполняет fn внутри транзакции. Если fn возвращает ошибку
+// (или сама транзакция не может закоммититься), изменения откатываются.
+//
+// Внутри fn нужно использовать переданный *queries.Queries — он
+// прибинден к транзакции. Использование Store.Queries напрямую внутри
+// fn создаст запись вне транзакции — это баг, не делать так.
+//
+// Пример:
+//
+//	err := store.RunInTx(ctx, func(q *queries.Queries) error {
+//	    user, err := q.CreateUser(ctx, params)
+//	    if err != nil { return err }
+//	    _, err = q.CreateChangeLog(ctx, queries.CreateChangeLogParams{
+//	        EntityType: "user", EntityID: user.ID.String(),
+//	        Action: "created", After: afterJSON, CreatedBy: actorID,
+//	    })
+//	    return err
+//	})
+func (s *Store) RunInTx(ctx context.Context, fn func(*queries.Queries) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	// Rollback на закрытой транзакции возвращает pgx.ErrTxClosed —
+	// это нормальное поведение, ошибку игнорируем (она именно про
+	// "транзакция уже завершилась успешным Commit").
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := fn(queries.New(tx)); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// IsNotFound сообщает, является ли ошибка от sqlc-запроса
+// "запись не найдена". pgx возвращает свою специфичную ошибку, и
+// сервисы должны проверять её именно через этот хелпер, не импортируя
+// pgx напрямую.
+func IsNotFound(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows)
+}

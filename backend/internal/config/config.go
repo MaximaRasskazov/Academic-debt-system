@@ -1,0 +1,173 @@
+// Package config загружает конфигурацию приложения из переменных окружения.
+//
+// При запуске Load() сначала пытается прочитать .env (если есть), затем
+// собирает Config из ENV с дефолтами на dev-значения. Все обязательные
+// поля валидируются перед возвратом — старт сервера должен падать рано,
+// если конфигурация неполная, а не на первом запросе.
+package config
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+// Config — собранная конфигурация приложения. Хранится в памяти на время
+// жизни процесса. Все поля read-only после Load().
+type Config struct {
+	// Application
+	AppEnv   string
+	AppPort  string
+	LogLevel string
+
+	// PostgreSQL
+	DBHost     string
+	DBPort     string
+	DBName     string
+	DBUser     string
+	DBPassword string
+
+	// JWT и сессии
+	JWTSecret       string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+
+	// Cookie для refresh-токена
+	CookieSecure   bool
+	CookieDomain   string
+	CookiePath     string
+	CookieSameSite http.SameSite
+
+	// CORS
+	AllowedOrigins []string
+}
+
+// Load читает .env (если есть) и собирает Config из ENV.
+//
+// Возвращает ошибку, если обязательные поля не заданы. В этом случае main
+// должен сделать log.Fatal — работа без корректной конфигурации невозможна.
+func Load() (*Config, error) {
+	_ = godotenv.Load()
+
+	accessTTL, err := parseDuration("ACCESS_TOKEN_TTL", 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	refreshTTL, err := parseDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &Config{
+		AppEnv:   getEnv("APP_ENV", "development"),
+		AppPort:  getEnv("APP_PORT", "8080"),
+		LogLevel: getEnv("LOG_LEVEL", "info"),
+
+		DBHost:     getEnv("DB_HOST", "127.0.0.1"),
+		DBPort:     getEnv("DB_PORT", "5432"),
+		DBName:     getEnv("DB_NAME", "academic_debts"),
+		DBUser:     getEnv("DB_USER", "academic"),
+		DBPassword: getEnv("DB_PASSWORD", ""),
+
+		JWTSecret:       os.Getenv("JWT_SECRET"),
+		AccessTokenTTL:  accessTTL,
+		RefreshTokenTTL: refreshTTL,
+
+		CookieSecure:   parseBool("COOKIE_SECURE", false),
+		CookieDomain:   getEnv("COOKIE_DOMAIN", ""),
+		CookiePath:     getEnv("COOKIE_PATH", "/"),
+		CookieSameSite: parseSameSite(getEnv("COOKIE_SAMESITE", "lax")),
+
+		AllowedOrigins: parseList("ALLOWED_ORIGINS", []string{"http://localhost:5173"}),
+	}
+
+	if cfg.DBName == "" || cfg.DBUser == "" {
+		return nil, fmt.Errorf("DB_NAME and DB_USER are required")
+	}
+	// JWT_SECRET — обязателен. Не разрешаем fallback на дефолт: это
+	// security-issue (подделка токенов под предсказуемым ключом).
+	if cfg.JWTSecret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+	if len(cfg.JWTSecret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET must be at least 32 bytes (got %d)", len(cfg.JWTSecret))
+	}
+
+	return cfg, nil
+}
+
+// DatabaseURL собирает DSN для подключения к Postgres.
+// sslmode=disable достаточен для dev/локального docker-compose; для prod
+// этот метод нужно расширить параметром или брать готовый URL из env.
+func (c *Config) DatabaseURL() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)
+}
+
+// IsProduction возвращает true, если приложение работает в production-режиме.
+// Используется для feature-флагов (например, отключение debug-эндпоинтов).
+func (c *Config) IsProduction() bool {
+	return c.AppEnv == "production"
+}
+
+func getEnv(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return fallback
+}
+
+func parseBool(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+func parseDuration(key string, fallback time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return d, nil
+}
+
+func parseSameSite(v string) http.SameSite {
+	switch strings.ToLower(v) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
+}
+
+func parseList(key string, fallback []string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
