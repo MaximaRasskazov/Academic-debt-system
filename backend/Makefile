@@ -18,6 +18,10 @@ build: ## Build server binary
 test: ## Run all tests with race detector and coverage
 	go test -race -cover ./...
 
+test-integration: ## Run integration tests against running postgres (docker-compose up postgres first)
+	TEST_DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	    go test -race -cover ./...
+
 lint: ## Run linters (gofmt + go vet)
 	@test -z "$$(gofmt -l -s .)" || (gofmt -l -s . && exit 1)
 	go vet ./...
