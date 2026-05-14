@@ -1,10 +1,8 @@
 // Command server — точка входа HTTP-сервиса академических задолженностей.
 //
-// Скелет foundation-этапа: загружает конфиг, открывает пул соединений к
-// Postgres, поднимает chi-роутер с базовыми middleware и /health, корректно
-// завершает работу по SIGINT/SIGTERM.
-//
-// Auth, RBAC, доменные модули и WebSocket будут добавлены отдельными PR.
+// Старт: загружает конфиг, открывает пул соединений к Postgres, собирает
+// слои (Store → TokenService → AuthService) и chi-роутер с middleware
+// и маршрутами /api/auth/*. Корректно завершает работу по SIGINT/SIGTERM.
 package main
 
 import (
@@ -18,16 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
+	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
 
 const (
 	dbConnectTimeout  = 10 * time.Second
-	dbPingTimeout     = 2 * time.Second
-	requestTimeout    = 30 * time.Second
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
@@ -54,11 +53,20 @@ func run() error {
 	defer pool.Close()
 	slog.Info("database connected", "host", cfg.DBHost, "db", cfg.DBName)
 
-	r := buildRouter(pool)
+	store := repo.NewStore(pool)
+	tokens := token.New(store, []byte(cfg.JWTSecret), cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
+	authSvc := auth.New(store, tokens)
+
+	handler := httpx.NewRouter(httpx.Deps{
+		Cfg:    cfg,
+		Pool:   pool,
+		Auth:   authSvc,
+		Tokens: tokens,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,
-		Handler:           r,
+		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -80,45 +88,11 @@ func newPool(cfg *config.Config) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create pool: %w", err)
 	}
-
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-
 	return pool, nil
-}
-
-func buildRouter(pool *pgxpool.Pool) http.Handler {
-	r := chi.NewRouter()
-
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(requestTimeout))
-
-	r.Get("/health", healthHandler(pool))
-
-	return r
-}
-
-// healthHandler возвращает 200 если БД отвечает, 503 если нет.
-// Используется healthcheck'ом docker-compose и k8s readiness/liveness.
-func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), dbPingTimeout)
-		defer cancel()
-
-		if err := pool.Ping(ctx); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"status":"db_unreachable"}`))
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}
 }
 
 // runServer запускает сервер и ждёт SIGINT/SIGTERM для graceful shutdown.
