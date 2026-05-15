@@ -1,6 +1,7 @@
-# Load .env if exists
-ifneq (,$(wildcard .env))
-    include .env
+# Загружаем единый корневой .env (рядом с docker-compose.yml).
+# Локальный backend/.env больше не поддерживается — один источник правды.
+ifneq (,$(wildcard ../.env))
+    include ../.env
     export
 endif
 
