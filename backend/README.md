@@ -1,122 +1,120 @@
 # Backend (Go)
 
-Backend сервис системы учёта академических задолженностей.
+Backend-сервис системы учёта академических задолженностей.
+
+Для **быстрого запуска всего стека** используй корневой [Quick Start](../README.md#-quick-start) — `make setup` поднимет всё одной командой.
+
+Этот документ — для тех, кто работает с Go-кодом локально, без docker.
 
 ## Стек
 
 - Go 1.26
 - chi v5 — HTTP-роутер
-- pgx v5 — PostgreSQL-драйвер
-- sqlc — генерация типобезопасного Go-кода из SQL
-- goose — миграции БД
+- pgx v5 + pgxpool — драйвер Postgres
+- sqlc — генерация типобезопасных репозиториев из SQL
+- goose — миграции (`backend/sql/migrations`) и dev-сиды (`backend/sql/seeds`)
+- golang-jwt/jwt/v5 — JWT access-токены
+- bcrypt — хеш паролей
 - slog (stdlib) — структурированное логирование
 
-## Требования к окружению
-
-- Go 1.26+
-- PostgreSQL 17 (или Docker)
-- goose CLI: `go install github.com/pressly/goose/v3/cmd/goose@latest`
-- sqlc CLI: `go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest`
-
-## Быстрый старт
-
-```bash
-# 1. Поднять Postgres + Mailpit (из корня репо)
-docker compose up -d postgres mailpit
-
-# 2. Скопировать .env (из backend/)
-cp .env.example .env
-
-# 3. Применить миграции (когда появятся)
-make migrate-up
-
-# 4. Запустить сервер
-make run
-```
-
-Сервер поднимется на `http://localhost:8080`.
-
-Проверка живости:
-```bash
-curl http://localhost:8080/health
-# → {"status":"ok"}
-```
-
-## Структура проекта
+## Структура
 
 ```
 backend/
-├── cmd/server/             # Точка входа
+├── cmd/server/                # main: config + pool + router + graceful shutdown
 ├── internal/
-│   ├── config/             # Загрузка конфигурации из env
-│   ├── domain/             # Бизнес-сущности (будут добавлены)
-│   ├── repo/               # Репозитории + sqlc-generated
-│   ├── service/            # Бизнес-логика
-│   └── transport/http/     # HTTP-слой (handler/middleware/dto)
+│   ├── config/                # загрузка .env, валидация JWT_SECRET
+│   ├── pgutil/                # interop google/uuid ↔ pgtype.*
+│   ├── repo/
+│   │   ├── queries/           # sqlc-generated, НЕ редактировать вручную
+│   │   ├── store.go           # *Store + RunInTx (UoW)
+│   │   └── store_test.go
+│   ├── service/
+│   │   ├── token/             # JWT-генерация, валидация, refresh-replay-detection
+│   │   ├── auth/              # Register / Login / Refresh / Logout / Me
+│   │   └── rbac/              # HasPermission, AssignRole с privilege-escalation guard
+│   └── transport/http/
+│       ├── dto/               # API-схемы (без password_hash и pgtype.*)
+│       ├── handler/           # /api/auth/*
+│       ├── middleware/        # Auth, RBAC, CORS, SecurityHeaders
+│       └── router.go          # сборка chi.Router
 ├── sql/
-│   ├── migrations/         # goose-миграции (.sql)
-│   └── queries/            # sqlc-запросы (.sql)
-├── Dockerfile
-├── Makefile
-├── go.mod
-└── sqlc.yaml
+│   ├── migrations/            # 00001-00010 — auth, RBAC, audit, changelog
+│   └── seeds/                 # 00001_seed_dev_accounts — для SEED_DEV_ACCOUNTS=true
+├── Dockerfile                 # multi-stage + goose CLI + entrypoint.sh
+├── entrypoint.sh              # wait-for-postgres → goose up → seeds → exec server
+├── Makefile                   # читает ../.env (единый источник конфига)
+├── sqlc.yaml
+└── go.mod
+```
+
+## Локальная разработка (без docker)
+
+```bash
+# Из корня репо: создай .env (это нужно сделать один раз)
+make setup     # либо вручную: cp .env.example .env && подставить JWT_SECRET
+
+# Подними только Postgres из docker, всё остальное локально:
+docker compose up -d postgres mailpit
+
+# Накати миграции с хоста (goose читает DB_HOST/DB_PORT из ../.env)
+cd backend
+make migrate-up
+
+# Запусти сервер локально
+make run
 ```
 
 ## Команды Makefile
 
 ```
-make help            # Список команд
-make run             # Локальный запуск
-make build           # Сборка бинарника
-make test            # Тесты с race detector
-make lint            # gofmt + go vet
-make tidy            # go mod tidy
-make migrate-up      # Применить миграции
-make migrate-down    # Откатить последнюю миграцию
-make migrate-status  # Статус миграций
-make migrate-create name=foo  # Создать новую миграцию
-make sqlc            # Перегенерировать код из sql/queries
-make docker-up       # Поднять postgres + mailpit + backend
-make docker-down     # Остановить всё
+make help                     # Список таргетов
+make run                      # go run ./cmd/server
+make build                    # сборка бинарника в bin/server
+make test                     # unit-тесты (интеграционные скипаются)
+make test-integration         # все тесты против поднятого postgres
+make lint                     # gofmt + go vet
+make tidy                     # go mod tidy
+make migrate-up               # goose up на хостовой БД (DB_HOST из ../.env)
+make migrate-down             # откатить последнюю миграцию
+make migrate-status           # статус миграций
+make migrate-create name=foo  # создать новую миграцию
+make sqlc                     # перегенерировать internal/repo/queries из sql/queries
 ```
 
-## Переменные окружения
+## Конфиг
 
-См. `.env.example`. Основные:
+См. корневой `.env.example`. Backend читает env-переменные через `internal/config`.
 
-| Переменная | Описание | По умолчанию |
-|---|---|---|
-| `APP_ENV` | Окружение (development/production) | `development` |
-| `APP_PORT` | Порт HTTP-сервера | `8080` |
-| `LOG_LEVEL` | Уровень логов | `info` |
-| `DB_HOST` | Хост Postgres | `127.0.0.1` |
-| `DB_PORT` | Порт Postgres | `5432` |
-| `DB_NAME` | Имя БД | `academic_debts` |
-| `DB_USER` | Пользователь БД | `academic` |
-| `DB_PASSWORD` | Пароль | — |
+| Группа | Переменные |
+|---|---|
+| Application | `APP_ENV`, `APP_PORT`, `LOG_LEVEL` |
+| Postgres | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
+| JWT | `JWT_SECRET` (обязателен, ≥32 байт), `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL` |
+| Cookie | `COOKIE_SECURE`, `COOKIE_DOMAIN`, `COOKIE_PATH`, `COOKIE_SAMESITE` |
+| CORS | `ALLOWED_ORIGINS` (через запятую) |
+| Dev | `SEED_DEV_ACCOUNTS` — катить ли сиды демо-аккаунтов |
 
 ## Текущий статус
 
-Foundation-скелет. Готово:
-- [x] Структура папок
-- [x] Конфигурация из env
-- [x] Подключение к PostgreSQL (pgxpool)
-- [x] Базовые middleware (RequestID, RealIP, Recoverer, Timeout)
-- [x] `/health` endpoint
-- [x] Graceful shutdown
-- [x] Dockerfile (multi-stage)
-- [x] docker-compose с postgres + mailpit
-- [x] Makefile с базовыми командами
-- [x] sqlc.yaml + папки под миграции/запросы
+Auth-foundation готов и смержен в `develop` (PR #10):
 
-Следующие PR:
-- [ ] Auth (users + JWT + register/login/refresh)
-- [ ] RBAC (roles + permissions + middleware)
-- [ ] Audit log + change history
-- [ ] Доменные сущности (debts, retakes, disciplines)
-- [ ] WebSocket для real-time уведомлений
-- [ ] Email-сервис
-- [ ] Шедулер (переход пересдач в "Завершена")
-- [ ] Синхронизация с внешней системой
+- [x] 10 миграций (users, sessions, refresh_tokens, RBAC, audit, change_logs + сиды RBAC)
+- [x] sqlc-репозитории (44 типобезопасных метода)
+- [x] Store + UoW поверх pgxpool
+- [x] TokenService с JWT и one-use refresh + replay-detection
+- [x] AuthService (Register/Login/Refresh/Logout/Me) с bcrypt
+- [x] RBACService с защитой от privilege escalation
+- [x] Middleware: Auth, RequirePermission, CORS, SecurityHeaders
+- [x] Handler'ы /api/auth/* (5 endpoints)
+- [x] DX: автомиграции в Docker, один `make setup`, дев-сиды
+- [x] Coverage 76-85% по сервисным пакетам
+
+В работе:
+- [ ] Доменные сущности (debts, retakes, disciplines, teacher_requests)
+- [ ] WebSocket-хаб для real-time уведомлений
+- [ ] Email-сервис (gomail/v2 + Mailpit)
+- [ ] Шедулер пересдач (`time.Ticker`)
+- [ ] Синхронизация с внешней системой успеваемости
 - [ ] Экспорт отчётов (XLSX/CSV)
-- [ ] Swagger
+- [ ] Swagger (swaggo/swag)
