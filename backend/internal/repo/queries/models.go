@@ -41,6 +41,47 @@ type ChangeLog struct {
 	CreatedBy  pgtype.UUID        `json:"created_by"`
 }
 
+type Debt struct {
+	ID           pgtype.UUID        `json:"id"`
+	StudentID    pgtype.UUID        `json:"student_id"`
+	DisciplineID pgtype.UUID        `json:"discipline_id"`
+	IssuedBy     pgtype.UUID        `json:"issued_by"`
+	Status       string             `json:"status"`
+	FinalGrade   *int32             `json:"final_grade"`
+	GradedAt     pgtype.Timestamptz `json:"graded_at"`
+	GradedBy     pgtype.UUID        `json:"graded_by"`
+	ExternalID   *string            `json:"external_id"`
+	Source       string             `json:"source"`
+	Notes        *string            `json:"notes"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+	DeletedBy    pgtype.UUID        `json:"deleted_by"`
+}
+
+type Discipline struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Code        string             `json:"code"`
+	Description *string            `json:"description"`
+	ExternalID  *string            `json:"external_id"`
+	Source      string             `json:"source"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	DeletedBy   pgtype.UUID        `json:"deleted_by"`
+}
+
+type Notification struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Kind      string             `json:"kind"`
+	Payload   []byte             `json:"payload"`
+	ReadAt    pgtype.Timestamptz `json:"read_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Permission struct {
 	ID          pgtype.UUID        `json:"id"`
 	Name        string             `json:"name"`
@@ -74,6 +115,51 @@ type RefreshToken struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type Retake struct {
+	ID              pgtype.UUID        `json:"id"`
+	DisciplineID    pgtype.UUID        `json:"discipline_id"`
+	Kind            string             `json:"kind"`
+	MinTeachers     int32              `json:"min_teachers"`
+	Building        string             `json:"building"`
+	Room            string             `json:"room"`
+	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
+	DurationMinutes int32              `json:"duration_minutes"`
+	Status          string             `json:"status"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	Notes           *string            `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt       pgtype.Timestamptz `json:"deleted_at"`
+	DeletedBy       pgtype.UUID        `json:"deleted_by"`
+}
+
+type RetakeChangeRequest struct {
+	ID               pgtype.UUID        `json:"id"`
+	RetakeID         pgtype.UUID        `json:"retake_id"`
+	RequestedBy      pgtype.UUID        `json:"requested_by"`
+	RequestedChanges []byte             `json:"requested_changes"`
+	Reason           *string            `json:"reason"`
+	Status           string             `json:"status"`
+	ReviewedBy       pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt       pgtype.Timestamptz `json:"reviewed_at"`
+	DecisionReason   *string            `json:"decision_reason"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RetakeParticipant struct {
+	ID        pgtype.UUID        `json:"id"`
+	RetakeID  pgtype.UUID        `json:"retake_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Kind      string             `json:"kind"`
+	DebtID    pgtype.UUID        `json:"debt_id"`
+	Grade     *int32             `json:"grade"`
+	GradedAt  pgtype.Timestamptz `json:"graded_at"`
+	GradedBy  pgtype.UUID        `json:"graded_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Role struct {
 	ID          pgtype.UUID        `json:"id"`
 	Name        string             `json:"name"`
@@ -96,6 +182,39 @@ type RoleUser struct {
 	CreatedBy pgtype.UUID        `json:"created_by"`
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
 	DeletedBy pgtype.UUID        `json:"deleted_by"`
+}
+
+type StudentDiscipline struct {
+	ID           pgtype.UUID        `json:"id"`
+	StudentID    pgtype.UUID        `json:"student_id"`
+	DisciplineID pgtype.UUID        `json:"discipline_id"`
+	AcademicYear *string            `json:"academic_year"`
+	Semester     *int32             `json:"semester"`
+	Source       string             `json:"source"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+}
+
+type TeacherDiscipline struct {
+	ID           pgtype.UUID        `json:"id"`
+	TeacherID    pgtype.UUID        `json:"teacher_id"`
+	DisciplineID pgtype.UUID        `json:"discipline_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+	DeletedBy    pgtype.UUID        `json:"deleted_by"`
+}
+
+type TeacherRoleRequest struct {
+	ID             pgtype.UUID        `json:"id"`
+	RequestedBy    pgtype.UUID        `json:"requested_by"`
+	Reason         *string            `json:"reason"`
+	Status         string             `json:"status"`
+	ReviewedBy     pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt     pgtype.Timestamptz `json:"reviewed_at"`
+	DecisionReason *string            `json:"decision_reason"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {
