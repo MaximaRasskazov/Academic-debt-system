@@ -11,11 +11,28 @@ import (
 )
 
 type Querier interface {
+	AddParticipant(ctx context.Context, arg AddParticipantParams) (RetakeParticipant, error)
+	ApproveRetakeChangeRequest(ctx context.Context, arg ApproveRetakeChangeRequestParams) (RetakeChangeRequest, error)
+	// Сервис вызывает в одной транзакции с AttachRoleToUser(teacher).
+	ApproveTeacherRoleRequest(ctx context.Context, arg ApproveTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	AttachPermissionToRole(ctx context.Context, arg AttachPermissionToRoleParams) (PermissionRole, error)
 	// Идемпотентно: при повторной выдаче той же роли SoftDelete ничего не
 	// меняет, INSERT даст конфликт по уникальному индексу. Идемпотентность
 	// обеспечивается на уровне сервиса (сначала проверка существования).
 	AttachRoleToUser(ctx context.Context, arg AttachRoleToUserParams) (RoleUser, error)
+	AttachStudentToDiscipline(ctx context.Context, arg AttachStudentToDisciplineParams) (StudentDiscipline, error)
+	AttachTeacherToDiscipline(ctx context.Context, arg AttachTeacherToDisciplineParams) (TeacherDiscipline, error)
+	// Деканат отменяет ошибочно поставленный долг.
+	CancelDebt(ctx context.Context, id pgtype.UUID) error
+	CancelRetake(ctx context.Context, id pgtype.UUID) error
+	CountDebts(ctx context.Context) (int64, error)
+	CountDisciplines(ctx context.Context) (int64, error)
+	CountOpenDebtsForStudent(ctx context.Context, studentID pgtype.UUID) (int64, error)
+	// Проверка инварианта "commission требует ≥ 3 преподавателей" перед
+	// старшим переводом пересдачи в активный статус.
+	CountTeachersInRetake(ctx context.Context, retakeID pgtype.UUID) (int64, error)
+	// Badge-counter в шапке UI.
+	CountUnreadForUser(ctx context.Context, userID pgtype.UUID) (int64, error)
 	CountUsers(ctx context.Context) (int64, error)
 	// ID генерируется на стороне сервиса (uuid.New()), потому что он же
 	// используется как jti в JWT-claims — необходимо знать значение до
@@ -23,34 +40,77 @@ type Querier interface {
 	CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) (AccessToken, error)
 	CreateAuditEntry(ctx context.Context, arg CreateAuditEntryParams) (AuditLog, error)
 	CreateChangeLog(ctx context.Context, arg CreateChangeLogParams) (ChangeLog, error)
+	CreateDebt(ctx context.Context, arg CreateDebtParams) (Debt, error)
+	CreateDiscipline(ctx context.Context, arg CreateDisciplineParams) (Discipline, error)
+	CreateNotification(ctx context.Context, arg CreateNotificationParams) (Notification, error)
 	CreatePermission(ctx context.Context, arg CreatePermissionParams) (Permission, error)
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error)
+	CreateRetake(ctx context.Context, arg CreateRetakeParams) (Retake, error)
+	CreateRetakeChangeRequest(ctx context.Context, arg CreateRetakeChangeRequestParams) (RetakeChangeRequest, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
+	CreateTeacherRoleRequest(ctx context.Context, arg CreateTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// Периодическая чистка таблицы фоновой задачей.
 	DeleteExpiredAccessTokens(ctx context.Context) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DetachPermissionFromRole(ctx context.Context, arg DetachPermissionFromRoleParams) error
 	DetachRoleFromUser(ctx context.Context, arg DetachRoleFromUserParams) error
+	DetachStudentFromDiscipline(ctx context.Context, arg DetachStudentFromDisciplineParams) error
+	DetachTeacherFromDiscipline(ctx context.Context, arg DetachTeacherFromDisciplineParams) error
 	// Используется в auth-middleware для проверки выданного access-токена.
 	// Возвращает запись только если она активна (не отозвана и не истекла).
 	GetAccessTokenByHash(ctx context.Context, tokenHash string) (AccessToken, error)
 	GetAccessTokenByID(ctx context.Context, id pgtype.UUID) (AccessToken, error)
 	GetChangeLogByID(ctx context.Context, id int64) (ChangeLog, error)
+	// Используется синхронизатором: повторный pull из внешней системы
+	// не создаёт дубль, а обновляет существующий долг.
+	GetDebtByExternalID(ctx context.Context, externalID *string) (Debt, error)
+	GetDebtByID(ctx context.Context, id pgtype.UUID) (Debt, error)
+	GetDisciplineByCode(ctx context.Context, lower string) (Discipline, error)
+	// Используется при синхронизации: если запись уже есть, делаем UPDATE,
+	// иначе CREATE.
+	GetDisciplineByExternalID(ctx context.Context, externalID *string) (Discipline, error)
+	GetDisciplineByID(ctx context.Context, id pgtype.UUID) (Discipline, error)
+	GetNotificationByID(ctx context.Context, id pgtype.UUID) (Notification, error)
+	GetParticipant(ctx context.Context, id pgtype.UUID) (RetakeParticipant, error)
+	GetParticipantByRetakeAndUser(ctx context.Context, arg GetParticipantByRetakeAndUserParams) (RetakeParticipant, error)
+	// Перед созданием новой заявки сервис проверяет наличие текущей
+	// pending — иначе UNIQUE-индекс idx_teacher_role_requests_unique_pending
+	// даст ошибку БД.
+	GetPendingTeacherRoleRequestForUser(ctx context.Context, requestedBy pgtype.UUID) (TeacherRoleRequest, error)
 	GetPermissionByID(ctx context.Context, id pgtype.UUID) (Permission, error)
 	GetPermissionBySlug(ctx context.Context, lower string) (Permission, error)
 	// Возвращает запись по хешу. Сервис auth дополнительно проверяет is_used
 	// и is_revoked — если is_used=TRUE при попытке refresh, это replay
 	// и сервис должен отозвать все токены пользователя.
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
+	GetRetakeByID(ctx context.Context, id pgtype.UUID) (Retake, error)
+	GetRetakeChangeRequestByID(ctx context.Context, id pgtype.UUID) (RetakeChangeRequest, error)
 	GetRoleByID(ctx context.Context, id pgtype.UUID) (Role, error)
 	GetRoleBySlug(ctx context.Context, lower string) (Role, error)
+	GetTeacherRoleRequestByID(ctx context.Context, id pgtype.UUID) (TeacherRoleRequest, error)
 	// Поиск пользователя по email для логина. Сравнение регистронезависимое
 	// (соответствует UNIQUE-индексу idx_users_email_lower).
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	// Перевод долга в graded со всеми требуемыми CHECK-полями.
+	// Сервис вызывает это в одной транзакции с обновлением
+	// retake_participants.grade на соответствующей пересдаче.
+	GradeDebt(ctx context.Context, arg GradeDebtParams) (Debt, error)
+	// Выставление оценки участнику-студенту. Сервис вызывает это
+	// в той же транзакции, что и GradeDebt — чтобы retake_participants
+	// и debts остались согласованы.
+	GradeStudentParticipant(ctx context.Context, arg GradeStudentParticipantParams) (RetakeParticipant, error)
 	// Проверка наличия конкретной роли у пользователя.
 	HasRole(ctx context.Context, arg HasRoleParams) (bool, error)
+	// Быстрая проверка для сервиса debts: можно ли поставить долг
+	// этому студенту по этой дисциплине.
+	IsStudentEnrolled(ctx context.Context, arg IsStudentEnrolledParams) (bool, error)
+	// RBAC-фильтр: преподаватель имеет debts.view.by_discipline только
+	// для своих дисциплин. Сервис вызывает это перед выдачей списка долгов.
+	IsTeacherOfDiscipline(ctx context.Context, arg IsTeacherOfDisciplineParams) (bool, error)
+	// Деканат: общий список (debts.view.all) с пагинацией.
+	ListAllDebts(ctx context.Context, arg ListAllDebtsParams) ([]Debt, error)
 	ListAuditByActor(ctx context.Context, arg ListAuditByActorParams) ([]AuditLog, error)
 	ListAuditByTarget(ctx context.Context, arg ListAuditByTargetParams) ([]AuditLog, error)
 	ListChangeLogsByAuthor(ctx context.Context, arg ListChangeLogsByAuthorParams) ([]ChangeLog, error)
@@ -58,6 +118,31 @@ type Querier interface {
 	// История изменений конкретной сущности — лента "что менялось у этого
 	// долга / пересдачи / роли". Используется при выводе story-страницы.
 	ListChangeLogsForEntity(ctx context.Context, arg ListChangeLogsForEntityParams) ([]ChangeLog, error)
+	// Преподаватель: должники по конкретной дисциплине. Сервис
+	// предварительно проверяет teacher_disciplines.IsTeacherOfDiscipline.
+	ListDebtsByDiscipline(ctx context.Context, arg ListDebtsByDisciplineParams) ([]Debt, error)
+	// Преподаватель: должники по всем своим дисциплинам разом.
+	// Передаётся массив id, который сервис собирает из ListDisciplines-
+	// ForTeacher. Это эффективнее, чем N+1 запрос.
+	ListDebtsByDisciplines(ctx context.Context, arg ListDebtsByDisciplinesParams) ([]Debt, error)
+	// Студент видит свои долги (permission debts.view.own).
+	ListDebtsForStudent(ctx context.Context, studentID pgtype.UUID) ([]Debt, error)
+	ListDisciplines(ctx context.Context, arg ListDisciplinesParams) ([]Discipline, error)
+	// Какие дисциплины изучает студент. Используется в личном кабинете
+	// и при создании долга (валидируем, что студент учится на дисциплине).
+	ListDisciplinesForStudent(ctx context.Context, studentID pgtype.UUID) ([]Discipline, error)
+	// Дисциплины конкретного преподавателя. Используется в его кабинете
+	// и для построения фильтра debts.view.by_discipline.
+	ListDisciplinesForTeacher(ctx context.Context, teacherID pgtype.UUID) ([]Discipline, error)
+	// Лента пользователя: вся история уведомлений с пагинацией.
+	ListNotificationsForUser(ctx context.Context, arg ListNotificationsForUserParams) ([]Notification, error)
+	// Все участники пересдачи: студенты и преподаватели/комиссия вместе.
+	// На handler-уровне разделяются по полю kind.
+	ListParticipantsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeParticipant, error)
+	// Деканат: входящие заявки на рассмотрение.
+	ListPendingRetakeChangeRequests(ctx context.Context, arg ListPendingRetakeChangeRequestsParams) ([]RetakeChangeRequest, error)
+	// Деканат: входящие на рассмотрение.
+	ListPendingTeacherRoleRequests(ctx context.Context, arg ListPendingTeacherRoleRequestsParams) ([]TeacherRoleRequest, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
 	ListPermissionsForRole(ctx context.Context, roleID pgtype.UUID) ([]Permission, error)
 	// Возвращает все активные slug'и разрешений, доступных пользователю
@@ -65,15 +150,56 @@ type Querier interface {
 	// может быть прикреплён к нескольким ролям пользователя.
 	ListPermissionsForUser(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	ListRecentAudit(ctx context.Context, arg ListRecentAuditParams) ([]AuditLog, error)
+	ListRetakeChangeRequestsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeChangeRequest, error)
+	// История заявок преподавателя.
+	ListRetakeChangeRequestsForTeacher(ctx context.Context, arg ListRetakeChangeRequestsForTeacherParams) ([]RetakeChangeRequest, error)
+	// Деканат: общий список пересдач, с фильтром по статусу при необходимости.
+	// sqlc.narg('status') NULL означает "все статусы".
+	ListRetakes(ctx context.Context, arg ListRetakesParams) ([]Retake, error)
+	// Все пересдачи, в которых пользователь — участник (любой kind).
+	// Используется в личном кабинете студента и преподавателя
+	// (permission retakes.view.own).
+	ListRetakesForUser(ctx context.Context, userID pgtype.UUID) ([]Retake, error)
+	// Для сводного отчёта деканата за период: только проведённые.
+	ListRetakesInPeriod(ctx context.Context, arg ListRetakesInPeriodParams) ([]Retake, error)
+	// Шедулер: пересдачи, которые пора завершать (scheduled_at + duration < NOW()).
+	ListRetakesToFinish(ctx context.Context) ([]Retake, error)
+	// Шедулер на каждом тике: пересдачи, которые пора стартовать
+	// (scheduled_at прошёл, статус всё ещё scheduled).
+	ListRetakesToStart(ctx context.Context) ([]Retake, error)
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRolesForUser(ctx context.Context, userID pgtype.UUID) ([]Role, error)
 	// Для админ-интерфейса просмотра истории.
 	ListRolesIncludingDeleted(ctx context.Context) ([]Role, error)
+	// Только студенты пересдачи. Используется при выставлении оценок.
+	ListStudentParticipantsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]ListStudentParticipantsForRetakeRow, error)
+	// Кто на дисциплине учится. Деканат использует для сводных отчётов.
+	ListStudentsInDiscipline(ctx context.Context, disciplineID pgtype.UUID) ([]User, error)
+	ListTeacherParticipantsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeParticipant, error)
+	ListTeacherRoleRequestsForUser(ctx context.Context, arg ListTeacherRoleRequestsForUserParams) ([]TeacherRoleRequest, error)
+	ListTeachersForDiscipline(ctx context.Context, disciplineID pgtype.UUID) ([]User, error)
+	// Для подписки WebSocket-клиента на reconnect: догнать пропущенное.
+	ListUnreadNotificationsForUser(ctx context.Context, userID pgtype.UUID) ([]Notification, error)
 	// Пагинация: LIMIT $1, OFFSET $2. Сортировка по дате создания убывающая
 	// (новые сверху), стабильный tie-break через id.
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	ListUsersInRole(ctx context.Context, roleID pgtype.UUID) ([]User, error)
+	MarkAllNotificationsReadForUser(ctx context.Context, userID pgtype.UUID) (int64, error)
+	// Идемпотентно: повторный вызов не перезаписывает read_at.
+	MarkNotificationRead(ctx context.Context, arg MarkNotificationReadParams) error
 	MarkRefreshTokenUsed(ctx context.Context, id pgtype.UUID) error
+	// Шедулер переводит в completed по истечении scheduled_at + duration.
+	MarkRetakeCompleted(ctx context.Context, id pgtype.UUID) error
+	// Шедулер переводит пересдачу в in_progress по достижении scheduled_at.
+	MarkRetakeInProgress(ctx context.Context, id pgtype.UUID) error
+	// При rejected decision_reason обязателен — CHECK-constraint в таблице
+	// гарантирует это даже если сервис забудет передать.
+	RejectRetakeChangeRequest(ctx context.Context, arg RejectRetakeChangeRequestParams) (RetakeChangeRequest, error)
+	RejectTeacherRoleRequest(ctx context.Context, arg RejectTeacherRoleRequestParams) (TeacherRoleRequest, error)
+	// Физическое удаление. Если пересдача уже стартовала или есть оценка —
+	// сервис должен отказать (проверка в бизнес-слое, не в БД).
+	RemoveParticipant(ctx context.Context, arg RemoveParticipantParams) error
+	RestoreDiscipline(ctx context.Context, id pgtype.UUID) error
 	RestorePermission(ctx context.Context, id pgtype.UUID) error
 	RestoreRole(ctx context.Context, id pgtype.UUID) error
 	RevokeAccessToken(ctx context.Context, id pgtype.UUID) error
@@ -83,14 +209,24 @@ type Querier interface {
 	// Отзыв всех refresh-токенов, связанных с конкретным access-токеном.
 	RevokeAllRefreshTokensForAccessToken(ctx context.Context, accessTokenID pgtype.UUID) error
 	RevokeRefreshToken(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteDebt(ctx context.Context, arg SoftDeleteDebtParams) error
+	SoftDeleteDiscipline(ctx context.Context, arg SoftDeleteDisciplineParams) error
 	SoftDeletePermission(ctx context.Context, arg SoftDeletePermissionParams) error
+	SoftDeleteRetake(ctx context.Context, arg SoftDeleteRetakeParams) error
 	// Системные роли (is_system=TRUE) защищаются от удаления на уровне
 	// сервиса — здесь жёсткой проверки нет, чтобы запрос оставался
 	// переиспользуемым.
 	SoftDeleteRole(ctx context.Context, arg SoftDeleteRoleParams) error
+	// Сводная для деканата: сколько открытых долгов и сколько
+	// закрытых оценкой по каждой дисциплине.
+	SummaryDebtsByDiscipline(ctx context.Context) ([]SummaryDebtsByDisciplineRow, error)
 	// Обновляет last_used_at при успешной проверке токена в middleware.
 	TouchAccessToken(ctx context.Context, id pgtype.UUID) error
+	UpdateDiscipline(ctx context.Context, arg UpdateDisciplineParams) (Discipline, error)
 	UpdatePermission(ctx context.Context, arg UpdatePermissionParams) (Permission, error)
+	// Деканат меняет время/место/продолжительность пересдачи (например,
+	// по итогам одобренной change-request заявки от преподавателя).
+	UpdateRetakeSchedule(ctx context.Context, arg UpdateRetakeScheduleParams) (Retake, error)
 	UpdateRole(ctx context.Context, arg UpdateRoleParams) (Role, error)
 	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error
 	// Точечное обновление профиля. NULL-значения в параметрах оставляют поле
