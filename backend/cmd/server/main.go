@@ -20,7 +20,11 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -56,12 +60,18 @@ func run() error {
 	store := repo.NewStore(pool)
 	tokens := token.New(store, []byte(cfg.JWTSecret), cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 	authSvc := auth.New(store, tokens)
+	rbacSvc := rbac.New(store)
+	auditSvc := audit.New(store)
+	changelogSvc := changelog.New(store)
+	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 
 	handler := httpx.NewRouter(httpx.Deps{
-		Cfg:    cfg,
-		Pool:   pool,
-		Auth:   authSvc,
-		Tokens: tokens,
+		Cfg:         cfg,
+		Pool:        pool,
+		Auth:        authSvc,
+		Tokens:      tokens,
+		RBAC:        rbacSvc,
+		Disciplines: disciplineSvc,
 	})
 
 	srv := &http.Server{
