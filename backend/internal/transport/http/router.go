@@ -15,6 +15,7 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
@@ -32,6 +33,7 @@ type Deps struct {
 	Tokens      *token.Service
 	RBAC        *rbac.Service
 	Disciplines *discipline.Service
+	Debts       *debt.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -62,8 +64,76 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	mountDisciplines(r, d)
+	mountMeDisciplines(r, d)
+	mountDebts(r, d)
 
 	return r
+}
+
+// mountMeDisciplines регистрирует /api/me/disciplines/* и
+// /api/users/:id/disciplines/* — закрывает DoD BACK-01.
+func mountMeDisciplines(r chi.Router, d Deps) {
+	h := handler.NewUserDisciplinesHandler(d.Disciplines)
+
+	r.Route("/api/me/disciplines", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		// Любой авторизованный — смотрит свои "учусь на" и "веду".
+		r.Get("/student", h.MyAsStudent)
+		r.Get("/teacher", h.MyAsTeacher)
+	})
+
+	// Просмотр чужих привязок — только для тех, кто имеет users.view
+	// (admin/dean из сидов). Это закрывает кейс "деканат смотрит,
+	// кого преподаёт конкретный преподаватель".
+	r.Route("/api/users/{id}/disciplines", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "users.view"))
+		r.Get("/student", h.UserAsStudent)
+		r.Get("/teacher", h.UserAsTeacher)
+	})
+}
+
+// mountDebts регистрирует /api/debts/* с разделением по permissions.
+// Ключевая логика:
+//   - /my              → любой авторизованный + debts.view.own (есть у студента)
+//   - /by-discipline   → debts.view.by_discipline (есть у преподавателя)
+//   - /, /:id, /summary→ debts.view.all (есть у деканата и админа)
+//   - POST             → debts.create (преподаватель)
+//   - PATCH /grade     → debts.update (преподаватель)
+//   - PATCH /cancel    → debts.delete (деканат)
+func mountDebts(r chi.Router, d Deps) {
+	h := handler.NewDebtHandler(d.Debts)
+
+	r.Route("/api/debts", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.With(mw.RequirePermission(d.RBAC, "debts.view.own")).
+			Get("/my", h.ListMy)
+
+		r.With(mw.RequirePermission(d.RBAC, "debts.view.by_discipline")).
+			Get("/by-discipline", h.ListByDiscipline)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "debts.view.all"))
+			r.Get("/", h.ListAll)
+			r.Get("/summary", h.Summary)
+		})
+
+		// /:id — доступно любому, у кого есть debts.view.all
+		// (деканат/админ). Студент и преподаватель видят долги
+		// через свои списки, не по id напрямую.
+		r.With(mw.RequirePermission(d.RBAC, "debts.view.all")).
+			Get("/{id}", h.Get)
+
+		r.With(mw.RequirePermission(d.RBAC, "debts.create")).
+			Post("/", h.Create)
+
+		r.With(mw.RequirePermission(d.RBAC, "debts.update")).
+			Patch("/{id}/grade", h.Grade)
+
+		r.With(mw.RequirePermission(d.RBAC, "debts.delete")).
+			Patch("/{id}/cancel", h.Cancel)
+	})
 }
 
 // mountDisciplines регистрирует /api/disciplines/* с RBAC-защитой:
