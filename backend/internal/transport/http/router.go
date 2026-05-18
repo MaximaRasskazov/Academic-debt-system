@@ -15,6 +15,8 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
@@ -24,13 +26,15 @@ import (
 // Сделано отдельной структурой, чтобы main.go не разрастался
 // сигнатурой NewRouter(a, b, c, d, ...).
 type Deps struct {
-	Cfg    *config.Config
-	Pool   *pgxpool.Pool
-	Auth   *auth.Service
-	Tokens *token.Service
+	Cfg         *config.Config
+	Pool        *pgxpool.Pool
+	Auth        *auth.Service
+	Tokens      *token.Service
+	RBAC        *rbac.Service
+	Disciplines *discipline.Service
 }
 
-// NewRouter собирает chi-роутер: middleware → /health → /api/auth/*.
+// NewRouter собирает chi-роутер: middleware → /health → /api/*.
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 
@@ -57,7 +61,59 @@ func NewRouter(d Deps) http.Handler {
 		})
 	})
 
+	mountDisciplines(r, d)
+
 	return r
+}
+
+// mountDisciplines регистрирует /api/disciplines/* с RBAC-защитой:
+//   - GET-эндпоинты: любой авторизованный + permission disciplines.view
+//   - POST/PATCH/DELETE: соответствующие disciplines.create/update/delete
+func mountDisciplines(r chi.Router, d Deps) {
+	h := handler.NewDisciplineHandler(d.Disciplines)
+
+	r.Route("/api/disciplines", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		// Просмотр справочника — доступно любому авторизованному,
+		// без отдельного permission. Студент должен знать состав
+		// дисциплин в системе, а в сидах disciplines.view выдан
+		// только teacher/dean/admin (отдельная permission под
+		// "управление справочником"). По бизнес-смыслу это
+		// публичная информация внутри системы.
+		r.Get("/", h.List)
+		r.Get("/{id}", h.Get)
+		r.Get("/{id}/teachers", h.ListTeachers)
+		r.Get("/{id}/students", h.ListStudents)
+
+		// Создание — только admin/dean (через disciplines.create).
+		r.With(mw.RequirePermission(d.RBAC, "disciplines.create")).
+			Post("/", h.Create)
+
+		// Обновление — admin/dean (через disciplines.update).
+		r.With(mw.RequirePermission(d.RBAC, "disciplines.update")).
+			Patch("/{id}", h.Update)
+
+		// Удаление / restore — только admin (disciplines.delete).
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "disciplines.delete"))
+			r.Delete("/{id}", h.Delete)
+			r.Post("/{id}/restore", h.Restore)
+		})
+
+		// Привязка преподавателей — admin/dean.
+		// Берём disciplines.update — это редактирование состава
+		// дисциплины. Отдельный permission заводить не стали:
+		// действие "назначить препода на курс" в курсаче приходится
+		// именно деканату, у которого уже есть update.
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "disciplines.update"))
+			r.Post("/{id}/teachers", h.AttachTeacher)
+			r.Delete("/{id}/teachers/{user_id}", h.DetachTeacher)
+			r.Post("/{id}/students", h.AttachStudent)
+			r.Delete("/{id}/students/{user_id}", h.DetachStudent)
+		})
+	})
 }
 
 // healthHandler — копия логики из cmd/server/main.go, вынесенная в
