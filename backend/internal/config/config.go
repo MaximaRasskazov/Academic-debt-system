@@ -45,6 +45,13 @@ type Config struct {
 
 	// CORS
 	AllowedOrigins []string
+
+	// SMTP — email-уведомления. Пустой SMTPHost отключает email-канал.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
 }
 
 // Load читает .env (если есть) и собирает Config из ENV.
@@ -84,6 +91,12 @@ func Load() (*Config, error) {
 		CookieSameSite: parseSameSite(getEnv("COOKIE_SAMESITE", "lax")),
 
 		AllowedOrigins: parseList("ALLOWED_ORIGINS", []string{"http://localhost:5173"}),
+
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     parseInt("SMTP_PORT", 1025),
+		SMTPUser:     getEnv("SMTP_USER", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getEnv("SMTP_FROM", "noreply@localhost"),
 	}
 
 	if cfg.DBName == "" || cfg.DBUser == "" {
@@ -155,6 +168,18 @@ func parseSameSite(v string) http.SameSite {
 	default:
 		return http.SameSiteLaxMode
 	}
+}
+
+func parseInt(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func parseList(key string, fallback []string) []string {
