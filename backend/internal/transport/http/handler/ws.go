@@ -46,7 +46,7 @@ func (h *WSHandler) ServeNotifications(w http.ResponseWriter, r *http.Request) {
 		// Accept сам пишет HTTP-ответ при ошибке апгрейда.
 		return
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	h.hub.Register(userID, conn)
 	defer h.hub.Unregister(userID, conn)
