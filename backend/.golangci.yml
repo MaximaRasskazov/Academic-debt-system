@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose   # HTTP response body closed after use
+    - gosec       # common security anti-patterns
+    - misspell    # typos in comments and strings
+    - revive      # idiomatic Go style checks
+
+issues:
+  exclude-rules:
+    # gosec and errcheck are noisy in tests; errors are caught by require.*
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck

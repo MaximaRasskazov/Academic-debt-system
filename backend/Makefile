@@ -23,9 +23,10 @@ test-integration: ## Run integration tests against running postgres (docker-comp
 	TEST_DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
 	    go test -race -cover ./...
 
-lint: ## Run linters (gofmt + go vet)
+lint: ## Run linters (gofmt + go vet + golangci-lint)
 	@test -z "$$(gofmt -l -s .)" || (gofmt -l -s . && exit 1)
 	go vet ./...
+	golangci-lint run ./...
 
 tidy: ## Tidy go.mod
 	go mod tidy
