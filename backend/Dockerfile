@@ -1,24 +1,32 @@
+# syntax=docker/dockerfile:1.7
+
 # --- Build stage ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine3.23@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
 
 WORKDIR /app
 
 # Cache deps отдельно для быстрых rebuild'ов
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 # goose CLI собирается в этом же образе и попадает в runtime через COPY
-RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go install github.com/pressly/goose/v3/cmd/goose@latest
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /app/bin/server \
-    ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+        -ldflags="-s -w" \
+        -o /app/bin/server \
+        ./cmd/server
 
 # --- Runtime stage ---
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 
 # postgresql-client нужен для pg_isready в entrypoint.sh.
 # ca-certificates — для исходящих https-запросов (синхронизация с
