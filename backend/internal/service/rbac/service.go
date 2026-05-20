@@ -146,13 +146,13 @@ func (s *Service) MaxLevel(ctx context.Context, userID uuid.UUID) (int32, error)
 	if err != nil {
 		return 0, fmt.Errorf("list roles: %w", err)
 	}
-	var max int32
+	var maxLevel int32
 	for _, r := range roles {
-		if r.Level > max {
-			max = r.Level
+		if r.Level > maxLevel {
+			maxLevel = r.Level
 		}
 	}
-	return max, nil
+	return maxLevel, nil
 }
 
 func (s *Service) lookupRole(ctx context.Context, slug string) (queries.Role, error) {
