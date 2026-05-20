@@ -147,8 +147,8 @@ func TestRetake_Create_RejectsInvalidInputs(t *testing.T) {
 	dean := seedUser(t, f.store, "dean-bad")
 
 	_, err := f.svc.Create(context.Background(), retake.CreateInput{
-		DisciplineID:    uuid.Nil,
-		Building:        "A", Room: "1",
+		DisciplineID: uuid.Nil,
+		Building:     "A", Room: "1",
 		ScheduledAt:     retake.NewTime(time.Now().Add(time.Hour)),
 		DurationMinutes: 60,
 	}, dean)
@@ -160,9 +160,9 @@ func TestRetake_Create_RejectsInvalidInputs(t *testing.T) {
 
 	// Невалидный kind
 	_, err = f.svc.Create(context.Background(), retake.CreateInput{
-		DisciplineID:    discID,
-		Kind:            "unknown",
-		Building:        "A", Room: "1",
+		DisciplineID: discID,
+		Kind:         "unknown",
+		Building:     "A", Room: "1",
 		ScheduledAt:     retake.NewTime(time.Now().Add(time.Hour)),
 		DurationMinutes: 60,
 	}, dean)
@@ -170,8 +170,8 @@ func TestRetake_Create_RejectsInvalidInputs(t *testing.T) {
 
 	// Отрицательная длительность
 	_, err = f.svc.Create(context.Background(), retake.CreateInput{
-		DisciplineID:    discID,
-		Building:        "A", Room: "1",
+		DisciplineID: discID,
+		Building:     "A", Room: "1",
 		ScheduledAt:     retake.NewTime(time.Now().Add(time.Hour)),
 		DurationMinutes: -5,
 	}, dean)
