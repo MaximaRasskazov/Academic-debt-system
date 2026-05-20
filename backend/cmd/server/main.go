@@ -23,6 +23,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
@@ -65,6 +66,7 @@ func run() error {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
+	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
 
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
@@ -82,6 +84,7 @@ func run() error {
 		Tokens:      tokens,
 		RBAC:        rbacSvc,
 		Disciplines: disciplineSvc,
+		Debts:       debtSvc,
 		Notify:      notifySvc,
 		NotifyHub:   notifyHub,
 	})
