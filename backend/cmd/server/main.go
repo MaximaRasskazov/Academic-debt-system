@@ -27,6 +27,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -67,6 +68,7 @@ func run() error {
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
+	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
@@ -85,6 +87,7 @@ func run() error {
 		RBAC:        rbacSvc,
 		Disciplines: disciplineSvc,
 		Debts:       debtSvc,
+		Retakes:     retakeSvc,
 		Notify:      notifySvc,
 		NotifyHub:   notifyHub,
 	})

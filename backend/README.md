@@ -36,12 +36,14 @@ backend/
 │   │   ├── audit/             # AuditService — события безопасности в audit_log
 │   │   ├── changelog/         # ChangeLogService — before/after JSONB для истории и undo
 │   │   ├── discipline/        # CRUD дисциплин + привязка teacher/student
-│   │   └── debt/              # академические долги (создание, оценка, отмена, выборки по ролям)
+│   │   ├── debt/              # академические долги (создание, оценка, отмена, выборки по ролям)
+│   │   ├── retake/            # пересдачи + участники + переходы статусов + grade c закрытием debt
+│   │   └── notify/            # email + WebSocket + история уведомлений
 │   └── transport/http/
-│       ├── dto/               # API-схемы (auth, discipline, debt) без password_hash и pgtype.*
-│       ├── handler/           # /api/auth/*, /api/disciplines/*, /api/debts/*, /api/me/disciplines/*
+│       ├── dto/               # API-схемы (auth, discipline, debt, retake, notifications)
+│       ├── handler/           # /api/auth/*, /api/disciplines/*, /api/debts/*, /api/retakes/*, ...
 │       ├── middleware/        # Auth, RequirePermission, CORS, SecurityHeaders
-│       └── router.go          # сборка chi.Router + mountDisciplines/mountDebts
+│       └── router.go          # сборка chi.Router + mount* для каждой доменной группы
 ├── sql/
 │   ├── migrations/            # 00001-00019 — auth, RBAC, audit, changelog + доменные таблицы
 │   └── seeds/                 # 00001_seed_dev_accounts — для SEED_DEV_ACCOUNTS=true
@@ -100,6 +102,32 @@ backend/
 | POST | `/api/debts` | `debts.create` | Создать долг (преподаватель, проверка teacher_disciplines + student_disciplines) |
 | PATCH | `/api/debts/:id/grade` | `debts.update` | Выставить оценку 2..5 (open → graded) |
 | PATCH | `/api/debts/:id/cancel` | `debts.delete` | Отменить долг (open → cancelled) |
+
+### Retakes (пересдачи)
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| GET | `/api/retakes/my` | `retakes.view.own` | Свои пересдачи (студент/преподаватель — участники) |
+| GET | `/api/retakes` | `retakes.view.all` | Все пересдачи (dean/admin), фильтр `?status=` опциональный |
+| GET | `/api/retakes/:id` | `retakes.view.all` | Одна пересдача |
+| GET | `/api/retakes/:id/participants` | `retakes.view.all` | Участники (студенты + преподаватели/комиссия) |
+| POST | `/api/retakes` | `retakes.create` | Создать пересдачу (dean). kind = regular/commission |
+| PATCH | `/api/retakes/:id` | `retakes.update` | Обновить расписание/место/notes (PATCH-семантика) |
+| POST | `/api/retakes/:id/start` | `retakes.update` | scheduled → in_progress (commission проверяет ≥3 преподавателей) |
+| POST | `/api/retakes/:id/complete` | `retakes.update` | scheduled/in_progress → completed |
+| POST | `/api/retakes/:id/cancel` | `retakes.update` | scheduled/in_progress → cancelled |
+| POST | `/api/retakes/:id/students` | `retakes.update` | Добавить студента с debt_id (с проверкой владельца долга) |
+| DELETE | `/api/retakes/:id/students/:user_id` | `retakes.update` | Снять студента (только до выставления оценки) |
+| POST | `/api/retakes/:id/teachers` | `retakes.update` | Добавить преподавателя (regular) / члена комиссии (commission) |
+| DELETE | `/api/retakes/:id/teachers/:user_id` | `retakes.update` | Снять |
+| PATCH | `/api/retakes/:id/students/:user_id/grade` | `retakes.assign_grade` | Выставить оценку 2..5 — атомарно закрывает связанный debt |
+
+### Notifications (real-time + история)
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| GET | `/api/notifications` | Auth | История уведомлений пользователя |
+| GET | `/api/notifications/unread-count` | Auth | Badge — количество непрочитанных |
+| POST | `/api/notifications/:id/read` | Auth | Отметить прочитанным |
+| GET | `/ws/notifications` | Auth (через query `token`) | WebSocket для push-уведомлений |
 
 ### Системные
 | Метод | Путь | Назначение |
@@ -186,23 +214,24 @@ make sqlc                     # перегенерировать internal/repo/q
 - [x] **DX one-click setup** (PR #11): `make setup`, автомиграции, дев-сиды
 - [x] **Доменная схема** (PR #12): миграции 00011-00019 + sqlc-репозитории для всех доменных таблиц + AuditService + ChangeLogService
 - [x] **Disciplines** (PR #13): DisciplineService + handler'ы `/api/disciplines/*`
+- [x] **Docker / Frontend infra** (PR #14): production compose, frontend Dockerfile + nginx
+- [x] **BACK-10 CI + линтеры** (PR #15): GitHub Actions backend-ci, golangci-lint в Makefile
+- [x] **BACK-06 Notify** (PR #16): email через SMTP + WebSocket-хаб + история уведомлений
+- [x] **BACK-02 Debts** (PR #17): DebtService + handler'ы `/api/debts/*` + `/api/me/disciplines/*`
 
 ### Готово (в PR, ждёт мерджа)
 
-- [ ] **Debts** (`feat/backend-debts`): DebtService + handler'ы `/api/debts/*` + `/api/me/disciplines/*`
+- [ ] **BACK-03 Retakes** (`feat/backend-retakes`): RetakeService + участники + grade с атомарным закрытием debt + handler'ы `/api/retakes/*`
 
 ### В работе / следующие PR (см. [project-rent/backend_roadmap_tasks.md](../../project-rent/backend_roadmap_tasks.md))
 
 | Задача | Содержание |
 |---|---|
-| BACK-03 | Retakes — пересдачи + участники + переходы статусов |
 | BACK-04 | RetakeChangeRequest — заявки на изменение пересдачи |
 | BACK-05 | TeacherRoleRequest + RBAC HTTP API (закрытие RBAC на 100%) |
-| BACK-06 | NotifyService: email через gomail/v2 + Mailpit + WebSocket |
 | BACK-07 | Шедулер `time.Ticker` + синхронизация с внешней системой |
 | BACK-08 | Сводные отчёты + экспорт XLSX/CSV (excelize) |
 | BACK-09 | Swagger через swaggo/swag |
-| BACK-10 | CI GitHub Actions + rate-limit на `/api/auth/*` |
 
 ### Покрытие тестами
 
@@ -218,4 +247,6 @@ make sqlc                     # перегенерировать internal/repo/q
 | changelog | 77.8% | 5 |
 | debt | ~80% | 10 |
 | discipline | 58.0% | 8 |
-| **Всего** | | **51 тест** |
+| notify | ~80% | 4 |
+| retake | ~75% | 12 |
+| **Всего** | | **67 тестов** |
