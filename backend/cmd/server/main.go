@@ -27,6 +27,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
+	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -68,6 +69,8 @@ func run() error {
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
 
+	teacherRequestSvc := teacherrequest.New(store, rbacSvc)
+
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
 		Host:     cfg.SMTPHost,
@@ -85,8 +88,9 @@ func run() error {
 		RBAC:        rbacSvc,
 		Disciplines: disciplineSvc,
 		Debts:       debtSvc,
-		Notify:      notifySvc,
-		NotifyHub:   notifyHub,
+		Notify:          notifySvc,
+		NotifyHub:       notifyHub,
+		TeacherRequests: teacherRequestSvc,
 	})
 
 	srv := &http.Server{
