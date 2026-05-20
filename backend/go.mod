@@ -1,6 +1,6 @@
 module github.com/MaximaRasskazov/Academic-debt-system/backend
 
-go 1.26.0
+go 1.26.3
 
 require (
 	github.com/coder/websocket v1.8.14
@@ -12,6 +12,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/stretchr/testify v1.8.1
 	golang.org/x/crypto v0.37.0
+	golang.org/x/time v0.15.0
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 )
 
@@ -25,7 +26,6 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
