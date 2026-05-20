@@ -59,8 +59,8 @@ func NewRouter(d Deps) http.Handler {
 
 		authH := handler.NewAuthHandler(d.Auth, d.Cfg)
 		r.Route("/api/auth", func(r chi.Router) {
-			r.Post("/register", authH.Register)
-			r.Post("/login", authH.Login)
+			r.With(mw.RateLimit(3.0/60, 3)).Post("/register", authH.Register)
+			r.With(mw.RateLimit(5.0/60, 5)).Post("/login", authH.Login)
 			r.Post("/refresh", authH.Refresh)
 
 			r.Group(func(r chi.Router) {
