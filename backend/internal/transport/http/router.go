@@ -16,6 +16,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
@@ -32,6 +33,8 @@ type Deps struct {
 	Tokens      *token.Service
 	RBAC        *rbac.Service
 	Disciplines *discipline.Service
+	Notify      *notify.Service
+	NotifyHub   *notify.Hub
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -41,27 +44,36 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
 	r.Use(chimw.Recoverer)
-	r.Use(chimw.Timeout(30 * time.Second))
 	r.Use(mw.SecurityHeaders)
 	r.Use(mw.CORS(d.Cfg.AllowedOrigins))
 
 	r.Get("/health", healthHandler(d.Pool))
 
-	authH := handler.NewAuthHandler(d.Auth, d.Cfg)
-	r.Route("/api/auth", func(r chi.Router) {
-		r.Post("/register", authH.Register)
-		r.Post("/login", authH.Login)
-		r.Post("/refresh", authH.Refresh)
+	// Обычные HTTP-маршруты — с таймаутом на запрос.
+	// WebSocket вынесен отдельно: chimw.Timeout отменяет контекст через
+	// 30 с, что закрыло бы все долгоживущие WS-соединения.
+	r.Group(func(r chi.Router) {
+		r.Use(chimw.Timeout(30 * time.Second))
 
-		// Защищённые endpoint'ы используют Auth-middleware.
-		r.Group(func(r chi.Router) {
-			r.Use(mw.Auth(d.Tokens))
-			r.Post("/logout", authH.Logout)
-			r.Get("/me", authH.Me)
+		authH := handler.NewAuthHandler(d.Auth, d.Cfg)
+		r.Route("/api/auth", func(r chi.Router) {
+			r.Post("/register", authH.Register)
+			r.Post("/login", authH.Login)
+			r.Post("/refresh", authH.Refresh)
+
+			r.Group(func(r chi.Router) {
+				r.Use(mw.Auth(d.Tokens))
+				r.Post("/logout", authH.Logout)
+				r.Get("/me", authH.Me)
+			})
 		})
+
+		mountDisciplines(r, d)
+		mountNotificationsREST(r, d)
 	})
 
-	mountDisciplines(r, d)
+	// WebSocket — без таймаута, соединение живёт пока клиент не отключится.
+	mountNotificationsWS(r, d)
 
 	return r
 }
@@ -114,6 +126,24 @@ func mountDisciplines(r chi.Router, d Deps) {
 			r.Delete("/{id}/students/{user_id}", h.DetachStudent)
 		})
 	})
+}
+
+// mountNotificationsREST регистрирует /api/notifications/* (под таймаутом).
+func mountNotificationsREST(r chi.Router, d Deps) {
+	notifH := handler.NewNotificationsHandler(d.Notify)
+	r.Route("/api/notifications", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Get("/", notifH.List)
+		r.Get("/unread-count", notifH.UnreadCount)
+		r.Post("/{id}/read", notifH.MarkRead)
+	})
+}
+
+// mountNotificationsWS регистрирует /ws/notifications без таймаута.
+// Auth происходит внутри хендлера через query-параметр token.
+func mountNotificationsWS(r chi.Router, d Deps) {
+	wsH := handler.NewWSHandler(d.Tokens, d.Notify, d.NotifyHub, d.Cfg.AllowedOrigins)
+	r.Get("/ws/notifications", wsH.ServeNotifications)
 }
 
 // healthHandler — копия логики из cmd/server/main.go, вынесенная в

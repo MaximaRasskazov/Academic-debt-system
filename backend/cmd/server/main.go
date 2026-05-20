@@ -24,6 +24,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
@@ -65,6 +66,15 @@ func run() error {
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 
+	notifyHub := notify.NewHub()
+	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUser,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+	})
+
 	handler := httpx.NewRouter(httpx.Deps{
 		Cfg:         cfg,
 		Pool:        pool,
@@ -72,6 +82,8 @@ func run() error {
 		Tokens:      tokens,
 		RBAC:        rbacSvc,
 		Disciplines: disciplineSvc,
+		Notify:      notifySvc,
+		NotifyHub:   notifyHub,
 	})
 
 	srv := &http.Server{
