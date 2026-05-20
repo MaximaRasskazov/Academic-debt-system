@@ -1,10 +1,15 @@
 # Корневой Makefile проекта. Команды уровня "поднять весь стек".
 # Backend-специфичные таргеты — в backend/Makefile.
 
-.PHONY: help setup up down restart logs ps psql clean reset test backend-shell
+.PHONY: help setup up down restart logs ps psql clean reset test backend-shell frontend-build frontend-up frontend-down frontend-restart frontend-logs frontend-shell
 
 ENV_FILE := .env
 ENV_EXAMPLE := .env.example
+FRONTEND_IMAGE := academic-frontend-dev
+FRONTEND_CONTAINER := academic-frontend-dev
+FRONTEND_DIR := $(CURDIR)/frontend
+FRONTEND_PORT ?= 5173
+VITE_API_BASE_URL ?= http://localhost:8080
 
 help: ## Список доступных команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -64,3 +69,30 @@ reset: ## ПОЛНЫЙ сброс: контейнеры + volumes + .env (тре
 
 clean: ## Удалить кеш и build-артефакты backend
 	$(MAKE) -C backend clean
+
+frontend-build: ## Собрать frontend dev-образ (target=dev)
+	docker build --target dev -t $(FRONTEND_IMAGE) ./frontend
+
+frontend-up: frontend-build ## Поднять frontend в dev-режиме (Dockerfile target=dev)
+	-docker rm -f $(FRONTEND_CONTAINER)
+	docker run -d \
+		--name $(FRONTEND_CONTAINER) \
+		-p $(FRONTEND_PORT):5173 \
+		-e VITE_API_BASE_URL=$(VITE_API_BASE_URL) \
+		-v "$(FRONTEND_DIR):/src" \
+		-v $(FRONTEND_CONTAINER)-node_modules:/src/node_modules \
+		$(FRONTEND_IMAGE)
+	@echo "  ✓ Frontend: http://localhost:$(FRONTEND_PORT)"
+
+frontend-down: ## Остановить и удалить frontend dev-контейнер
+	-docker rm -f $(FRONTEND_CONTAINER)
+
+frontend-restart: ## Перезапустить frontend dev-контейнер
+	$(MAKE) frontend-down
+	$(MAKE) frontend-up
+
+frontend-logs: ## Tail-логи frontend dev-контейнера
+	docker logs -f --tail=100 $(FRONTEND_CONTAINER)
+
+frontend-shell: ## sh внутри frontend dev-контейнера
+	docker exec -it $(FRONTEND_CONTAINER) sh

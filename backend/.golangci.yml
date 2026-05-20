@@ -1,0 +1,13 @@
+version: "2"
+
+linters:
+  enable:
+    - gosec
+    - misspell
+    - bodyclose
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true

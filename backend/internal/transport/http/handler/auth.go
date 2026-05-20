@@ -149,7 +149,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 // setRefreshCookie ставит refresh-токен в httpOnly-cookie с
 // параметрами из config (Secure/SameSite/Domain/Path).
 func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure/SameSite берутся из конфига
 		Name:     refreshCookieName,
 		Value:    value,
 		Path:     h.cfg.CookiePath,
@@ -163,7 +163,7 @@ func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expi
 
 // clearRefreshCookie сбрасывает cookie на клиенте (Max-Age=-1).
 func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure/SameSite берутся из конфига
 		Name:     refreshCookieName,
 		Value:    "",
 		Path:     h.cfg.CookiePath,
