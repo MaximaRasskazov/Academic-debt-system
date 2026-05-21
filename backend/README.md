@@ -38,6 +38,7 @@ backend/
 │   │   ├── discipline/        # CRUD дисциплин + привязка teacher/student
 │   │   ├── debt/              # академические долги (создание, оценка, отмена, выборки по ролям)
 │   │   ├── retake/            # пересдачи + участники + переходы статусов + grade c закрытием debt
+│   │   ├── report/            # сводные отчёты (долги по дисциплинам, пересдачи за период) + XLSX/CSV экспорт
 │   │   └── notify/            # email + WebSocket + история уведомлений
 │   └── transport/http/
 │       ├── dto/               # API-схемы (auth, discipline, debt, retake, notifications)
@@ -120,6 +121,12 @@ backend/
 | POST | `/api/retakes/:id/teachers` | `retakes.update` | Добавить преподавателя (regular) / члена комиссии (commission) |
 | DELETE | `/api/retakes/:id/teachers/:user_id` | `retakes.update` | Снять |
 | PATCH | `/api/retakes/:id/students/:user_id/grade` | `retakes.assign_grade` | Выставить оценку 2..5 — атомарно закрывает связанный debt |
+
+### Reports (сводные отчёты для деканата)
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| GET | `/api/reports/debts-summary` | `reports.export` | Сводка долгов по дисциплинам (open/graded count + название/код) |
+| GET | `/api/reports/retakes?from=&to=&format=` | `reports.export` | Список проведённых пересдач за период. Без `format` — JSON. С `format=xlsx` или `format=csv` — бинарник с правильным Content-Type и Content-Disposition (для скачивания). Период в формате `YYYY-MM-DD` (или RFC3339), по умолчанию последний месяц. |
 
 ### Notifications (real-time + история)
 | Метод | Путь | Permission | Назначение |
@@ -218,10 +225,11 @@ make sqlc                     # перегенерировать internal/repo/q
 - [x] **BACK-10 CI + линтеры** (PR #15): GitHub Actions backend-ci, golangci-lint в Makefile
 - [x] **BACK-06 Notify** (PR #16): email через SMTP + WebSocket-хаб + история уведомлений
 - [x] **BACK-02 Debts** (PR #17): DebtService + handler'ы `/api/debts/*` + `/api/me/disciplines/*`
+- [x] **BACK-03 Retakes** (PR #18): RetakeService + участники + grade с атомарным закрытием debt + handler'ы `/api/retakes/*`
 
 ### Готово (в PR, ждёт мерджа)
 
-- [ ] **BACK-03 Retakes** (`feat/backend-retakes`): RetakeService + участники + grade с атомарным закрытием debt + handler'ы `/api/retakes/*`
+- [ ] **BACK-08 Reports** (`feat/backend-reports`): ReportService (DebtsSummary, RetakesForPeriod) + XLSX/CSV экспорт через excelize + handler'ы `/api/reports/*`
 
 ### В работе / следующие PR (см. [project-rent/backend_roadmap_tasks.md](../../project-rent/backend_roadmap_tasks.md))
 
@@ -230,7 +238,6 @@ make sqlc                     # перегенерировать internal/repo/q
 | BACK-04 | RetakeChangeRequest — заявки на изменение пересдачи |
 | BACK-05 | TeacherRoleRequest + RBAC HTTP API (закрытие RBAC на 100%) |
 | BACK-07 | Шедулер `time.Ticker` + синхронизация с внешней системой |
-| BACK-08 | Сводные отчёты + экспорт XLSX/CSV (excelize) |
 | BACK-09 | Swagger через swaggo/swag |
 
 ### Покрытие тестами
@@ -249,4 +256,5 @@ make sqlc                     # перегенерировать internal/repo/q
 | discipline | 58.0% | 8 |
 | notify | ~80% | 4 |
 | retake | ~75% | 12 |
-| **Всего** | | **67 тестов** |
+| report | ~75% | 7 |
+| **Всего** | | **74 теста** |

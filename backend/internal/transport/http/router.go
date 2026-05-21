@@ -19,6 +19,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
@@ -37,6 +38,7 @@ type Deps struct {
 	Disciplines *discipline.Service
 	Debts       *debt.Service
 	Retakes     *retake.Service
+	Reports     *report.Service
 	Notify      *notify.Service
 	NotifyHub   *notify.Hub
 }
@@ -76,6 +78,7 @@ func NewRouter(d Deps) http.Handler {
 		mountMeDisciplines(r, d)
 		mountDebts(r, d)
 		mountRetakes(r, d)
+		mountReports(r, d)
 		mountNotificationsREST(r, d)
 	})
 
@@ -241,6 +244,18 @@ func mountRetakes(r chi.Router, d Deps) {
 
 		r.With(mw.RequirePermission(d.RBAC, "retakes.assign_grade")).
 			Patch("/{id}/students/{user_id}/grade", h.GradeStudent)
+	})
+}
+
+// mountReports регистрирует /api/reports/*. Все эндпоинты требуют
+// permission reports.export — он есть только у dean и admin из сидов.
+func mountReports(r chi.Router, d Deps) {
+	h := handler.NewReportHandler(d.Reports)
+	r.Route("/api/reports", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "reports.export"))
+		r.Get("/debts-summary", h.DebtsSummary)
+		r.Get("/retakes", h.Retakes)
 	})
 }
 
