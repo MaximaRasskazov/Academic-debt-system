@@ -15,6 +15,7 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
@@ -30,17 +31,18 @@ import (
 // Сделано отдельной структурой, чтобы main.go не разрастался
 // сигнатурой NewRouter(a, b, c, d, ...).
 type Deps struct {
-	Cfg         *config.Config
-	Pool        *pgxpool.Pool
-	Auth        *auth.Service
-	Tokens      *token.Service
-	RBAC        *rbac.Service
-	Disciplines *discipline.Service
-	Debts       *debt.Service
-	Retakes     *retake.Service
-	Reports     *report.Service
-	Notify      *notify.Service
-	NotifyHub   *notify.Hub
+	Cfg            *config.Config
+	Pool           *pgxpool.Pool
+	Auth           *auth.Service
+	Tokens         *token.Service
+	RBAC           *rbac.Service
+	Disciplines    *discipline.Service
+	Debts          *debt.Service
+	Retakes        *retake.Service
+	ChangeRequests *changerequest.Service
+	Reports        *report.Service
+	Notify         *notify.Service
+	NotifyHub      *notify.Hub
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -78,6 +80,7 @@ func NewRouter(d Deps) http.Handler {
 		mountMeDisciplines(r, d)
 		mountDebts(r, d)
 		mountRetakes(r, d)
+		mountChangeRequests(r, d)
 		mountReports(r, d)
 		mountNotificationsREST(r, d)
 	})
@@ -256,6 +259,26 @@ func mountReports(r chi.Router, d Deps) {
 		r.Use(mw.RequirePermission(d.RBAC, "reports.export"))
 		r.Get("/debts-summary", h.DebtsSummary)
 		r.Get("/retakes", h.Retakes)
+	})
+}
+
+// mountChangeRequests регистрирует /api/retake-change-requests/*.
+// Преподаватель-участник подаёт заявку (retakes.request_change),
+// деканат рассматривает (retakes.approve_change).
+func mountChangeRequests(r chi.Router, d Deps) {
+	h := handler.NewChangeRequestHandler(d.ChangeRequests)
+	r.Route("/api/retake-change-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.request_change")).
+			Post("/", h.Submit)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "retakes.approve_change"))
+			r.Get("/", h.ListPending)
+			r.Post("/{id}/approve", h.Approve)
+			r.Post("/{id}/reject", h.Reject)
+		})
 	})
 }
 
