@@ -29,6 +29,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -101,7 +102,28 @@ func run() error {
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
-	return runServer(srv, cfg)
+	// Шедулер автопереходов retake-статусов крутится параллельно
+	// HTTP-серверу. Останавливаем его через schedCancel перед
+	// shutdown, чтобы не словить race на повисшем UPDATE при закрытии
+	// пула соединений.
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	schedSvc := scheduler.New(store, auditSvc, scheduler.DefaultInterval)
+	schedDone := make(chan struct{})
+	go func() {
+		defer close(schedDone)
+		_ = schedSvc.Run(schedCtx)
+	}()
+
+	if err := runServer(srv, cfg); err != nil {
+		return err
+	}
+
+	// Сервер уже остановлен — гасим шедулер и ждём пока он закроется,
+	// прежде чем pool.Close() в defer.
+	schedCancel()
+	<-schedDone
+	return nil
 }
 
 func setupLogger() {
