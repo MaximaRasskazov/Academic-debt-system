@@ -24,6 +24,9 @@ var tmplRetakeUpdated string
 //go:embed templates/retake_cancelled.html
 var tmplRetakeCancelled string
 
+//go:embed templates/retake_grade_received.html
+var tmplRetakeGradeReceived string
+
 var emailTemplates map[string]*template.Template
 
 func init() {
@@ -31,16 +34,18 @@ func init() {
 		return template.Must(template.New("").Parse(src))
 	}
 	emailTemplates = map[string]*template.Template{
-		KindRetakeScheduled: must(tmplRetakeScheduled),
-		KindRetakeUpdated:   must(tmplRetakeUpdated),
-		KindRetakeCancelled: must(tmplRetakeCancelled),
+		KindRetakeScheduled:     must(tmplRetakeScheduled),
+		KindRetakeUpdated:       must(tmplRetakeUpdated),
+		KindRetakeCancelled:     must(tmplRetakeCancelled),
+		KindRetakeGradeReceived: must(tmplRetakeGradeReceived),
 	}
 }
 
 var subjectByKind = map[string]string{
-	KindRetakeScheduled: "Назначена пересдача",
-	KindRetakeUpdated:   "Изменено расписание пересдачи",
-	KindRetakeCancelled: "Пересдача отменена",
+	KindRetakeScheduled:     "Назначена пересдача",
+	KindRetakeUpdated:       "Изменено расписание пересдачи",
+	KindRetakeCancelled:     "Пересдача отменена",
+	KindRetakeGradeReceived: "Получена оценка за пересдачу",
 }
 
 type emailNotifier struct {

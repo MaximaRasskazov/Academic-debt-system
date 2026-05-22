@@ -72,7 +72,6 @@ func run() error {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
-	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
 	notifyHub := notify.NewHub()
@@ -84,6 +83,7 @@ func run() error {
 		From:     cfg.SMTPFrom,
 	})
 
+	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
