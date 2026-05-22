@@ -23,7 +23,17 @@ func NewDisciplineHandler(svc *discipline.Service) *DisciplineHandler {
 	return &DisciplineHandler{svc: svc}
 }
 
-// List — GET /api/disciplines?limit=&offset=
+// List godoc
+//
+//	@Summary	Список дисциплин
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		limit	query		int	false	"Лимит (default 50)"
+//	@Param		offset	query		int	false	"Смещение (default 0)"
+//	@Success	200		{object}	dto.DisciplinesListResponse
+//	@Failure	401		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines [get]
 func (h *DisciplineHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit := parseInt32(r.URL.Query().Get("limit"), 50)
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
@@ -38,7 +48,16 @@ func (h *DisciplineHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Get — GET /api/disciplines/:id
+// Get godoc
+//
+//	@Summary	Дисциплина по ID
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID дисциплины"
+//	@Success	200	{object}	dto.DisciplineResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id} [get]
 func (h *DisciplineHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -52,7 +71,18 @@ func (h *DisciplineHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDiscipline(d))
 }
 
-// Create — POST /api/disciplines
+// Create godoc
+//
+//	@Summary	Создать дисциплину
+//	@Tags		disciplines
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.CreateDisciplineRequest	true	"Данные дисциплины"
+//	@Success	201		{object}	dto.DisciplineResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Failure	409		{object}	dto.ErrorResponse	"Code или Name уже заняты"
+//	@Security	BearerAuth
+//	@Router		/api/disciplines [post]
 func (h *DisciplineHandler) Create(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -78,7 +108,18 @@ func (h *DisciplineHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto.FromDiscipline(d))
 }
 
-// Update — PATCH /api/disciplines/:id
+// Update godoc
+//
+//	@Summary	Обновить дисциплину
+//	@Tags		disciplines
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		string						true	"UUID дисциплины"
+//	@Param		body	body		dto.UpdateDisciplineRequest	true	"Поля для обновления"
+//	@Success	200		{object}	dto.DisciplineResponse
+//	@Failure	404		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id} [patch]
 func (h *DisciplineHandler) Update(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -106,7 +147,15 @@ func (h *DisciplineHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDiscipline(d))
 }
 
-// Delete — DELETE /api/disciplines/:id (soft-delete)
+// Delete godoc
+//
+//	@Summary	Удалить дисциплину (soft-delete)
+//	@Tags		disciplines
+//	@Param		id	path	string	true	"UUID дисциплины"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id} [delete]
 func (h *DisciplineHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -124,7 +173,15 @@ func (h *DisciplineHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Restore — POST /api/disciplines/:id/restore
+// Restore godoc
+//
+//	@Summary	Восстановить дисциплину
+//	@Tags		disciplines
+//	@Param		id	path	string	true	"UUID дисциплины"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/restore [post]
 func (h *DisciplineHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -142,7 +199,16 @@ func (h *DisciplineHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListTeachers — GET /api/disciplines/:id/teachers
+// ListTeachers godoc
+//
+//	@Summary	Преподаватели дисциплины
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID дисциплины"
+//	@Success	200	{array}		dto.UserResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/teachers [get]
 func (h *DisciplineHandler) ListTeachers(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -160,7 +226,17 @@ func (h *DisciplineHandler) ListTeachers(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// AttachTeacher — POST /api/disciplines/:id/teachers
+// AttachTeacher godoc
+//
+//	@Summary	Назначить преподавателя на дисциплину
+//	@Tags		disciplines
+//	@Accept		json
+//	@Param		id		path	string						true	"UUID дисциплины"
+//	@Param		body	body	dto.AttachTeacherRequest	true	"ID преподавателя"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/teachers [post]
 func (h *DisciplineHandler) AttachTeacher(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -183,7 +259,16 @@ func (h *DisciplineHandler) AttachTeacher(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DetachTeacher — DELETE /api/disciplines/:id/teachers/:user_id
+// DetachTeacher godoc
+//
+//	@Summary	Снять преподавателя с дисциплины
+//	@Tags		disciplines
+//	@Param		id		path	string	true	"UUID дисциплины"
+//	@Param		user_id	path	string	true	"UUID преподавателя"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/teachers/{user_id} [delete]
 func (h *DisciplineHandler) DetachTeacher(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -205,7 +290,16 @@ func (h *DisciplineHandler) DetachTeacher(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListStudents — GET /api/disciplines/:id/students
+// ListStudents godoc
+//
+//	@Summary	Студенты дисциплины
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID дисциплины"
+//	@Success	200	{array}		dto.UserResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/students [get]
 func (h *DisciplineHandler) ListStudents(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -223,7 +317,17 @@ func (h *DisciplineHandler) ListStudents(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// AttachStudent — POST /api/disciplines/:id/students
+// AttachStudent godoc
+//
+//	@Summary	Зачислить студента на дисциплину
+//	@Tags		disciplines
+//	@Accept		json
+//	@Param		id		path	string						true	"UUID дисциплины"
+//	@Param		body	body	dto.AttachStudentRequest	true	"Студент и период обучения"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/students [post]
 func (h *DisciplineHandler) AttachStudent(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -250,7 +354,16 @@ func (h *DisciplineHandler) AttachStudent(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DetachStudent — DELETE /api/disciplines/:id/students/:user_id
+// DetachStudent godoc
+//
+//	@Summary	Отчислить студента с дисциплины
+//	@Tags		disciplines
+//	@Param		id		path	string	true	"UUID дисциплины"
+//	@Param		user_id	path	string	true	"UUID студента"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/disciplines/{id}/students/{user_id} [delete]
 func (h *DisciplineHandler) DetachStudent(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {

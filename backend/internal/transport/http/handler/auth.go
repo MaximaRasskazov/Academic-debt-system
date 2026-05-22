@@ -27,7 +27,17 @@ func NewAuthHandler(svc *auth.Service, cfg *config.Config) *AuthHandler {
 	return &AuthHandler{auth: svc, cfg: cfg}
 }
 
-// Register — POST /api/auth/register.
+// Register godoc
+//
+//	@Summary	Регистрация нового пользователя
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.RegisterRequest	true	"Данные для регистрации"
+//	@Success	201		{object}	dto.AuthResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Failure	409		{object}	dto.ErrorResponse	"Email уже занят"
+//	@Router		/api/auth/register [post]
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req dto.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -58,7 +68,17 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Login — POST /api/auth/login.
+// Login godoc
+//
+//	@Summary	Вход в систему
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.LoginRequest	true	"Email и пароль"
+//	@Success	200		{object}	dto.AuthResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Failure	401		{object}	dto.ErrorResponse	"Неверные учётные данные"
+//	@Router		/api/auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req dto.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -81,10 +101,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Refresh — POST /api/auth/refresh.
-// Читает refresh-токен из cookie, обменивает на новую пару и
-// возвращает новый access. Старый refresh помечается used в БД
-// (one-use), новый ставится в cookie тем же именем.
+// Refresh godoc
+//
+//	@Summary	Обновление access-токена
+//	@Description	Читает refresh-токен из httpOnly-cookie, возвращает новую пару. One-use: старый токен инвалидируется.
+//	@Tags		auth
+//	@Produce	json
+//	@Success	200	{object}	dto.AuthResponse
+//	@Failure	401	{object}	dto.ErrorResponse	"Cookie отсутствует или токен недействителен"
+//	@Router		/api/auth/refresh [post]
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(refreshCookieName)
 	if err != nil || cookie.Value == "" {
@@ -109,8 +134,14 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Logout — POST /api/auth/logout. Защищён Auth-middleware: tokenID
-// читается из контекста.
+// Logout godoc
+//
+//	@Summary	Выход из системы
+//	@Tags		auth
+//	@Success	204
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/auth/logout [post]
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	tokenID, ok := mw.TokenID(r.Context())
 	if !ok {
@@ -125,7 +156,16 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Me — GET /api/auth/me. Защищён Auth-middleware.
+// Me godoc
+//
+//	@Summary	Профиль текущего пользователя
+//	@Description	Возвращает пользователя, его роли и плоский список permissions.
+//	@Tags		auth
+//	@Produce	json
+//	@Success	200	{object}	dto.ProfileResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/auth/me [get]
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {

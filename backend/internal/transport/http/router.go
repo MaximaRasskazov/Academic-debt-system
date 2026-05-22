@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	httpSwagger "github.com/swaggo/http-swagger"
+
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
@@ -81,6 +83,11 @@ func NewRouter(d Deps) http.Handler {
 		mountReports(r, d)
 		mountNotificationsREST(r, d)
 	})
+
+	// Swagger UI — без таймаута, статика подаётся напрямую.
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	// WebSocket — без таймаута, соединение живёт пока клиент не отключится.
 	mountNotificationsWS(r, d)

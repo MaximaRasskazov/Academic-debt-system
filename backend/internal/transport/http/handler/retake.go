@@ -20,8 +20,15 @@ func NewRetakeHandler(svc *retake.Service) *RetakeHandler {
 	return &RetakeHandler{svc: svc}
 }
 
-// ListMy — GET /api/retakes/my. Permission retakes.view.own.
-// Студент / преподаватель видят пересдачи где они участники.
+// ListMy godoc
+//
+//	@Summary	Мои пересдачи (студент / преподаватель)
+//	@Tags		retakes
+//	@Produce	json
+//	@Success	200	{array}		dto.RetakeResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/my [get]
 func (h *RetakeHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -36,8 +43,18 @@ func (h *RetakeHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromRetakes(rows))
 }
 
-// ListAll — GET /api/retakes. Деканат видит всё с опциональным
-// фильтром ?status=scheduled|in_progress|completed|cancelled.
+// ListAll godoc
+//
+//	@Summary	Все пересдачи (деканат)
+//	@Tags		retakes
+//	@Produce	json
+//	@Param		status	query		string	false	"Фильтр: scheduled|in_progress|completed|cancelled"
+//	@Param		limit	query		int		false	"Лимит"
+//	@Param		offset	query		int		false	"Смещение"
+//	@Success	200		{object}	dto.RetakesListResponse
+//	@Failure	401		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes [get]
 func (h *RetakeHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	limit := parseInt32(r.URL.Query().Get("limit"), 50)
@@ -53,7 +70,16 @@ func (h *RetakeHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Get — GET /api/retakes/:id.
+// Get godoc
+//
+//	@Summary	Пересдача по ID
+//	@Tags		retakes
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID пересдачи"
+//	@Success	200	{object}	dto.RetakeResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id} [get]
 func (h *RetakeHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -67,7 +93,17 @@ func (h *RetakeHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromRetake(row))
 }
 
-// Create — POST /api/retakes. Деканат создаёт пересдачу.
+// Create godoc
+//
+//	@Summary	Создать пересдачу (деканат)
+//	@Tags		retakes
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.CreateRetakeRequest	true	"Данные пересдачи"
+//	@Success	201		{object}	dto.RetakeResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes [post]
 func (h *RetakeHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -95,7 +131,18 @@ func (h *RetakeHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto.FromRetake(row))
 }
 
-// Update — PATCH /api/retakes/:id.
+// Update godoc
+//
+//	@Summary	Обновить расписание пересдачи
+//	@Tags		retakes
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		string					true	"UUID пересдачи"
+//	@Param		body	body		dto.UpdateRetakeRequest	true	"Поля для обновления"
+//	@Success	200		{object}	dto.RetakeResponse
+//	@Failure	404		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id} [patch]
 func (h *RetakeHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -128,8 +175,15 @@ func (h *RetakeHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromRetake(row))
 }
 
-// Start — POST /api/retakes/:id/start. Деканат начинает пересдачу.
-// Шедулер из BACK-07 будет делать это автоматически по scheduled_at.
+// Start godoc
+//
+//	@Summary	Начать пересдачу вручную
+//	@Tags		retakes
+//	@Param		id	path	string	true	"UUID пересдачи"
+//	@Success	204
+//	@Failure	409	{object}	dto.ErrorResponse	"Неверный статус"
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/start [post]
 func (h *RetakeHandler) Start(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -147,7 +201,15 @@ func (h *RetakeHandler) Start(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Complete — POST /api/retakes/:id/complete. Ручное завершение.
+// Complete godoc
+//
+//	@Summary	Завершить пересдачу вручную
+//	@Tags		retakes
+//	@Param		id	path	string	true	"UUID пересдачи"
+//	@Success	204
+//	@Failure	409	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/complete [post]
 func (h *RetakeHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -165,7 +227,15 @@ func (h *RetakeHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Cancel — POST /api/retakes/:id/cancel.
+// Cancel godoc
+//
+//	@Summary	Отменить пересдачу
+//	@Tags		retakes
+//	@Param		id	path	string	true	"UUID пересдачи"
+//	@Success	204
+//	@Failure	409	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/cancel [post]
 func (h *RetakeHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -183,7 +253,16 @@ func (h *RetakeHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListParticipants — GET /api/retakes/:id/participants.
+// ListParticipants godoc
+//
+//	@Summary	Участники пересдачи
+//	@Tags		retakes
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID пересдачи"
+//	@Success	200	{array}		dto.RetakeParticipantResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/participants [get]
 func (h *RetakeHandler) ListParticipants(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -197,7 +276,17 @@ func (h *RetakeHandler) ListParticipants(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, dto.FromRetakeParticipants(rows))
 }
 
-// AddStudent — POST /api/retakes/:id/students.
+// AddStudent godoc
+//
+//	@Summary	Добавить студента на пересдачу
+//	@Tags		retakes
+//	@Accept		json
+//	@Param		id		path	string						true	"UUID пересдачи"
+//	@Param		body	body	dto.AddRetakeStudentRequest	true	"StudentID + DebtID"
+//	@Success	204
+//	@Failure	400	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/students [post]
 func (h *RetakeHandler) AddStudent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -220,7 +309,17 @@ func (h *RetakeHandler) AddStudent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// AddTeacher — POST /api/retakes/:id/teachers.
+// AddTeacher godoc
+//
+//	@Summary	Добавить преподавателя на пересдачу
+//	@Tags		retakes
+//	@Accept		json
+//	@Param		id		path	string						true	"UUID пересдачи"
+//	@Param		body	body	dto.AddRetakeTeacherRequest	true	"TeacherID"
+//	@Success	204
+//	@Failure	400	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/teachers [post]
 func (h *RetakeHandler) AddTeacher(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -243,7 +342,16 @@ func (h *RetakeHandler) AddTeacher(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RemoveStudent — DELETE /api/retakes/:id/students/:user_id.
+// RemoveStudent godoc
+//
+//	@Summary	Убрать студента с пересдачи
+//	@Tags		retakes
+//	@Param		id		path	string	true	"UUID пересдачи"
+//	@Param		user_id	path	string	true	"UUID студента"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/students/{user_id} [delete]
 func (h *RetakeHandler) RemoveStudent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -265,7 +373,16 @@ func (h *RetakeHandler) RemoveStudent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RemoveTeacher — DELETE /api/retakes/:id/teachers/:user_id.
+// RemoveTeacher godoc
+//
+//	@Summary	Убрать преподавателя с пересдачи
+//	@Tags		retakes
+//	@Param		id		path	string	true	"UUID пересдачи"
+//	@Param		user_id	path	string	true	"UUID преподавателя"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/teachers/{user_id} [delete]
 func (h *RetakeHandler) RemoveTeacher(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -287,8 +404,19 @@ func (h *RetakeHandler) RemoveTeacher(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GradeStudent — PATCH /api/retakes/:id/students/:user_id/grade.
-// Выставление оценки атомарно закрывает связанный долг.
+// GradeStudent godoc
+//
+//	@Summary	Выставить оценку студенту на пересдаче
+//	@Description	Атомарно закрывает связанный долг студента.
+//	@Tags		retakes
+//	@Accept		json
+//	@Param		id		path	string							true	"UUID пересдачи"
+//	@Param		user_id	path	string							true	"UUID студента"
+//	@Param		body	body	dto.GradeRetakeStudentRequest	true	"Оценка"
+//	@Success	204
+//	@Failure	400	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/students/{user_id}/grade [patch]
 func (h *RetakeHandler) GradeStudent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {

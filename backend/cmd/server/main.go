@@ -18,6 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	_ "github.com/MaximaRasskazov/Academic-debt-system/backend/docs"
+
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"

@@ -22,8 +22,15 @@ func NewUserDisciplinesHandler(svc *discipline.Service) *UserDisciplinesHandler 
 	return &UserDisciplinesHandler{svc: svc}
 }
 
-// MyAsStudent — GET /api/me/disciplines/student.
-// Дисциплины, на которых текущий пользователь является студентом.
+// MyAsStudent godoc
+//
+//	@Summary	Мои дисциплины (как студент)
+//	@Tags		disciplines
+//	@Produce	json
+//	@Success	200	{array}		dto.DisciplineResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/me/disciplines/student [get]
 func (h *UserDisciplinesHandler) MyAsStudent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -33,8 +40,15 @@ func (h *UserDisciplinesHandler) MyAsStudent(w http.ResponseWriter, r *http.Requ
 	h.listAsStudent(w, r, userID)
 }
 
-// MyAsTeacher — GET /api/me/disciplines/teacher.
-// Дисциплины, которые ведёт текущий пользователь.
+// MyAsTeacher godoc
+//
+//	@Summary	Мои дисциплины (как преподаватель)
+//	@Tags		disciplines
+//	@Produce	json
+//	@Success	200	{array}		dto.DisciplineResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/me/disciplines/teacher [get]
 func (h *UserDisciplinesHandler) MyAsTeacher(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -44,8 +58,16 @@ func (h *UserDisciplinesHandler) MyAsTeacher(w http.ResponseWriter, r *http.Requ
 	h.listAsTeacher(w, r, userID)
 }
 
-// UserAsStudent — GET /api/users/:id/disciplines/student. Админский
-// view: посмотреть на каких дисциплинах учится конкретный пользователь.
+// UserAsStudent godoc
+//
+//	@Summary	Дисциплины пользователя (как студент)
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID пользователя"
+//	@Success	200	{array}		dto.DisciplineResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/users/{id}/disciplines/student [get]
 func (h *UserDisciplinesHandler) UserAsStudent(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -54,8 +76,16 @@ func (h *UserDisciplinesHandler) UserAsStudent(w http.ResponseWriter, r *http.Re
 	h.listAsStudent(w, r, id)
 }
 
-// UserAsTeacher — GET /api/users/:id/disciplines/teacher. Какие
-// дисциплины ведёт конкретный преподаватель.
+// UserAsTeacher godoc
+//
+//	@Summary	Дисциплины пользователя (как преподаватель)
+//	@Tags		disciplines
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID пользователя"
+//	@Success	200	{array}		dto.DisciplineResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/users/{id}/disciplines/teacher [get]
 func (h *UserDisciplinesHandler) UserAsTeacher(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
