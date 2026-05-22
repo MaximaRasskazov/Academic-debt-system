@@ -37,6 +37,13 @@ func NewDisciplineHandler(svc *discipline.Service) *DisciplineHandler {
 func (h *DisciplineHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit := parseInt32(r.URL.Query().Get("limit"), 50)
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
+	// Клипаем до диапазона сервиса, чтобы response отражал реальный limit.
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	items, total, err := h.svc.List(r.Context(), limit, offset)
 	if err != nil {
@@ -417,6 +424,8 @@ func mapDisciplineError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "code_taken", "code уже используется")
 	case errors.Is(err, discipline.ErrNameTaken):
 		writeError(w, http.StatusConflict, "name_taken", "name уже используется")
+	case errors.Is(err, discipline.ErrExternalIDTaken):
+		writeError(w, http.StatusConflict, "external_id_taken", "external_id уже используется")
 	case errors.Is(err, discipline.ErrAlreadyExists):
 		writeError(w, http.StatusConflict, "already_exists", "привязка уже существует")
 	case errors.Is(err, discipline.ErrInvalidInput):

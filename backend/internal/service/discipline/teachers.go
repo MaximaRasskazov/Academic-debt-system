@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 )
@@ -29,6 +30,9 @@ func (s *Service) AttachTeacher(ctx context.Context, disciplineID, teacherID, ac
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrAlreadyExists
+			}
+			if repo.IsForeignKeyViolation(err) {
+				return fmt.Errorf("%w: пользователь не найден", ErrInvalidInput)
 			}
 			return fmt.Errorf("attach teacher: %w", err)
 		}
@@ -65,7 +69,11 @@ func (s *Service) DetachTeacher(ctx context.Context, disciplineID, teacherID, ac
 }
 
 // ListTeachers возвращает преподавателей, ведущих дисциплину.
+// ErrNotFound если дисциплина не существует.
 func (s *Service) ListTeachers(ctx context.Context, disciplineID uuid.UUID) ([]queries.User, error) {
+	if _, err := s.Get(ctx, disciplineID); err != nil {
+		return nil, err
+	}
 	rows, err := s.store.ListTeachersForDiscipline(ctx, pgutil.PgUUID(disciplineID))
 	if err != nil {
 		return nil, fmt.Errorf("list teachers: %w", err)
