@@ -7,6 +7,7 @@ import DebtsPage from '../views/DebtsPage.vue'
 import RetakesPage from '../views/RetakesPage.vue'
 import RetakeCreatePage from '../views/RetakeCreatePage.vue'
 import RequestsPage from '../views/RequestsPage.vue'
+import DeanPage from '../views/DeanPage.vue'
 
 const routes = [
   { path: '/', redirect: '/debts' },
@@ -16,6 +17,7 @@ const routes = [
   { path: '/retakes', component: RetakesPage, meta: { auth: true } },
   { path: '/retakes/create', component: RetakeCreatePage, meta: { auth: true, roles: ['DEAN'] } },
   { path: '/requests', component: RequestsPage, meta: { auth: true, roles: ['DEAN'] } },
+  { path: '/dean', component: DeanPage, meta: { auth: true, roles: ['DEAN'] } },
 ]
 
 const router = createRouter({

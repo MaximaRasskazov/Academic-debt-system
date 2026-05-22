@@ -676,7 +676,7 @@ form {
   color: var(--ink);
   outline: none;
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease), transform .15s var(--ease);
-  -moz-appearance: textfield;
+  /* -moz-appearance: textfield; */
 }
 .code-cell::-webkit-outer-spin-button,
 .code-cell::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
