@@ -33,6 +33,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
+	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -74,6 +75,8 @@ func run() error {
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
+	teacherRequestSvc := teacherrequest.New(store, rbacSvc)
+
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
 		Host:     cfg.SMTPHost,
@@ -88,18 +91,19 @@ func run() error {
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
 	handler := httpx.NewRouter(httpx.Deps{
-		Cfg:            cfg,
-		Pool:           pool,
-		Auth:           authSvc,
-		Tokens:         tokens,
-		RBAC:           rbacSvc,
-		Disciplines:    disciplineSvc,
-		Debts:          debtSvc,
-		Retakes:        retakeSvc,
-		ChangeRequests: changeRequestSvc,
-		Reports:        reportSvc,
-		Notify:         notifySvc,
-		NotifyHub:      notifyHub,
+		Cfg:             cfg,
+		Pool:            pool,
+		Auth:            authSvc,
+		Tokens:          tokens,
+		RBAC:            rbacSvc,
+		Disciplines:     disciplineSvc,
+		Debts:           debtSvc,
+		Retakes:         retakeSvc,
+		ChangeRequests:  changeRequestSvc,
+		Reports:         reportSvc,
+		Notify:          notifySvc,
+		NotifyHub:       notifyHub,
+		TeacherRequests: teacherRequestSvc,
 	})
 
 	srv := &http.Server{
