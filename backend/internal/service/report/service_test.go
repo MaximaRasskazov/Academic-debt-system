@@ -49,7 +49,7 @@ func setup(t *testing.T) *fixture {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	disc := discipline.New(store, auditSvc, changelogSvc)
-	debtSvc := debt.New(store, auditSvc, changelogSvc, disc)
+	debtSvc := debt.New(store, auditSvc, changelogSvc, disc, nil)
 	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 	return &fixture{
 		store: store, disc: disc, debt: debtSvc, retake: retakeSvc,

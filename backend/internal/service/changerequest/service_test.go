@@ -49,7 +49,7 @@ func setup(t *testing.T) *fixture {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	discSvc := discipline.New(store, auditSvc, changelogSvc)
-	debtSvc := debt.New(store, auditSvc, changelogSvc, discSvc)
+	debtSvc := debt.New(store, auditSvc, changelogSvc, discSvc, nil)
 	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 	// notify без SMTP/WS: пустой конфиг, только DB-запись уведомлений.
 	hub := notify.NewHub()
