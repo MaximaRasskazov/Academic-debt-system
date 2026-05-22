@@ -13,6 +13,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 )
 
 // Виды участников (соответствуют CHECK в миграции 00016).
@@ -64,7 +65,22 @@ func (s *Service) AddStudent(ctx context.Context, retakeID, studentID, debtID, a
 	}
 
 	pgDebt := pgutil.PgUUID(debtID)
-	return s.addParticipant(ctx, current, studentID, ParticipantStudent, &pgDebt, actorID, actionStudentAdded)
+	if err := s.addParticipant(ctx, current, studentID, ParticipantStudent, &pgDebt, actorID, actionStudentAdded); err != nil {
+		return err
+	}
+
+	// Уведомляем студента сразу после успешного добавления, а не при
+	// создании пересдачи: до этого момента он не знает, что для него
+	// что-то запланировали. retake_scheduled — главное событие в его
+	// потоке нотификаций.
+	s.notifyStudent(ctx, studentID, notify.KindRetakeScheduled,
+		retakeBasePayload(
+			pgutil.UUID(current.ID),
+			pgutil.UUID(current.DisciplineID),
+			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
+			current.Building, current.Room,
+		))
+	return nil
 }
 
 // AddTeacher добавляет преподавателя/члена комиссии. kind определяется
@@ -217,7 +233,7 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		return ErrStudentNeedsDebt
 	}
 
-	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		// 1. Оценка участнику.
 		_, err := q.GradeStudentParticipant(ctx, queries.GradeStudentParticipantParams{
 			ID:       participant.ID,
@@ -254,7 +270,19 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 				"grade":          grade,
 			},
 		})
+	}); err != nil {
+		return err
+	}
+
+	// Студент должен узнать оценку сразу, не дожидаясь email-дайджеста
+	// или ручного refresh. Payload минимальный — фронт сам подтянет
+	// детали по retake_id, если нужно показать карточку.
+	s.notifyStudent(ctx, studentID, notify.KindRetakeGradeReceived, retakePayload{
+		"retake_id":     pgutil.UUID(current.ID).String(),
+		"discipline_id": pgutil.UUID(current.DisciplineID).String(),
+		"grade":         grade,
 	})
+	return nil
 }
 
 // ListParticipants возвращает всех участников пересдачи (студенты +

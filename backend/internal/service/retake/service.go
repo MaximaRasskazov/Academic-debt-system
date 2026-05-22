@@ -26,6 +26,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 )
 
 // Константы статусов и видов пересдач (соответствуют CHECK-constraint
@@ -75,10 +76,13 @@ type Service struct {
 	store     *repo.Store
 	audit     *audit.Service
 	changelog *changelog.Service
+	notify    *notify.Service // опционально — для уведомлений студентам
 }
 
-func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service) *Service {
-	return &Service{store: store, audit: auditSvc, changelog: changelogSvc}
+// New собирает Service. notifySvc может быть nil — тогда уведомления
+// не шлются (удобно в юнит-тестах, где notify-инфраструктура не нужна).
+func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service, notifySvc *notify.Service) *Service {
+	return &Service{store: store, audit: auditSvc, changelog: changelogSvc, notify: notifySvc}
 }
 
 // CreateInput — параметры создания пересдачи.
@@ -241,6 +245,18 @@ func (s *Service) UpdateSchedule(ctx context.Context, id uuid.UUID, in UpdateSch
 	if err != nil {
 		return queries.Retake{}, err
 	}
+
+	// Уведомляем всех студентов-участников. Шлём по обновлённой записи,
+	// чтобы payload содержал актуальное время/место — иначе фронт
+	// получит расхождение со списком пересдач.
+	s.notifyAllStudents(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdated,
+		retakeBasePayload(
+			pgutil.UUID(updated.ID),
+			pgutil.UUID(updated.DisciplineID),
+			updated.ScheduledAt.Time.Format("2006-01-02 15:04"),
+			updated.Building, updated.Room,
+		))
+
 	return updated, nil
 }
 
@@ -311,7 +327,7 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID, actorID uuid.UUID) e
 		return fmt.Errorf("%w: отменить можно только активную пересдачу", ErrInvalidStatus)
 	}
 
-	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		if err := q.CancelRetake(ctx, current.ID); err != nil {
 			return fmt.Errorf("cancel: %w", err)
 		}
@@ -322,6 +338,22 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID, actorID uuid.UUID) e
 			TargetID:   pgutil.UUID(current.ID).String(),
 		})
 	})
+	if err != nil {
+		return err
+	}
+
+	// Cancel — критическое событие для студента: он рассчитывал прийти,
+	// время надо вернуть. Уведомление здесь полезнее, чем для start/end
+	// (которые покрываются авто-шедулером без участия студента).
+	s.notifyAllStudents(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelled,
+		retakeBasePayload(
+			pgutil.UUID(current.ID),
+			pgutil.UUID(current.DisciplineID),
+			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
+			current.Building, current.Room,
+		))
+
+	return nil
 }
 
 // retakeFields формирует JSON-friendly срез полей для change_logs.
