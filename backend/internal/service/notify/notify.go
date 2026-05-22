@@ -18,6 +18,8 @@ import (
 
 // Kind — slug события, идёт в поле kind таблицы notifications.
 const (
+	KindDebtCreated = "debt_created"
+
 	KindRetakeScheduled        = "retake_scheduled"
 	KindRetakeUpdated          = "retake_updated"
 	KindRetakeCancelled        = "retake_cancelled"
