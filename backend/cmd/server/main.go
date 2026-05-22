@@ -81,13 +81,13 @@ func run() error {
 	})
 
 	handler := httpx.NewRouter(httpx.Deps{
-		Cfg:         cfg,
-		Pool:        pool,
-		Auth:        authSvc,
-		Tokens:      tokens,
-		RBAC:        rbacSvc,
-		Disciplines: disciplineSvc,
-		Debts:       debtSvc,
+		Cfg:             cfg,
+		Pool:            pool,
+		Auth:            authSvc,
+		Tokens:          tokens,
+		RBAC:            rbacSvc,
+		Disciplines:     disciplineSvc,
+		Debts:           debtSvc,
 		Notify:          notifySvc,
 		NotifyHub:       notifyHub,
 		TeacherRequests: teacherRequestSvc,

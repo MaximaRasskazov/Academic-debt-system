@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # goose CLI собирается в этом же образе и попадает в runtime через COPY
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go install github.com/pressly/goose/v3/cmd/goose@latest
+    go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
 
 COPY . .
 
