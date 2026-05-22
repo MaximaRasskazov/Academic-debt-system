@@ -192,7 +192,7 @@ func mountDisciplines(r chi.Router, d Deps) {
 		r.With(mw.RequirePermission(d.RBAC, "disciplines.update")).
 			Patch("/{id}", h.Update)
 
-		// Удаление / restore — только admin (disciplines.delete).
+		// Удаление / restore — admin и dean (disciplines.delete).
 		r.Group(func(r chi.Router) {
 			r.Use(mw.RequirePermission(d.RBAC, "disciplines.delete"))
 			r.Delete("/{id}", h.Delete)

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,6 +31,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 )
 
 const (
@@ -63,17 +65,19 @@ type Service struct {
 	audit       *audit.Service
 	changelog   *changelog.Service
 	disciplines *discipline.Service
+	notify      *notify.Service
 }
 
 // New собирает Service. discipline нужен для валидации
 // "преподаватель ведёт?" / "студент учится?" — это бизнес-инварианты
 // уровня создания долга.
-func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service, disciplinesSvc *discipline.Service) *Service {
+func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service, disciplinesSvc *discipline.Service, notifySvc *notify.Service) *Service {
 	return &Service{
 		store:       store,
 		audit:       auditSvc,
 		changelog:   changelogSvc,
 		disciplines: disciplinesSvc,
+		notify:      notifySvc,
 	}
 }
 
@@ -155,6 +159,23 @@ func (s *Service) Create(ctx context.Context, in CreateInput, issuedBy uuid.UUID
 	if err != nil {
 		return queries.Debt{}, err
 	}
+
+	// Best-effort уведомление студенту. Ошибка не откатывает долг.
+	if s.notify != nil {
+		if err := s.notify.Notify(ctx, notify.Event{
+			UserID: in.StudentID,
+			Kind:   notify.KindDebtCreated,
+			Payload: map[string]any{
+				"debt_id":       pgutil.UUID(created.ID).String(),
+				"discipline_id": in.DisciplineID.String(),
+				"issued_by":     issuedBy.String(),
+			},
+		}); err != nil {
+			slog.Warn("debt: не удалось отправить уведомление о долге",
+				"debt_id", pgutil.UUID(created.ID).String(), "err", err)
+		}
+	}
+
 	return created, nil
 }
 

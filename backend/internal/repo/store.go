@@ -13,6 +13,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -89,4 +91,35 @@ func (s *Store) RunInTx(ctx context.Context, fn func(*queries.Queries) error) er
 // pgx напрямую.
 func IsNotFound(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
+}
+
+// DisciplineExists проверяет, существует ли дисциплина с данным id
+// (включая soft-deleted записи). Нужно Restore, чтобы отличить
+// "нет такой записи" от "запись активна и не требует восстановления".
+func (s *Store) DisciplineExists(ctx context.Context, id pgtype.UUID) (bool, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM disciplines WHERE id = $1`, id).Scan(&n)
+	return n > 0, err
+}
+
+// IsForeignKeyViolation сообщает, является ли err нарушением FOREIGN KEY
+// (SQLSTATE 23503). Используется, чтобы отличить "referenced row not found"
+// от других ошибок.
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// IsUniqueViolation сообщает, является ли err нарушением UNIQUE-ограничения
+// (SQLSTATE 23505). Если constraintName непустой, дополнительно проверяется
+// имя конкретного constraint/partial-индекса.
+func IsUniqueViolation(err error, constraintName string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	if pgErr.Code != "23505" {
+		return false
+	}
+	return constraintName == "" || pgErr.ConstraintName == constraintName
 }

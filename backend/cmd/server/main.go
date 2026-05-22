@@ -72,7 +72,6 @@ func run() error {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
-	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
 	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
@@ -85,6 +84,7 @@ func run() error {
 		From:     cfg.SMTPFrom,
 	})
 
+	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
 	handler := httpx.NewRouter(httpx.Deps{
