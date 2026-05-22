@@ -14,11 +14,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	httpSwagger "github.com/swaggo/http-swagger"
+
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
@@ -36,6 +41,9 @@ type Deps struct {
 	RBAC            *rbac.Service
 	Disciplines     *discipline.Service
 	Debts           *debt.Service
+	Retakes         *retake.Service
+	ChangeRequests  *changerequest.Service
+	Reports         *report.Service
 	Notify          *notify.Service
 	NotifyHub       *notify.Hub
 	TeacherRequests *teacherrequest.Service
@@ -61,8 +69,8 @@ func NewRouter(d Deps) http.Handler {
 
 		authH := handler.NewAuthHandler(d.Auth, d.Cfg)
 		r.Route("/api/auth", func(r chi.Router) {
-			r.Post("/register", authH.Register)
-			r.Post("/login", authH.Login)
+			r.With(mw.RateLimit(3.0/60, 3)).Post("/register", authH.Register)
+			r.With(mw.RateLimit(5.0/60, 5)).Post("/login", authH.Login)
 			r.Post("/refresh", authH.Refresh)
 
 			r.Group(func(r chi.Router) {
@@ -75,10 +83,18 @@ func NewRouter(d Deps) http.Handler {
 		mountDisciplines(r, d)
 		mountMeDisciplines(r, d)
 		mountDebts(r, d)
+		mountRetakes(r, d)
+		mountChangeRequests(r, d)
+		mountReports(r, d)
 		mountNotificationsREST(r, d)
 		mountTeacherRequests(r, d)
 		mountRBAC(r, d)
 	})
+
+	// Swagger UI — без таймаута, статика подаётся напрямую.
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	// WebSocket — без таймаута, соединение живёт пока клиент не отключится.
 	mountNotificationsWS(r, d)
@@ -180,7 +196,7 @@ func mountDisciplines(r chi.Router, d Deps) {
 		r.With(mw.RequirePermission(d.RBAC, "disciplines.update")).
 			Patch("/{id}", h.Update)
 
-		// Удаление / restore — только admin (disciplines.delete).
+		// Удаление / restore — admin и dean (disciplines.delete).
 		r.Group(func(r chi.Router) {
 			r.Use(mw.RequirePermission(d.RBAC, "disciplines.delete"))
 			r.Delete("/{id}", h.Delete)
@@ -198,6 +214,81 @@ func mountDisciplines(r chi.Router, d Deps) {
 			r.Delete("/{id}/teachers/{user_id}", h.DetachTeacher)
 			r.Post("/{id}/students", h.AttachStudent)
 			r.Delete("/{id}/students/{user_id}", h.DetachStudent)
+		})
+	})
+}
+
+// mountRetakes регистрирует /api/retakes/* с разделением по permissions:
+//   - /my              → retakes.view.own (студент / препод)
+//   - / и /:id и т.п.  → retakes.view.all (деканат, админ)
+//   - POST             → retakes.create (деканат)
+//   - PATCH /:id       → retakes.update (деканат)
+//   - lifecycle (start/complete/cancel) → retakes.update
+//   - участники + grade → retakes.update / retakes.assign_grade
+func mountRetakes(r chi.Router, d Deps) {
+	h := handler.NewRetakeHandler(d.Retakes)
+
+	r.Route("/api/retakes", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.view.own")).
+			Get("/my", h.ListMy)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "retakes.view.all"))
+			r.Get("/", h.ListAll)
+			r.Get("/{id}", h.Get)
+			r.Get("/{id}/participants", h.ListParticipants)
+		})
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.create")).
+			Post("/", h.Create)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "retakes.update"))
+			r.Patch("/{id}", h.Update)
+			r.Post("/{id}/start", h.Start)
+			r.Post("/{id}/complete", h.Complete)
+			r.Post("/{id}/cancel", h.Cancel)
+			r.Post("/{id}/students", h.AddStudent)
+			r.Delete("/{id}/students/{user_id}", h.RemoveStudent)
+			r.Post("/{id}/teachers", h.AddTeacher)
+			r.Delete("/{id}/teachers/{user_id}", h.RemoveTeacher)
+		})
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.assign_grade")).
+			Patch("/{id}/students/{user_id}/grade", h.GradeStudent)
+	})
+}
+
+// mountReports регистрирует /api/reports/*. Все эндпоинты требуют
+// permission reports.export — он есть только у dean и admin из сидов.
+func mountReports(r chi.Router, d Deps) {
+	h := handler.NewReportHandler(d.Reports)
+	r.Route("/api/reports", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "reports.export"))
+		r.Get("/debts-summary", h.DebtsSummary)
+		r.Get("/retakes", h.Retakes)
+	})
+}
+
+// mountChangeRequests регистрирует /api/retake-change-requests/*.
+// Преподаватель-участник подаёт заявку (retakes.request_change),
+// деканат рассматривает (retakes.approve_change).
+func mountChangeRequests(r chi.Router, d Deps) {
+	h := handler.NewChangeRequestHandler(d.ChangeRequests)
+	r.Route("/api/retake-change-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.request_change")).
+			Post("/", h.Submit)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "retakes.approve_change"))
+			r.Get("/", h.ListPending)
+			r.Post("/{id}/approve", h.Approve)
+			r.Post("/{id}/reject", h.Reject)
 		})
 	})
 }

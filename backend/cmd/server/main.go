@@ -18,15 +18,21 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	_ "github.com/MaximaRasskazov/Academic-debt-system/backend/docs"
+
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
@@ -67,7 +73,7 @@ func run() error {
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
-	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
+	reportSvc := report.New(store)
 
 	teacherRequestSvc := teacherrequest.New(store, rbacSvc)
 
@@ -80,6 +86,10 @@ func run() error {
 		From:     cfg.SMTPFrom,
 	})
 
+	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
+	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
+	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
+
 	handler := httpx.NewRouter(httpx.Deps{
 		Cfg:             cfg,
 		Pool:            pool,
@@ -88,6 +98,9 @@ func run() error {
 		RBAC:            rbacSvc,
 		Disciplines:     disciplineSvc,
 		Debts:           debtSvc,
+		Retakes:         retakeSvc,
+		ChangeRequests:  changeRequestSvc,
+		Reports:         reportSvc,
 		Notify:          notifySvc,
 		NotifyHub:       notifyHub,
 		TeacherRequests: teacherRequestSvc,
@@ -99,7 +112,28 @@ func run() error {
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
-	return runServer(srv, cfg)
+	// Шедулер автопереходов retake-статусов крутится параллельно
+	// HTTP-серверу. Останавливаем его через schedCancel перед
+	// shutdown, чтобы не словить race на повисшем UPDATE при закрытии
+	// пула соединений.
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	schedSvc := scheduler.New(store, auditSvc, scheduler.DefaultInterval)
+	schedDone := make(chan struct{})
+	go func() {
+		defer close(schedDone)
+		_ = schedSvc.Run(schedCtx)
+	}()
+
+	if err := runServer(srv, cfg); err != nil {
+		return err
+	}
+
+	// Сервер уже остановлен — гасим шедулер и ждём пока он закроется,
+	// прежде чем pool.Close() в defer.
+	schedCancel()
+	<-schedDone
+	return nil
 }
 
 func setupLogger() {

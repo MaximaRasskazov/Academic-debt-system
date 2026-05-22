@@ -18,12 +18,17 @@ import (
 
 // Kind — slug события, идёт в поле kind таблицы notifications.
 const (
+	KindDebtCreated = "debt_created"
+
 	KindRetakeScheduled        = "retake_scheduled"
 	KindRetakeUpdated          = "retake_updated"
 	KindRetakeCancelled        = "retake_cancelled"
 	KindRetakeGradeReceived    = "retake_grade_received"
 	KindTeacherRequestApproved = "teacher_request_approved"
 	KindTeacherRequestRejected = "teacher_request_rejected"
+
+	KindRetakeChangeApproved = "retake_change_approved"
+	KindRetakeChangeRejected = "retake_change_rejected"
 )
 
 // Event — входные данные для отправки уведомления.
