@@ -39,6 +39,7 @@ backend/
 │   │   ├── debt/              # академические долги (создание, оценка, отмена, выборки по ролям)
 │   │   ├── retake/            # пересдачи + участники + переходы статусов + grade c закрытием debt
 │   │   ├── report/            # сводные отчёты (долги по дисциплинам, пересдачи за период) + XLSX/CSV экспорт
+│   │   ├── scheduler/         # фоновый тикер: scheduled→in_progress→completed по scheduled_at
 │   │   └── notify/            # email + WebSocket + история уведомлений
 │   └── transport/http/
 │       ├── dto/               # API-схемы (auth, discipline, debt, retake, notifications)
@@ -226,10 +227,11 @@ make sqlc                     # перегенерировать internal/repo/q
 - [x] **BACK-06 Notify** (PR #16): email через SMTP + WebSocket-хаб + история уведомлений
 - [x] **BACK-02 Debts** (PR #17): DebtService + handler'ы `/api/debts/*` + `/api/me/disciplines/*`
 - [x] **BACK-03 Retakes** (PR #18): RetakeService + участники + grade с атомарным закрытием debt + handler'ы `/api/retakes/*`
+- [x] **BACK-08 Reports** (PR #20): ReportService (DebtsSummary, RetakesForPeriod) + XLSX/CSV экспорт через excelize + handler'ы `/api/reports/*`
 
 ### Готово (в PR, ждёт мерджа)
 
-- [ ] **BACK-08 Reports** (`feat/backend-reports`): ReportService (DebtsSummary, RetakesForPeriod) + XLSX/CSV экспорт через excelize + handler'ы `/api/reports/*`
+- [ ] **BACK-07 Scheduler** (`feat/backend-scheduler`): фоновый `time.Ticker` каждую минуту переводит retakes scheduled→in_progress→completed по scheduled_at + duration. Догоняет пропуски после рестарта. Audit-записи под system-actor. Graceful shutdown через context.
 
 ### В работе / следующие PR (см. [project-rent/backend_roadmap_tasks.md](../../project-rent/backend_roadmap_tasks.md))
 
@@ -237,7 +239,6 @@ make sqlc                     # перегенерировать internal/repo/q
 |---|---|
 | BACK-04 | RetakeChangeRequest — заявки на изменение пересдачи |
 | BACK-05 | TeacherRoleRequest + RBAC HTTP API (закрытие RBAC на 100%) |
-| BACK-07 | Шедулер `time.Ticker` + синхронизация с внешней системой |
 | BACK-09 | Swagger через swaggo/swag |
 
 ### Покрытие тестами
@@ -257,4 +258,5 @@ make sqlc                     # перегенерировать internal/repo/q
 | notify | ~80% | 4 |
 | retake | ~75% | 12 |
 | report | ~75% | 7 |
-| **Всего** | | **74 теста** |
+| scheduler | ~80% | 6 |
+| **Всего** | | **80 тестов** |
