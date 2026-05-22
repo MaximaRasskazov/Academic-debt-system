@@ -24,6 +24,9 @@ const (
 	KindRetakeGradeReceived    = "retake_grade_received"
 	KindTeacherRequestApproved = "teacher_request_approved"
 	KindTeacherRequestRejected = "teacher_request_rejected"
+
+	KindRetakeChangeApproved = "retake_change_approved"
+	KindRetakeChangeRejected = "retake_change_rejected"
 )
 
 // Event — входные данные для отправки уведомления.

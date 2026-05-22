@@ -25,6 +25,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
@@ -83,18 +84,21 @@ func run() error {
 		From:     cfg.SMTPFrom,
 	})
 
+	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
+
 	handler := httpx.NewRouter(httpx.Deps{
-		Cfg:         cfg,
-		Pool:        pool,
-		Auth:        authSvc,
-		Tokens:      tokens,
-		RBAC:        rbacSvc,
-		Disciplines: disciplineSvc,
-		Debts:       debtSvc,
-		Retakes:     retakeSvc,
-		Reports:     reportSvc,
-		Notify:      notifySvc,
-		NotifyHub:   notifyHub,
+		Cfg:            cfg,
+		Pool:           pool,
+		Auth:           authSvc,
+		Tokens:         tokens,
+		RBAC:           rbacSvc,
+		Disciplines:    disciplineSvc,
+		Debts:          debtSvc,
+		Retakes:        retakeSvc,
+		ChangeRequests: changeRequestSvc,
+		Reports:        reportSvc,
+		Notify:         notifySvc,
+		NotifyHub:      notifyHub,
 	})
 
 	srv := &http.Server{
