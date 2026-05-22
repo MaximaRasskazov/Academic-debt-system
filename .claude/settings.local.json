@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx vite *)",
+      "Bash(node -e \"const t = require\\('fs'\\).readFileSync\\('./frontend/node_modules/@vuepic/vue-datepicker/dist/index.d.ts', 'utf8'\\); const lines = t.split\\('\\\\n'\\).filter\\(l => l.includes\\('enableTime'\\) || l.includes\\('textInput'\\) || l.includes\\('modelType'\\) || l.includes\\('autoApply'\\)\\); console.log\\(lines.join\\('\\\\n'\\)\\)\")"
+    ]
+  }
+}

@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import VueDatePicker from '@vuepic/vue-datepicker'
+import '@vuepic/vue-datepicker/dist/main.css'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -99,21 +101,88 @@ const stats = [
   { label: 'Завершено в месяце',   value: 34,  accent: '#10b981' },
 ]
 
-// --- Форма назначения пересдачи ---
+// --- Форма назначения пересдачи (объявляем первой — на неё ссылаются все computed/watch ниже) ---
 const retakeForm = reactive({
   subject:  '',
   type:     'normal',
-  date:     '',
+  date:     null,
   time:     '',
   duration: 90,
   building: '',
   room:     '',
+  teachers: [],
 })
 
 function submitRetake() {
-  // TODO: POST /api/retakes
   console.log('create retake', { ...retakeForm })
 }
+
+// --- Кастомный дропдаун типа пересдачи ---
+const typeDropdownOpen = ref(false)
+const typeOptions = [
+  { value: 'normal',     label: 'Обычная' },
+  { value: 'commission', label: 'С комиссией (мин. 3 преподавателя)' },
+]
+function selectType(val) {
+  retakeForm.type = val
+  typeDropdownOpen.value = false
+}
+function handleOutsideClick(e) {
+  if (!e.target.closest('.custom-select')) typeDropdownOpen.value = false
+}
+onMounted(() => document.addEventListener('mousedown', handleOutsideClick))
+onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
+
+// --- Время ---
+const timeHour   = ref(9)
+const timeMinute = ref(0)
+const hourDisplay   = ref('09')
+const minuteDisplay = ref('00')
+
+watch([timeHour, timeMinute], ([h, m]) => {
+  retakeForm.time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}, { immediate: true })
+
+function onTimeInput(e) {
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2)
+}
+function onHourBlur() {
+  const n = Math.max(0, Math.min(23, parseInt(hourDisplay.value, 10) || 0))
+  timeHour.value = n
+  hourDisplay.value = String(n).padStart(2, '0')
+}
+function onMinuteBlur() {
+  const n = Math.max(0, Math.min(59, parseInt(minuteDisplay.value, 10) || 0))
+  timeMinute.value = n
+  minuteDisplay.value = String(n).padStart(2, '0')
+}
+
+// --- Длительность ---
+const DURATION_STEP = 5
+const DURATION_MIN  = 15
+const DURATION_MAX  = 480
+function decreaseDuration() { if (retakeForm.duration > DURATION_MIN) retakeForm.duration -= DURATION_STEP }
+function increaseDuration()  { if (retakeForm.duration < DURATION_MAX) retakeForm.duration += DURATION_STEP }
+function clampDuration() { retakeForm.duration = Math.max(DURATION_MIN, Math.min(DURATION_MAX, retakeForm.duration || DURATION_MIN)) }
+
+// --- Преподаватели ---
+const teacherInput   = ref('')
+const isCommission   = computed(() => retakeForm.type === 'commission')
+const minTeachers    = computed(() => isCommission.value ? 3 : 1)
+const teacherCountOk = computed(() => retakeForm.teachers.length >= minTeachers.value)
+
+function addTeacher() {
+  const name = teacherInput.value.trim()
+  if (!name) return
+  if (!isCommission.value && retakeForm.teachers.length >= 1) return
+  retakeForm.teachers.push(name)
+  teacherInput.value = ''
+}
+function removeTeacher(i) { retakeForm.teachers.splice(i, 1) }
+
+watch(() => retakeForm.type, (type) => {
+  if (type === 'normal' && retakeForm.teachers.length > 1) retakeForm.teachers.splice(1)
+})
 </script>
 
 <template>
@@ -165,19 +234,19 @@ function submitRetake() {
               </div>
               <div class="notif-body">
                 <div class="notif-subject">{{ r.subject }}</div>
-                <div class="notif-tags">
-                  <span class="notif-tag">
+                <div class="notif-details">
+                  <div class="notif-detail-row">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
                     {{ formatDayLabel(r) }}
-                  </span>
-                  <span class="notif-tag">
+                  </div>
+                  <div class="notif-detail-row">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
                     {{ r.time }}
-                  </span>
-                  <span class="notif-tag">
+                  </div>
+                  <div class="notif-detail-row">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
                     корп. {{ r.building }}, ауд. {{ r.room }}
-                  </span>
+                  </div>
                 </div>
               </div>
             </li>
@@ -195,7 +264,7 @@ function submitRetake() {
           <button class="burger" @click="sidebarOpen = true" aria-label="Открыть меню">
             <span /><span /><span />
           </button>
-          <span class="app-name">Академический Ассистент</span>
+          <span class="app-name">Академический<br>Ассистент</span>
         </div>
         <div class="header-right">
           <div class="user-meta">
@@ -234,30 +303,99 @@ function submitRetake() {
                 </div>
                 <div class="field">
                   <label>Тип пересдачи</label>
-                  <select class="input" v-model="retakeForm.type">
-                    <option value="normal">Обычная</option>
-                    <option value="commission">С комиссией (мин. 3 преподавателя)</option>
-                  </select>
+                  <div class="custom-select" :class="{ open: typeDropdownOpen }">
+                    <button type="button" class="custom-select-trigger" @click="typeDropdownOpen = !typeDropdownOpen">
+                      <span>{{ typeOptions.find(o => o.value === retakeForm.type)?.label }}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M6 9l6 6 6-6"/>
+                      </svg>
+                    </button>
+                    <div class="custom-select-dropdown">
+                      <button
+                        v-for="opt in typeOptions"
+                        :key="opt.value"
+                        type="button"
+                        class="custom-select-option"
+                        :class="{ selected: retakeForm.type === opt.value }"
+                        @click="selectType(opt.value)"
+                      >
+                        {{ opt.label }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <div class="form-row">
                 <div class="field">
                   <label>Дата</label>
-                  <div class="date-wrap">
-                    <input class="input" type="date" v-model="retakeForm.date" />
-                    <svg class="date-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>
-                    </svg>
+                  <VueDatePicker
+                    v-model="retakeForm.date"
+                    locale="ru"
+                    format="dd.MM.yyyy"
+                    model-type="format"
+                    :enable-time-picker="false"
+                    auto-apply
+                    placeholder="дд.мм.гггг"
+                  />
+                </div>
+                <div class="field field--shrink">
+                  <label>Время</label>
+                  <div class="time-picker">
+                    <input
+                      class="time-input"
+                      type="text" inputmode="numeric"
+                      v-model="hourDisplay"
+                      maxlength="2" placeholder="00"
+                      @input="onTimeInput"
+                      @blur="onHourBlur"
+                    />
+                    <span class="time-colon">:</span>
+                    <input
+                      class="time-input"
+                      type="text" inputmode="numeric"
+                      v-model="minuteDisplay"
+                      maxlength="2" placeholder="00"
+                      @input="onTimeInput"
+                      @blur="onMinuteBlur"
+                    />
                   </div>
                 </div>
                 <div class="field">
-                  <label>Время</label>
-                  <input class="input" type="time" v-model="retakeForm.time" />
+                  <label>Длительность</label>
+                  <div class="stepper">
+                    <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="retakeForm.duration <= DURATION_MIN">−</button>
+                    <input
+                      class="stepper-input" type="number"
+                      v-model.number="retakeForm.duration"
+                      min="15" max="480"
+                      @blur="clampDuration"
+                    />
+                    <button type="button" class="stepper-btn" @click="increaseDuration" :disabled="retakeForm.duration >= DURATION_MAX">+</button>
+                  </div>
                 </div>
-                <div class="field">
-                  <label>Длительность (мин)</label>
-                  <input class="input" type="number" v-model="retakeForm.duration" min="15" max="480" />
+              </div>
+
+              <!-- Преподаватели -->
+              <div class="form-row">
+                <div class="field field--full">
+                  <label>{{ isCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
+                  <div class="teacher-wrap" :class="{ 'teacher-wrap--focus': true }">
+                    <span v-for="(t, i) in retakeForm.teachers" :key="i" class="teacher-tag">
+                      {{ t }}
+                      <button type="button" class="teacher-tag-remove" @click="removeTeacher(i)">×</button>
+                    </span>
+                    <input
+                      v-if="isCommission || retakeForm.teachers.length === 0"
+                      class="teacher-input"
+                      v-model="teacherInput"
+                      :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'"
+                      @keydown.enter.prevent="addTeacher"
+                    />
+                  </div>
+                  <p v-if="isCommission && retakeForm.teachers.length > 0 && !teacherCountOk" class="field-hint-warn">
+                    Для пересдачи с комиссией необходимо минимум 3 преподавателя
+                  </p>
                 </div>
               </div>
 
@@ -315,19 +453,19 @@ function submitRetake() {
                 </div>
                 <div class="notif-body">
                   <div class="notif-subject">{{ r.subject }}</div>
-                  <div class="notif-tags">
-                    <span class="notif-tag">
+                  <div class="notif-details">
+                    <div class="notif-detail-row">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
                       {{ formatDayLabel(r) }}
-                    </span>
-                    <span class="notif-tag">
+                    </div>
+                    <div class="notif-detail-row">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
                       {{ r.time }}
-                    </span>
-                    <span class="notif-tag">
+                    </div>
+                    <div class="notif-detail-row">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
                       корп. {{ r.building }}, ауд. {{ r.room }}
-                    </span>
+                    </div>
                   </div>
                 </div>
               </li>
@@ -394,7 +532,15 @@ function submitRetake() {
 }
 .burger:hover { background: var(--bg); }
 .burger span { display: block; width: 22px; height: 2px; background: var(--ink); border-radius: 2px; }
-.app-name { font-size: 16px; font-weight: 600; color: var(--brand-ink); }
+.app-name {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #3C38B6;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  line-height: 1.25;
+}
 .header-right { display: flex; align-items: center; gap: 14px; }
 .user-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .user-name { font-size: 14px; font-weight: 500; white-space: nowrap; }
@@ -440,12 +586,19 @@ function submitRetake() {
   box-shadow: var(--shadow); padding: 24px; margin-bottom: 20px;
 }
 .section-card:last-child { margin-bottom: 0; }
-.section-title { font-size: 15px; font-weight: 600; margin: 0 0 20px; }
+.section-title {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #3C38B6;
+  margin: 0 0 20px;
+}
 
 /* ── Retake form ── */
 .retake-form { display: flex; flex-direction: column; gap: 16px; }
 .form-row { display: flex; gap: 16px; }
 .field { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.field--shrink { flex: none; }
 .field label { font-size: 13px; font-weight: 500; color: var(--ink); text-align: left; }
 .input {
   appearance: none; height: 38px; width: 100%;
@@ -457,16 +610,142 @@ function submitRetake() {
 .input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
 .input::placeholder { color: #b7b9c2; }
 
-/* Date input с иконкой-календарём */
-.date-wrap { position: relative; }
-.date-wrap .input { padding-right: 36px; cursor: pointer; }
-.date-ico {
-  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; color: var(--ink-soft); pointer-events: none;
+/* Стили VueDatePicker вынесены в style.css */
+
+/* ── Пикер времени ── */
+.time-picker { display: flex; align-items: center; gap: 6px; }
+.time-input {
+  height: 38px; width: 64px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 0 8px;
+  font: 14px/1 'Inter', sans-serif; color: var(--ink);
+  text-align: center; outline: none;
+  -moz-appearance: textfield;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.date-wrap .input::-webkit-calendar-picker-indicator {
-  position: absolute; right: 0; top: 0;
-  width: 100%; height: 100%; opacity: 0; cursor: pointer;
+.time-input::-webkit-outer-spin-button,
+.time-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.time-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
+.time-colon { font-size: 18px; font-weight: 700; color: var(--ink-soft); user-select: none; line-height: 1; }
+
+/* ── Степпер длительности ── */
+.stepper {
+  display: flex; align-items: stretch; height: 38px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; background: #fff;
+}
+.stepper-btn {
+  width: 38px; flex-shrink: 0;
+  background: none; border: none;
+  font-size: 20px; line-height: 1;
+  color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center;
+  transition: background .15s, color .15s;
+}
+.stepper-btn:hover:not(:disabled) { background: rgba(59,63,224,.07); color: var(--brand); }
+.stepper-btn:disabled { opacity: .35; cursor: not-allowed; }
+.stepper-input {
+  flex: 1; border: none;
+  border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  background: transparent; outline: none;
+  font: 13px/1 'Inter', sans-serif; font-weight: 500; color: var(--ink);
+  text-align: center;
+  -moz-appearance: textfield;
+}
+.stepper-input::-webkit-outer-spin-button,
+.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── Поле преподавателей ── */
+.field--full { width: 100%; }
+.field-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.field-header label { margin-bottom: 0; }
+.field-badge {
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px;
+}
+.badge--ok  { background: rgba(16,185,129,.12); color: #059669; }
+.badge--warn { background: rgba(245,158,11,.12); color: #d97706; }
+
+.teacher-wrap {
+  min-height: 40px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 4px 8px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  cursor: text; transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.teacher-wrap:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px rgba(59,63,224,.12);
+}
+.teacher-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px;
+  background: rgba(59,63,224,.1); color: var(--brand-ink);
+  border-radius: 20px; font-size: 12px; font-weight: 500;
+}
+.teacher-tag-remove {
+  background: none; border: none; cursor: pointer;
+  color: var(--brand-ink); font-size: 15px; line-height: 1;
+  padding: 0 2px; opacity: .6;
+  transition: opacity .15s;
+}
+.teacher-tag-remove:hover { opacity: 1; }
+.teacher-input {
+  border: none; outline: none; flex: 1; min-width: 180px;
+  font: 13px/1 'Inter', sans-serif; color: var(--ink); background: transparent;
+  padding: 4px 0;
+}
+.teacher-input::placeholder { color: #b7b9c2; }
+.field-hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
+
+/* ── Кастомный select ── */
+.custom-select { position: relative; }
+.custom-select-trigger {
+  appearance: none; width: 100%; height: 38px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 0 36px 0 12px;
+  font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; text-align: left;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.custom-select-trigger:focus,
+.custom-select.open .custom-select-trigger {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px rgba(59,63,224,.12);
+  outline: none;
+}
+.custom-select-trigger svg {
+  width: 16px; height: 16px; flex-shrink: 0; color: var(--ink-soft);
+  transition: transform .2s var(--ease);
+  position: absolute; right: 10px;
+}
+.custom-select.open .custom-select-trigger svg { transform: rotate(180deg); }
+
+.custom-select-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: #fff;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.12);
+  z-index: 50; overflow: hidden;
+  opacity: 0; pointer-events: none; transform: translateY(-4px);
+  transition: opacity .15s var(--ease), transform .15s var(--ease);
+}
+.custom-select.open .custom-select-dropdown {
+  opacity: 1; pointer-events: all; transform: translateY(0);
+}
+.custom-select-option {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none;
+  padding: 10px 14px;
+  font: 13px/1.4 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer;
+  transition: background .12s;
+}
+.custom-select-option:hover { background: rgba(59,63,224,.06); }
+.custom-select-option.selected {
+  color: var(--brand); font-weight: 500;
+  background: rgba(59,63,224,.05);
 }
 
 .btn-primary {
@@ -546,16 +825,14 @@ function submitRetake() {
 .notif-body { flex: 1; min-width: 0; }
 .notif-subject {
   font-size: 13px; font-weight: 600; color: var(--ink);
-  margin-bottom: 6px; line-height: 1.3;
+  margin-bottom: 8px; line-height: 1.3; text-align: left;
 }
-.notif-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.notif-tag {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 8px;
-  background: var(--bg); border-radius: 20px;
-  font-size: 11px; color: var(--ink-soft);
+.notif-details { display: flex; flex-direction: column; gap: 5px; }
+.notif-detail-row {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--ink-soft); text-align: left;
 }
-.notif-tag svg { width: 11px; height: 11px; flex-shrink: 0; }
+.notif-detail-row svg { width: 13px; height: 13px; flex-shrink: 0; }
 
 /* ── Modal ── */
 .modal-overlay {
@@ -574,7 +851,13 @@ function submitRetake() {
   display: flex; align-items: center;
   justify-content: space-between; margin-bottom: 20px;
 }
-.modal-title { font-size: 15px; font-weight: 600; margin: 0; }
+.modal-title {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #3C38B6;
+  margin: 0;
+}
 .modal-close {
   background: none; border: none; cursor: pointer; padding: 4px;
   color: var(--ink-soft); border-radius: 6px; display: grid; place-items: center;
@@ -650,5 +933,6 @@ function submitRetake() {
   .form-row { flex-direction: column; gap: 12px; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .col-right { grid-template-columns: 1fr; }
+  .sidebar-brand { text-align: left; }
 }
 </style>

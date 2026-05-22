@@ -467,6 +467,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
   user-select: none;
   margin: 0;
   text-align: left;
+  color: #fff;
 }
 .brand-headline span { display: block; }
 
@@ -480,7 +481,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
 .form-title {
   font-family: 'Gerhaus', 'Regular';
   text-transform: uppercase;
-  color: var(--brand-ink);
+  color: #3C38B6;
   font-weight: 500;
   letter-spacing: .02em;
   font-size: 22px;
