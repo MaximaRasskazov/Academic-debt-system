@@ -8,7 +8,6 @@ import RetakesPage from '../views/RetakesPage.vue'
 import RetakeCreatePage from '../views/RetakeCreatePage.vue'
 import RequestsPage from '../views/RequestsPage.vue'
 import DeanPage from '../views/DeanPage.vue'
-
 const routes = [
   { path: '/', redirect: '/debts' },
   { path: '/login', component: LoginPage, meta: { guest: true } },

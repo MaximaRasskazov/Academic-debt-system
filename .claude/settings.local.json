@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm install *)",
       "Bash(npx vite *)",
-      "Bash(node -e \"const t = require\\('fs'\\).readFileSync\\('./frontend/node_modules/@vuepic/vue-datepicker/dist/index.d.ts', 'utf8'\\); const lines = t.split\\('\\\\n'\\).filter\\(l => l.includes\\('enableTime'\\) || l.includes\\('textInput'\\) || l.includes\\('modelType'\\) || l.includes\\('autoApply'\\)\\); console.log\\(lines.join\\('\\\\n'\\)\\)\")"
+      "Bash(node -e \"const t = require\\('fs'\\).readFileSync\\('./frontend/node_modules/@vuepic/vue-datepicker/dist/index.d.ts', 'utf8'\\); const lines = t.split\\('\\\\n'\\).filter\\(l => l.includes\\('enableTime'\\) || l.includes\\('textInput'\\) || l.includes\\('modelType'\\) || l.includes\\('autoApply'\\)\\); console.log\\(lines.join\\('\\\\n'\\)\\)\")",
+      "PowerShell(Get-ChildItem \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\src\" -Recurse | Where-Object { $_.Name -match -join\\(\"sidebar\",\"menu\",\"nav\",\"layout\",\"aside\"\\) -or $_.Name -match \"Sidebar|Menu|Nav|Layout|Aside\" } | Select-Object FullName)"
     ]
   }
 }
