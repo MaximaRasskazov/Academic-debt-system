@@ -220,13 +220,22 @@ function approveRole(req) {
         <!-- Tabs -->
         <div class="tabs-bar">
           <button class="tab-btn" :class="{ active: activeTab === 'retakes' }" @click="activeTab = 'retakes'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-6l-2 3H10l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>
+            </svg>
             Заявки на пересдачи
             <span v-if="pendingRetakesCount" class="tab-badge">{{ pendingRetakesCount }}</span>
           </button>
           <button class="tab-btn" :class="{ active: activeTab === 'changes' }" @click="activeTab = 'changes'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
             Изменения пересдач
           </button>
           <button class="tab-btn" :class="{ active: activeTab === 'roles' }" @click="activeTab = 'roles'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+            </svg>
             Смена роли
             <span v-if="pendingRolesCount" class="tab-badge">{{ pendingRolesCount }}</span>
           </button>
@@ -611,25 +620,31 @@ function approveRole(req) {
 
 /* ── Tabs ── */
 .tabs-bar {
-  display: flex; border-bottom: 2px solid var(--line);
-  margin-bottom: 20px; overflow-x: auto;
+  display: flex; gap: 6px;
+  background: var(--card); border-radius: 14px; padding: 6px;
+  box-shadow: var(--shadow); margin-bottom: 20px;
 }
 .tab-btn {
-  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
-  padding: 10px 20px; background: none; border: none;
-  font: 14px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; white-space: nowrap;
-  border-bottom: 2px solid transparent; margin-bottom: -2px;
-  transition: color .15s;
+  flex: 1; height: 44px; border: none; border-radius: 10px;
+  font: 600 13px/1 'Inter', sans-serif; color: var(--ink-soft); background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+  white-space: nowrap; flex-shrink: 0;
+  transition: background .2s var(--ease), color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.tab-btn:hover { color: var(--ink); }
-.tab-btn.active { color: #3C38B6; font-weight: 600; border-bottom-color: #3C38B6; }
+.tab-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.tab-btn.active {
+  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
+  color: #fff;
+  box-shadow: 0 4px 14px -4px rgba(91,59,217,.5);
+}
+.tab-btn:not(.active):hover { background: rgba(59,63,224,.06); color: var(--brand); }
 .tab-badge {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 20px; padding: 0 6px;
-  background: rgba(245,158,11,.15); color: #d97706;
-  border-radius: 20px; font-size: 11px; font-weight: 700;
+  min-width: 20px; height: 20px; padding: 0 5px;
+  background: rgba(245,158,11,.25); color: #b45309;
+  border-radius: 10px; font: 700 11px/1 'Inter', sans-serif;
 }
+.tab-btn.active .tab-badge { background: rgba(255,255,255,.25); color: #fff; }
 
 /* ── Table ── */
 .table-wrap {
@@ -788,17 +803,20 @@ function approveRole(req) {
 /* ── Modal ── */
 .modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(10,12,30,.45); z-index: 200;
-  display: grid; place-items: center; padding: 24px;
+  background: rgba(10,12,30,.5); z-index: 200;
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  display: grid; place-items: center; padding: 20px;
 }
 .modal-card {
-  background: var(--card); border-radius: var(--radius);
-  box-shadow: 0 24px 48px -12px rgba(20,22,60,.25);
-  width: min(540px, 100%); max-height: 82vh; overflow-y: auto; padding: 24px;
+  background: var(--card); border-radius: 16px;
+  box-shadow: 0 24px 56px -12px rgba(10,12,30,.3);
+  width: min(560px, 100%); max-height: 88vh;
+  display: flex; flex-direction: column; overflow: hidden;
 }
-.modal-card--sm { width: min(400px, 100%); }
+.modal-card--sm { max-width: 420px; }
 .modal-head {
-  display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 24px; border-bottom: 1px solid var(--line); flex-shrink: 0;
 }
 .modal-title {
   font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
@@ -806,12 +824,13 @@ function approveRole(req) {
 }
 .modal-head-right { display: flex; align-items: center; gap: 8px; }
 .modal-close {
-  background: none; border: none; cursor: pointer; padding: 4px;
-  color: var(--ink-soft); border-radius: 6px; display: grid; place-items: center;
-  transition: background .15s, color .15s;
+  width: 32px; height: 32px; border-radius: 8px;
+  background: none; border: none; cursor: pointer;
+  display: grid; place-items: center; flex-shrink: 0;
+  color: var(--ink-soft); transition: background .15s, color .15s;
 }
 .modal-close:hover { background: var(--bg); color: var(--ink); }
-.modal-close svg { width: 18px; height: 18px; }
+.modal-close svg { width: 16px; height: 16px; }
 
 .btn-edit {
   display: flex; align-items: center; gap: 6px;
@@ -823,7 +842,12 @@ function approveRole(req) {
 .btn-edit:hover { border-color: var(--brand); color: var(--brand); }
 .btn-edit svg { width: 13px; height: 13px; }
 
-.modal-body { display: flex; flex-direction: column; gap: 12px; }
+.modal-body {
+  flex: 1; overflow-y: auto; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.modal-body::-webkit-scrollbar { width: 4px; }
+.modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 .detail-row { display: flex; gap: 12px; align-items: flex-start; }
 .detail-label {
   font: 500 13px/1.5 'Inter', sans-serif; color: var(--ink-soft);
@@ -861,13 +885,16 @@ function approveRole(req) {
 
 .modal-footer {
   display: flex; gap: 8px; justify-content: flex-end;
-  margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+  padding: 14px 24px; border-top: 1px solid var(--line); flex-shrink: 0;
 }
 
 /* ── Transition ── */
-.modal-enter-active { transition: opacity .2s cubic-bezier(.2,.7,.2,1); }
-.modal-leave-active { transition: opacity .15s cubic-bezier(.2,.7,.2,1); }
+.modal-enter-active { transition: opacity .2s var(--ease); }
+.modal-leave-active { transition: opacity .15s var(--ease); }
 .modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active .modal-card { transition: transform .25s var(--ease); }
+.modal-leave-active  .modal-card { transition: transform .2s  var(--ease); }
+.modal-enter-from .modal-card, .modal-leave-to .modal-card { transform: scale(.96) translateY(12px); }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
