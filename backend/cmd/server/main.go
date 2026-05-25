@@ -93,28 +93,6 @@ func run() error {
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
-	handler := httpx.NewRouter(httpx.Deps{
-		Cfg:             cfg,
-		Pool:            pool,
-		Auth:            authSvc,
-		Tokens:          tokens,
-		RBAC:            rbacSvc,
-		Disciplines:     disciplineSvc,
-		Debts:           debtSvc,
-		Retakes:         retakeSvc,
-		ChangeRequests:  changeRequestSvc,
-		Reports:         reportSvc,
-		Notify:          notifySvc,
-		NotifyHub:       notifyHub,
-		TeacherRequests: teacherRequestSvc,
-	})
-
-	srv := &http.Server{
-		Addr:              ":" + cfg.AppPort,
-		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
-
 	// Шедулер автопереходов retake-статусов крутится параллельно
 	// HTTP-серверу. Останавливаем его через schedCancel перед
 	// shutdown, чтобы не словить race на повисшем UPDATE при закрытии
@@ -129,14 +107,16 @@ func run() error {
 	}()
 
 	// Фоновая синхронизация с эмулятором деканата.
-	// Запускается только если задан EMULATOR_URL.
+	// Запускается и подключается к API только если задан EMULATOR_URL.
+	// syncSvc остаётся nil-интерфейсом когда URL не задан — хендлер
+	// вернёт 503, что явно сообщает о том, что фича отключена.
+	var syncSvc *syncsvc.Service
 	if cfg.EmulatorURL != "" {
 		systemUserID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
 		emulatorClient := emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
-		syncService := syncsvc.New(store, emulatorClient, systemUserID)
+		syncSvc = syncsvc.New(store, emulatorClient, systemUserID)
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())
-		defer syncCancel()
 		syncDone := make(chan struct{})
 		go func() {
 			defer close(syncDone)
@@ -146,7 +126,7 @@ func run() error {
 			for {
 				select {
 				case <-ticker.C:
-					if err := syncService.Sync(syncCtx); err != nil {
+					if err := syncSvc.Sync(syncCtx); err != nil {
 						slog.Warn("sync: ошибка синхронизации", "err", err)
 					}
 				case <-syncCtx.Done():
@@ -155,6 +135,29 @@ func run() error {
 			}
 		}()
 		defer func() { syncCancel(); <-syncDone }()
+	}
+
+	handler := httpx.NewRouter(httpx.Deps{
+		Cfg:             cfg,
+		Pool:            pool,
+		Auth:            authSvc,
+		Tokens:          tokens,
+		RBAC:            rbacSvc,
+		Disciplines:     disciplineSvc,
+		Debts:           debtSvc,
+		Retakes:         retakeSvc,
+		ChangeRequests:  changeRequestSvc,
+		Reports:         reportSvc,
+		Notify:          notifySvc,
+		NotifyHub:       notifyHub,
+		TeacherRequests: teacherRequestSvc,
+		Sync:            syncSvc,
+	})
+
+	srv := &http.Server{
+		Addr:              ":" + cfg.AppPort,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	if err := runServer(srv, cfg); err != nil {

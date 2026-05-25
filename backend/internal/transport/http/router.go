@@ -47,6 +47,7 @@ type Deps struct {
 	Notify          *notify.Service
 	NotifyHub       *notify.Hub
 	TeacherRequests *teacherrequest.Service
+	Sync            handler.Syncer
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -89,6 +90,7 @@ func NewRouter(d Deps) http.Handler {
 		mountNotificationsREST(r, d)
 		mountTeacherRequests(r, d)
 		mountRBAC(r, d)
+		mountSync(r, d)
 	})
 
 	// Swagger UI — без таймаута, статика подаётся напрямую.
@@ -355,6 +357,18 @@ func mountRBAC(r chi.Router, d Deps) {
 			Post("/roles", h.AssignRole)
 		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
 			Delete("/roles/{slug}", h.RevokeRole)
+	})
+}
+
+// mountSync регистрирует /api/sync/*:
+//   - GET  /status  — время последней синхронизации (любой авторизованный)
+//   - POST /trigger — запустить синхронизацию вручную (roles.assign — admin/dean)
+func mountSync(r chi.Router, d Deps) {
+	h := handler.NewSyncHandler(d.Sync)
+	r.Route("/api/sync", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Get("/status", h.Status)
+		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).Post("/trigger", h.Trigger)
 	})
 }
 
