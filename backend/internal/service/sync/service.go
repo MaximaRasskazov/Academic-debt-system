@@ -168,7 +168,13 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	var gradedBy pgtype.UUID
 
 	if d.Grade != nil && status == "graded" {
-		g := int32(*d.Grade)
+		// Эмулятор передаёт оценку в диапазоне 2..5 — переполнение невозможно,
+		// но gosec требует явного clamp'а для int→int32 conversion.
+		gradeVal := *d.Grade
+		if gradeVal < 2 || gradeVal > 5 {
+			gradeVal = 2
+		}
+		g := int32(gradeVal) //nolint:gosec
 		finalGrade = &g
 		gradedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 		gradedBy = pgutil.PgUUID(teacherID)
