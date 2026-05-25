@@ -22,7 +22,7 @@ type syncerStub struct {
 	lastSyncedErr error
 }
 
-func (s *syncerStub) Sync(_ context.Context) error            { return s.syncErr }
+func (s *syncerStub) Sync(_ context.Context) error { return s.syncErr }
 func (s *syncerStub) LastSyncedAt(_ context.Context) (time.Time, error) {
 	return s.lastSyncedAt, s.lastSyncedErr
 }
