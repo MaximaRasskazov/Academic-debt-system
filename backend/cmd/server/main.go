@@ -16,11 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	_ "github.com/MaximaRasskazov/Academic-debt-system/backend/docs"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
@@ -33,6 +35,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
+	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
@@ -124,6 +127,35 @@ func run() error {
 		defer close(schedDone)
 		_ = schedSvc.Run(schedCtx)
 	}()
+
+	// Фоновая синхронизация с эмулятором деканата.
+	// Запускается только если задан EMULATOR_URL.
+	if cfg.EmulatorURL != "" {
+		systemUserID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+		emulatorClient := emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
+		syncService := syncsvc.New(store, emulatorClient, systemUserID)
+
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		defer syncCancel()
+		syncDone := make(chan struct{})
+		go func() {
+			defer close(syncDone)
+			ticker := time.NewTicker(cfg.SyncInterval)
+			defer ticker.Stop()
+			slog.Info("sync: планировщик запущен", "interval", cfg.SyncInterval)
+			for {
+				select {
+				case <-ticker.C:
+					if err := syncService.Sync(syncCtx); err != nil {
+						slog.Warn("sync: ошибка синхронизации", "err", err)
+					}
+				case <-syncCtx.Done():
+					return
+				}
+			}
+		}()
+		defer func() { syncCancel(); <-syncDone }()
+	}
 
 	if err := runServer(srv, cfg); err != nil {
 		return err
