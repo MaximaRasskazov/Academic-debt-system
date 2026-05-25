@@ -1,0 +1,40 @@
+localStorage.setItem('token', 'mock-token')
+localStorage.setItem('role', 'DEAN')
+localStorage.setItem('user', JSON.stringify({
+  firstName: 'Ольга',
+  lastName: 'Петрова',
+  middleName: 'Сергеевна',
+  email: 'dean@university.ru'
+}))
+location.reload()
+→ Попадёшь на /dean
+
+Преподаватель
+
+
+localStorage.setItem('token', 'mock-token')
+localStorage.setItem('role', 'TEACHER')
+localStorage.setItem('user', JSON.stringify({
+  firstName: 'Иван',
+  lastName: 'Иванов',
+  middleName: 'Иванович',
+  email: 'teacher@university.ru'
+}))
+location.reload()
+→ Попадёшь на /debts, переходи через меню на /teacher
+
+Студент
+
+
+localStorage.setItem('token', 'mock-token')
+localStorage.setItem('role', 'STUDENT')
+localStorage.setItem('user', JSON.stringify({
+  firstName: 'Алексей',
+  lastName: 'Сидоров',
+  middleName: 'Петрович',
+  email: 'student@university.ru',
+  group: 'ИС-31',
+  course: 3
+}))
+location.reload()
+→ Попадёшь на /debts
