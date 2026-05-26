@@ -11,6 +11,7 @@ import DeanPage from '../views/DeanPage.vue'
 import TeacherPage from '../views/TeacherPage.vue'
 import TeacherRequestsPage from '../views/TeacherRequestsPage.vue'
 import StatementsPage from '../views/StatementsPage.vue'
+import UsersPage from '../views/UsersPage.vue'
 
 const routes = [
   { path: '/', redirect: '/debts' },
@@ -24,6 +25,7 @@ const routes = [
   { path: '/teacher', component: TeacherPage, meta: { auth: true, roles: ['TEACHER'] } },
   { path: '/teacher-requests', component: TeacherRequestsPage, meta: { auth: true, roles: ['TEACHER'] } },
   { path: '/statements', component: StatementsPage, meta: { auth: true, roles: ['TEACHER', 'DEAN'] } },
+  { path: '/users', component: UsersPage, meta: { auth: true } },
 ]
 
 const router = createRouter({
