@@ -81,11 +81,11 @@ function logout() {
             </RouterLink>
           </div>
           <div class="nav-section">
-            <RouterLink class="nav-item" to="/retakes">
+            <RouterLink class="nav-item" to="/statements">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
+                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="M9 12h6M9 16h4"/>
               </svg>
-              Пересдачи
+              Ведомость
             </RouterLink>
           </div>
         </template>

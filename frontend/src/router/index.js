@@ -10,6 +10,7 @@ import RequestsPage from '../views/RequestsPage.vue'
 import DeanPage from '../views/DeanPage.vue'
 import TeacherPage from '../views/TeacherPage.vue'
 import TeacherRequestsPage from '../views/TeacherRequestsPage.vue'
+import StatementsPage from '../views/StatementsPage.vue'
 
 const routes = [
   { path: '/', redirect: '/debts' },
@@ -22,6 +23,7 @@ const routes = [
   { path: '/dean', component: DeanPage, meta: { auth: true, roles: ['DEAN'] } },
   { path: '/teacher', component: TeacherPage, meta: { auth: true, roles: ['TEACHER'] } },
   { path: '/teacher-requests', component: TeacherRequestsPage, meta: { auth: true, roles: ['TEACHER'] } },
+  { path: '/statements', component: StatementsPage, meta: { auth: true, roles: ['TEACHER', 'DEAN'] } },
 ]
 
 const router = createRouter({
