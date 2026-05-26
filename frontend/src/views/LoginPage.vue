@@ -2,6 +2,7 @@
 import { reactive, ref, computed, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { authApi } from '../api/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -9,6 +10,7 @@ const auth = useAuthStore()
 const view = ref('login')
 const loading = ref(false)
 const triedSubmit = ref(false)
+const serverError = ref('')
 
 const titles = {
   'login':            'Авторизация',
@@ -30,17 +32,27 @@ async function onSubmit() {
   triedSubmit.value = true
   if (!canSubmit.value) return
   loading.value = true
+  serverError.value = ''
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: form.email, password: form.password }),
-    })
-    const data = await res.json()
-    auth.login({ token: data.token, role: data.role, user: data.user })
-    router.push('/debts')
-  } catch {
-    // ошибку покажем через серверный ответ позже
+    const { data: loginData } = await authApi.login(form.email, form.password)
+
+    // Временно кладём токен в localStorage чтобы http-интерсептор подхватил его при вызове me()
+    localStorage.setItem('token', loginData.access_token)
+
+    const { data: meData } = await authApi.me()
+
+    // Берём роль с наибольшим уровнем доступа
+    const topRole = [...(meData.roles ?? [])].sort((a, b) => b.level - a.level)[0]
+    const role = topRole?.slug?.toUpperCase() ?? 'STUDENT'
+
+    auth.login({ token: loginData.access_token, role, user: meData.user })
+
+    if (role === 'DEAN') router.push('/dean')
+    else if (role === 'TEACHER') router.push('/teacher')
+    else router.push('/debts')
+  } catch (err) {
+    const msg = err.response?.data?.message || err.response?.data?.error
+    serverError.value = msg || 'Неверный email или пароль.'
   } finally {
     loading.value = false
   }
@@ -245,6 +257,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
             </label>
 
             <p v-if="!form.consent && triedSubmit" class="form-error">Необходимо согласие на использование cookie.</p>
+            <p v-if="serverError" class="form-error">{{ serverError }}</p>
 
             <button class="submit" type="submit" :disabled="!canSubmit || loading">
               {{ loading ? 'Входим…' : 'Войти' }}

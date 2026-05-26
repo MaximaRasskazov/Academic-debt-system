@@ -1,5 +1,17 @@
 import { defineStore } from 'pinia'
 
+function normalizeUser(u) {
+  if (!u) return null
+  return {
+    id:         u.id,
+    email:      u.email,
+    firstName:  u.first_name  ?? u.firstName  ?? '',
+    lastName:   u.last_name   ?? u.lastName   ?? '',
+    middleName: u.middle_name ?? u.middleName ?? '',
+    group:      u.group_name  ?? u.group      ?? '',
+  }
+}
+
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem('token') || null,
@@ -18,11 +30,11 @@ export const useAuthStore = defineStore('auth', {
     login({ token, role, user }) {
       this.token = token
       this.role = role
-      this.user = user
+      this.user = normalizeUser(user)
 
       localStorage.setItem('token', token)
       localStorage.setItem('role', role)
-      localStorage.setItem('user', JSON.stringify(user))
+      localStorage.setItem('user', JSON.stringify(this.user))
     },
 
     logout() {
@@ -33,6 +45,13 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem('token')
       localStorage.removeItem('role')
       localStorage.removeItem('user')
+    },
+
+    // Вызывается при старте приложения — восстанавливает сессию из хранилища
+    restore() {
+      this.token = localStorage.getItem('token') || null
+      this.role  = localStorage.getItem('role')  || null
+      this.user  = JSON.parse(localStorage.getItem('user') || 'null')
     },
   },
 })

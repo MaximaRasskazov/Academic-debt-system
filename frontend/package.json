@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@vuepic/vue-datepicker": "^9.0.3",
+    "axios": "^1.16.1",
     "docx": "^9.7.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.34",

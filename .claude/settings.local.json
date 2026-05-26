@@ -4,7 +4,11 @@
       "Bash(npm install *)",
       "Bash(npx vite *)",
       "Bash(node -e \"const t = require\\('fs'\\).readFileSync\\('./frontend/node_modules/@vuepic/vue-datepicker/dist/index.d.ts', 'utf8'\\); const lines = t.split\\('\\\\n'\\).filter\\(l => l.includes\\('enableTime'\\) || l.includes\\('textInput'\\) || l.includes\\('modelType'\\) || l.includes\\('autoApply'\\)\\); console.log\\(lines.join\\('\\\\n'\\)\\)\")",
-      "PowerShell(Get-ChildItem \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\src\" -Recurse | Where-Object { $_.Name -match -join\\(\"sidebar\",\"menu\",\"nav\",\"layout\",\"aside\"\\) -or $_.Name -match \"Sidebar|Menu|Nav|Layout|Aside\" } | Select-Object FullName)"
+      "PowerShell(Get-ChildItem \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\src\" -Recurse | Where-Object { $_.Name -match -join\\(\"sidebar\",\"menu\",\"nav\",\"layout\",\"aside\"\\) -or $_.Name -match \"Sidebar|Menu|Nav|Layout|Aside\" } | Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\src\" -Recurse -Name)",
+      "Bash(docker compose *)",
+      "Bash(curl -s http://localhost:8080/api/debts?limit=3 -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhY2FkZW1pYy1kZWJ0cyIsInN1YiI6ImJiYmIwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImV4cCI6MTc3OTgwODkzMywibmJmIjoxNzc5ODA4MDMzLCJpYXQiOjE3Nzk4MDgwMzMsImp0aSI6ImY1NDdkMGI2LTg0MjMtNDQ3MS04ZTlmLWY5MGZlMzkyMmJlOSJ9.GKirVJ6rXpiRZ-ki9xlKODxkKLSZVXa88ErgUUGBkho')",
+      "Bash(python -m json.tool)"
     ]
   }
 }

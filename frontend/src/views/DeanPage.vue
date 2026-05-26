@@ -7,23 +7,71 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
 import UpcomingRetakes from '../components/UpcomingRetakes.vue'
+import { debtsApi } from '../api/debts'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
 
 const sidebarOpen = ref(false)
 
-// --- Mock данные: ближайшие пересдачи (заменить на API) ---
-const upcomingRetakes = [
-  { id: 1, subject: 'Математический анализ', day: 25, month: 4, year: 2026, time: '10:00', building: '1', room: '204' },
-  { id: 2, subject: 'Физика',                day: 27, month: 4, year: 2026, time: '14:00', building: '2', room: '308' },
-  { id: 3, subject: 'Линейная алгебра',      day: 30, month: 4, year: 2026, time: '09:00', building: '3', room: '112' },
-]
+const upcomingRetakes = ref([])
+const stats = ref([
+  { label: 'Академических долгов', value: '—', accent: '#e63c5a' },
+  { label: 'Назначено пересдач',   value: '—', accent: '#3b3fe0' },
+  { label: 'Проводится сейчас',    value: '—', accent: '#f59e0b' },
+  { label: 'Завершено в месяце',   value: '—', accent: '#10b981' },
+])
 
-// --- Dashboard stats ---
-const stats = [
-  { label: 'Академических долгов', value: 156, accent: '#e63c5a' },
-  { label: 'Назначено пересдач',   value: 12,  accent: '#3b3fe0' },
-  { label: 'Проводится сейчас',    value: 2,   accent: '#f59e0b' },
-  { label: 'Завершено в месяце',   value: 34,  accent: '#10b981' },
-]
+onMounted(async () => {
+  const [summaryRes, retakesRes, scheduledRes, disciplinesRes] = await Promise.allSettled([
+    debtsApi.getSummary(),
+    retakesApi.getAll({ limit: 200 }),
+    retakesApi.getAll({ status: 'scheduled', limit: 10 }),
+    disciplinesApi.getAll({ limit: 200 }),
+  ])
+
+  const discMap = {}
+  if (disciplinesRes.status === 'fulfilled') {
+    for (const d of disciplinesRes.value.data.items ?? [])
+      discMap[d.id] = d.name || d.code
+  }
+
+  let totalDebts = 0
+  if (summaryRes.status === 'fulfilled')
+    totalDebts = (summaryRes.value.data ?? []).reduce((s, r) => s + (r.open_count ?? 0), 0)
+
+  let totalRetakes = 0, inProgress = 0, completedMonth = 0
+  if (retakesRes.status === 'fulfilled') {
+    const items = retakesRes.value.data.items ?? []
+    totalRetakes = retakesRes.value.data.total ?? items.length
+    inProgress = items.filter(r => r.status === 'in_progress').length
+    const now = new Date()
+    completedMonth = items.filter(r => {
+      if (r.status !== 'completed') return false
+      const d = new Date(r.completed_at ?? r.updated_at ?? r.created_at)
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+    }).length
+  }
+
+  stats.value = [
+    { label: 'Академических долгов', value: totalDebts,     accent: '#e63c5a' },
+    { label: 'Назначено пересдач',   value: totalRetakes,   accent: '#3b3fe0' },
+    { label: 'Проводится сейчас',    value: inProgress,     accent: '#f59e0b' },
+    { label: 'Завершено в месяце',   value: completedMonth, accent: '#10b981' },
+  ]
+
+  if (scheduledRes.status === 'fulfilled') {
+    upcomingRetakes.value = (scheduledRes.value.data.items ?? []).map(r => {
+      const d = new Date(r.scheduled_at)
+      return {
+        id: r.id,
+        subject: discMap[r.discipline_id] || 'Дисциплина',
+        day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
+        time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        building: r.building, room: r.room,
+      }
+    })
+  }
+})
 
 // --- Форма назначения пересдачи ---
 const retakeForm = reactive({
