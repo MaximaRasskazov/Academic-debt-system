@@ -101,19 +101,11 @@ function logout() {
         <!-- Студент -->
         <template v-else-if="auth.isStudent">
           <div class="nav-section">
-            <RouterLink class="nav-item" to="/debts">
+            <RouterLink class="nav-item" to="/student">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
               </svg>
               Главная
-            </RouterLink>
-          </div>
-          <div class="nav-section">
-            <RouterLink class="nav-item" to="/retakes">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
-              </svg>
-              Пересдачи
             </RouterLink>
           </div>
           <div class="nav-section">

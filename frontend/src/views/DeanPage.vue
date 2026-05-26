@@ -83,7 +83,13 @@ const retakeForm = reactive({
   building: '',
   room:     '',
   teachers: [],
+  students: [],
+  group:    '',
 })
+
+const studentInput = ref('')
+function addStudent()     { const n = studentInput.value.trim(); if (!n) return; retakeForm.students.push(n); studentInput.value = '' }
+function removeStudent(i) { retakeForm.students.splice(i, 1) }
 
 function submitRetake() {
   console.log('create retake', { ...retakeForm })
@@ -286,6 +292,28 @@ watch(() => retakeForm.type, (type) => {
               </div>
 
               <div class="form-row">
+                <div class="field field--full">
+                  <label>Студенты</label>
+                  <div class="teacher-wrap">
+                    <span v-for="(s, i) in retakeForm.students" :key="i" class="teacher-tag teacher-tag--student">
+                      {{ s }}
+                      <button type="button" class="teacher-tag-remove" @click="removeStudent(i)">×</button>
+                    </span>
+                    <input
+                      class="teacher-input"
+                      v-model="studentInput"
+                      placeholder="ФИО студента, затем Enter"
+                      @keydown.enter.prevent="addStudent"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label>Группа</label>
+                  <input class="input" v-model="retakeForm.group" placeholder="Например: БСБО-01-22" />
+                </div>
                 <div class="field">
                   <label>Корпус</label>
                   <input class="input" v-model="retakeForm.building" placeholder="№ корпуса" />
@@ -452,6 +480,9 @@ watch(() => retakeForm.type, (type) => {
   padding: 4px 6px 4px 10px;
   background: rgba(59,63,224,.1); color: var(--brand-ink);
   border-radius: 20px; font-size: 12px; font-weight: 500;
+}
+.teacher-tag--student {
+  background: rgba(16,185,129,.1); color: #065f46;
 }
 .teacher-tag-remove {
   background: none; border: none; cursor: pointer;

@@ -49,7 +49,7 @@ async function onSubmit() {
 
     if (role === 'DEAN') router.push('/dean')
     else if (role === 'TEACHER') router.push('/teacher')
-    else router.push('/debts')
+    else router.push('/student')
   } catch (err) {
     const msg = err.response?.data?.message || err.response?.data?.error
     serverError.value = msg || 'Неверный email или пароль.'

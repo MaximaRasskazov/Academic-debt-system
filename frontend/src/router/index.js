@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/auth'
 
 import LoginPage from '../views/LoginPage.vue'
 import RegisterPage from '../views/RegisterPage.vue'
-import DebtsPage from '../views/DebtsPage.vue'
+import StudentPage from '../views/StudentPage.vue'
 import RetakesPage from '../views/RetakesPage.vue'
 import RetakeCreatePage from '../views/RetakeCreatePage.vue'
 import RequestsPage from '../views/RequestsPage.vue'
@@ -14,10 +14,10 @@ import StatementsPage from '../views/StatementsPage.vue'
 import UsersPage from '../views/UsersPage.vue'
 
 const routes = [
-  { path: '/', redirect: '/debts' },
+  { path: '/', redirect: '/student' },
   { path: '/login', component: LoginPage, meta: { guest: true } },
   { path: '/register', component: RegisterPage, meta: { guest: true } },
-  { path: '/debts', component: DebtsPage, meta: { auth: true } },
+  { path: '/student', component: StudentPage, meta: { auth: true } },
   { path: '/retakes', component: RetakesPage, meta: { auth: true } },
   { path: '/retakes/create', component: RetakeCreatePage, meta: { auth: true, roles: ['DEAN'] } },
   { path: '/requests', component: RequestsPage, meta: { auth: true, roles: ['DEAN'] } },
@@ -41,11 +41,11 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.guest && auth.isLoggedIn) {
-    return '/debts'
+    return '/student'
   }
 
   if (to.meta.roles && !to.meta.roles.includes(auth.role)) {
-    return '/debts'
+    return '/student'
   }
 })
 
