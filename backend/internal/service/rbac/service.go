@@ -186,6 +186,42 @@ func (s *Service) requireCanManage(ctx context.Context, actorID uuid.UUID, role 
 	return nil
 }
 
+// ListRoles возвращает все активные роли системы.
+func (s *Service) ListRoles(ctx context.Context) ([]queries.Role, error) {
+	roles, err := s.store.ListRoles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	return roles, nil
+}
+
+// ListPermissions возвращает все активные права системы.
+func (s *Service) ListPermissions(ctx context.Context) ([]queries.Permission, error) {
+	perms, err := s.store.ListPermissions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list permissions: %w", err)
+	}
+	return perms, nil
+}
+
+// ListUserPermissions возвращает плоский список slug'ов прав пользователя.
+func (s *Service) ListUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	slugs, err := s.store.ListPermissionsForUser(ctx, pgutil.PgUUID(userID))
+	if err != nil {
+		return nil, fmt.Errorf("list user permissions: %w", err)
+	}
+	return slugs, nil
+}
+
+// ListUserRoles возвращает активные роли пользователя.
+func (s *Service) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]queries.Role, error) {
+	roles, err := s.store.ListRolesForUser(ctx, pgutil.PgUUID(userID))
+	if err != nil {
+		return nil, fmt.Errorf("list user roles: %w", err)
+	}
+	return roles, nil
+}
+
 // mustJSON маршалит payload для audit_log.details. Падать не на чем —
 // мы подаём только структуры, в которых нет каналов/функций.
 func mustJSON(v any) []byte {

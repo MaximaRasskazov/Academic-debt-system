@@ -19,10 +19,15 @@ func NewReportHandler(svc *report.Service) *ReportHandler {
 	return &ReportHandler{svc: svc}
 }
 
-// DebtsSummary — GET /api/reports/debts-summary.
-// Возвращает сводку по дисциплинам (open/graded count). Permission
-// reports.export проверяется на маршруте, здесь handler уже знает,
-// что вызывающий имеет право.
+// DebtsSummary godoc
+//
+//	@Summary	Сводка долгов по дисциплинам
+//	@Tags		reports
+//	@Produce	json
+//	@Success	200	{array}		dto.DebtsSummaryRow
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/reports/debts-summary [get]
 func (h *ReportHandler) DebtsSummary(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.DebtsSummary(r.Context())
 	if err != nil {
@@ -32,13 +37,19 @@ func (h *ReportHandler) DebtsSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebtsSummary(rows))
 }
 
-// Retakes — GET /api/reports/retakes?from=2026-01-01&to=2026-07-01[&format=xlsx|csv]
+// Retakes godoc
 //
-// Без format — возвращает JSON. С format=xlsx|csv — бинарный поток
-// с правильным Content-Type и Content-Disposition (для скачивания).
-//
-// Период — даты в формате YYYY-MM-DD (включительно from, не включая to).
-// Если даты не указаны — берётся последний месяц.
+//	@Summary	Отчёт по пересдачам за период
+//	@Description	Без format — JSON. format=xlsx|csv — бинарный файл для скачивания.
+//	@Tags		reports
+//	@Produce	json
+//	@Param		from	query		string	false	"Начало периода YYYY-MM-DD (default: месяц назад)"
+//	@Param		to		query		string	false	"Конец периода YYYY-MM-DD (default: сегодня)"
+//	@Param		format	query		string	false	"Формат: xlsx | csv"
+//	@Success	200		{array}		dto.RetakesReportRow
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/reports/retakes [get]
 func (h *ReportHandler) Retakes(w http.ResponseWriter, r *http.Request) {
 	from, to, err := parsePeriod(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 	if err != nil {

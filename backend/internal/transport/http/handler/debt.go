@@ -19,8 +19,15 @@ func NewDebtHandler(svc *debt.Service) *DebtHandler {
 	return &DebtHandler{svc: svc}
 }
 
-// ListMy — GET /api/debts/my. Студент видит свои долги.
-// Здесь не нужен query-параметр student_id: берём userID из контекста.
+// ListMy godoc
+//
+//	@Summary	Мои долги (студент)
+//	@Tags		debts
+//	@Produce	json
+//	@Success	200	{array}		dto.DebtResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts/my [get]
 func (h *DebtHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -35,8 +42,17 @@ func (h *DebtHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebts(rows))
 }
 
-// ListByDiscipline — GET /api/debts/by-discipline. Преподаватель
-// видит долги по всем своим дисциплинам с пагинацией.
+// ListByDiscipline godoc
+//
+//	@Summary	Долги по моим дисциплинам (преподаватель)
+//	@Tags		debts
+//	@Produce	json
+//	@Param		limit	query		int	false	"Лимит"
+//	@Param		offset	query		int	false	"Смещение"
+//	@Success	200		{array}		dto.DebtResponse
+//	@Failure	401		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts/by-discipline [get]
 func (h *DebtHandler) ListByDiscipline(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -54,7 +70,17 @@ func (h *DebtHandler) ListByDiscipline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebts(rows))
 }
 
-// ListAll — GET /api/debts. Деканат видит всё.
+// ListAll godoc
+//
+//	@Summary	Все долги (деканат)
+//	@Tags		debts
+//	@Produce	json
+//	@Param		limit	query		int	false	"Лимит"
+//	@Param		offset	query		int	false	"Смещение"
+//	@Success	200		{object}	dto.DebtsListResponse
+//	@Failure	401		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts [get]
 func (h *DebtHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	limit := parseInt32(r.URL.Query().Get("limit"), 50)
 	offset := parseInt32(r.URL.Query().Get("offset"), 0)
@@ -69,7 +95,15 @@ func (h *DebtHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Summary — GET /api/debts/summary. Сводная таблица деканата.
+// Summary godoc
+//
+//	@Summary	Сводка долгов по дисциплинам
+//	@Tags		debts
+//	@Produce	json
+//	@Success	200	{array}		dto.DebtSummaryRow
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts/summary [get]
 func (h *DebtHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.SummaryByDiscipline(r.Context())
 	if err != nil {
@@ -79,7 +113,16 @@ func (h *DebtHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebtSummaries(rows))
 }
 
-// Get — GET /api/debts/:id.
+// Get godoc
+//
+//	@Summary	Долг по ID
+//	@Tags		debts
+//	@Produce	json
+//	@Param		id	path		string	true	"UUID долга"
+//	@Success	200	{object}	dto.DebtResponse
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts/{id} [get]
 func (h *DebtHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseURLUUID(w, r, "id")
 	if !ok {
@@ -93,8 +136,18 @@ func (h *DebtHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebt(row))
 }
 
-// Create — POST /api/debts. Преподаватель ставит долг.
-// issuedBy берётся из контекста (текущий пользователь).
+// Create godoc
+//
+//	@Summary	Поставить долг (преподаватель)
+//	@Tags		debts
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.CreateDebtRequest	true	"Данные долга"
+//	@Success	201		{object}	dto.DebtResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Failure	409		{object}	dto.ErrorResponse	"Открытый долг уже существует"
+//	@Security	BearerAuth
+//	@Router		/api/debts [post]
 func (h *DebtHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -120,7 +173,19 @@ func (h *DebtHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto.FromDebt(row))
 }
 
-// Grade — PATCH /api/debts/:id/grade. Преподаватель выставляет оценку.
+// Grade godoc
+//
+//	@Summary	Выставить оценку за долг
+//	@Tags		debts
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		string				true	"UUID долга"
+//	@Param		body	body		dto.GradeDebtRequest	true	"Оценка (2-5)"
+//	@Success	200		{object}	dto.DebtResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Failure	409		{object}	dto.ErrorResponse	"Долг не в статусе open"
+//	@Security	BearerAuth
+//	@Router		/api/debts/{id}/grade [patch]
 func (h *DebtHandler) Grade(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -144,7 +209,15 @@ func (h *DebtHandler) Grade(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.FromDebt(row))
 }
 
-// Cancel — PATCH /api/debts/:id/cancel. Деканат отменяет долг.
+// Cancel godoc
+//
+//	@Summary	Отменить долг (деканат)
+//	@Tags		debts
+//	@Param		id	path	string	true	"UUID долга"
+//	@Success	204
+//	@Failure	404	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/debts/{id}/cancel [patch]
 func (h *DebtHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {

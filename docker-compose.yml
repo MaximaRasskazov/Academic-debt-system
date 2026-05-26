@@ -53,6 +53,9 @@ services:
       # Если true, entrypoint после миграций накатит sql/seeds/* с
       # демо-аккаунтами. В prod держать false.
       SEED_DEV_ACCOUNTS: ${SEED_DEV_ACCOUNTS:-false}
+      EMULATOR_URL: ${EMULATOR_URL:-}
+      EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-5m}
     ports:
       - "8080:8080"
     depends_on:

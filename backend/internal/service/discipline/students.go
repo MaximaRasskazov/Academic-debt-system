@@ -85,7 +85,11 @@ func (s *Service) DetachStudent(ctx context.Context, disciplineID, studentID, ac
 }
 
 // ListStudents — учащиеся на дисциплине.
+// ErrNotFound если дисциплина не существует.
 func (s *Service) ListStudents(ctx context.Context, disciplineID uuid.UUID) ([]queries.User, error) {
+	if _, err := s.Get(ctx, disciplineID); err != nil {
+		return nil, err
+	}
 	rows, err := s.store.ListStudentsInDiscipline(ctx, pgutil.PgUUID(disciplineID))
 	if err != nil {
 		return nil, fmt.Errorf("list students: %w", err)

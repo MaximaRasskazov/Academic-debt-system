@@ -14,13 +14,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	httpSwagger "github.com/swaggo/http-swagger"
+
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
@@ -30,17 +34,20 @@ import (
 // Сделано отдельной структурой, чтобы main.go не разрастался
 // сигнатурой NewRouter(a, b, c, d, ...).
 type Deps struct {
-	Cfg         *config.Config
-	Pool        *pgxpool.Pool
-	Auth        *auth.Service
-	Tokens      *token.Service
-	RBAC        *rbac.Service
-	Disciplines *discipline.Service
-	Debts       *debt.Service
-	Retakes     *retake.Service
-	Reports     *report.Service
-	Notify      *notify.Service
-	NotifyHub   *notify.Hub
+	Cfg             *config.Config
+	Pool            *pgxpool.Pool
+	Auth            *auth.Service
+	Tokens          *token.Service
+	RBAC            *rbac.Service
+	Disciplines     *discipline.Service
+	Debts           *debt.Service
+	Retakes         *retake.Service
+	ChangeRequests  *changerequest.Service
+	Reports         *report.Service
+	Notify          *notify.Service
+	NotifyHub       *notify.Hub
+	TeacherRequests *teacherrequest.Service
+	Sync            handler.Syncer
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -78,9 +85,18 @@ func NewRouter(d Deps) http.Handler {
 		mountMeDisciplines(r, d)
 		mountDebts(r, d)
 		mountRetakes(r, d)
+		mountChangeRequests(r, d)
 		mountReports(r, d)
 		mountNotificationsREST(r, d)
+		mountTeacherRequests(r, d)
+		mountRBAC(r, d)
+		mountSync(r, d)
 	})
+
+	// Swagger UI — без таймаута, статика подаётся напрямую.
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	// WebSocket — без таймаута, соединение живёт пока клиент не отключится.
 	mountNotificationsWS(r, d)
@@ -182,7 +198,7 @@ func mountDisciplines(r chi.Router, d Deps) {
 		r.With(mw.RequirePermission(d.RBAC, "disciplines.update")).
 			Patch("/{id}", h.Update)
 
-		// Удаление / restore — только admin (disciplines.delete).
+		// Удаление / restore — admin и dean (disciplines.delete).
 		r.Group(func(r chi.Router) {
 			r.Use(mw.RequirePermission(d.RBAC, "disciplines.delete"))
 			r.Delete("/{id}", h.Delete)
@@ -259,6 +275,26 @@ func mountReports(r chi.Router, d Deps) {
 	})
 }
 
+// mountChangeRequests регистрирует /api/retake-change-requests/*.
+// Преподаватель-участник подаёт заявку (retakes.request_change),
+// деканат рассматривает (retakes.approve_change).
+func mountChangeRequests(r chi.Router, d Deps) {
+	h := handler.NewChangeRequestHandler(d.ChangeRequests)
+	r.Route("/api/retake-change-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.With(mw.RequirePermission(d.RBAC, "retakes.request_change")).
+			Post("/", h.Submit)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "retakes.approve_change"))
+			r.Get("/", h.ListPending)
+			r.Post("/{id}/approve", h.Approve)
+			r.Post("/{id}/reject", h.Reject)
+		})
+	})
+}
+
 // mountNotificationsREST регистрирует /api/notifications/* (под таймаутом).
 func mountNotificationsREST(r chi.Router, d Deps) {
 	notifH := handler.NewNotificationsHandler(d.Notify)
@@ -267,6 +303,72 @@ func mountNotificationsREST(r chi.Router, d Deps) {
 		r.Get("/", notifH.List)
 		r.Get("/unread-count", notifH.UnreadCount)
 		r.Post("/{id}/read", notifH.MarkRead)
+	})
+}
+
+// mountTeacherRequests регистрирует /api/teacher-requests/*.
+// POST /                  — любой авторизованный (подать заявку)
+// GET  /my                — свои заявки (любой авторизованный)
+// GET  /                  — pending-список (деканат, teacher_request.review)
+// POST /:id/approve       — одобрить (деканат, teacher_request.review)
+// POST /:id/reject        — отклонить (деканат, teacher_request.review)
+func mountTeacherRequests(r chi.Router, d Deps) {
+	h := handler.NewTeacherRequestHandler(d.TeacherRequests)
+
+	r.Route("/api/teacher-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+
+		r.Post("/", h.Create)
+		r.Get("/my", h.ListMy)
+
+		r.Group(func(r chi.Router) {
+			r.Use(mw.RequirePermission(d.RBAC, "teacher_request.review"))
+			r.Get("/", h.ListPending)
+			r.Post("/{id}/approve", h.Approve)
+			r.Post("/{id}/reject", h.Reject)
+		})
+	})
+}
+
+// mountRBAC регистрирует /api/roles, /api/permissions и
+// /api/users/:id/roles|permissions — HTTP-API управления RBAC.
+func mountRBAC(r chi.Router, d Deps) {
+	h := handler.NewRBACHandler(d.RBAC)
+
+	r.Route("/api/roles", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "roles.assign"))
+		r.Get("/", h.ListRoles)
+	})
+
+	r.Route("/api/permissions", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "roles.assign"))
+		r.Get("/", h.ListPermissions)
+	})
+
+	r.Route("/api/users/{id}", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "users.view"))
+		r.Get("/roles", h.ListUserRoles)
+		r.Get("/permissions", h.ListUserPermissions)
+
+		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
+			Post("/roles", h.AssignRole)
+		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
+			Delete("/roles/{slug}", h.RevokeRole)
+	})
+}
+
+// mountSync регистрирует /api/sync/*:
+//   - GET  /status  — время последней синхронизации (любой авторизованный)
+//   - POST /trigger — запустить синхронизацию вручную (roles.assign — admin/dean)
+func mountSync(r chi.Router, d Deps) {
+	h := handler.NewSyncHandler(d.Sync)
+	r.Route("/api/sync", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Get("/status", h.Status)
+		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).Post("/trigger", h.Trigger)
 	})
 }
 

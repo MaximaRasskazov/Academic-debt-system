@@ -52,6 +52,12 @@ type Config struct {
 	SMTPUser     string
 	SMTPPassword string
 	SMTPFrom     string
+
+	// Emulator — внешний эмулятор данных деканата.
+	// Пустой EmulatorURL отключает фоновую синхронизацию.
+	EmulatorURL    string
+	EmulatorAPIKey string
+	SyncInterval   time.Duration
 }
 
 // Load читает .env (если есть) и собирает Config из ENV.
@@ -97,6 +103,10 @@ func Load() (*Config, error) {
 		SMTPUser:     getEnv("SMTP_USER", ""),
 		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
 		SMTPFrom:     getEnv("SMTP_FROM", "noreply@localhost"),
+
+		EmulatorURL:    getEnv("EMULATOR_URL", ""),
+		EmulatorAPIKey: getEnv("EMULATOR_API_KEY", ""),
+		SyncInterval:   parseDurationOrDefault("SYNC_INTERVAL", 5*time.Minute),
 	}
 
 	if cfg.DBName == "" || cfg.DBUser == "" {
@@ -180,6 +190,14 @@ func parseInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func parseDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	d, err := parseDuration(key, fallback)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 func parseList(key string, fallback []string) []string {

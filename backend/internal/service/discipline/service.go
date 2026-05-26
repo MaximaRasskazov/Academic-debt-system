@@ -44,11 +44,12 @@ const (
 
 // Sentinel-ошибки. HTTP-слой маппит их в 400/404/409.
 var (
-	ErrNotFound      = errors.New("discipline: не найдена")
-	ErrCodeTaken     = errors.New("discipline: code уже занят")
-	ErrNameTaken     = errors.New("discipline: name уже занят")
-	ErrInvalidInput  = errors.New("discipline: некорректные параметры")
-	ErrAlreadyExists = errors.New("discipline: привязка уже существует")
+	ErrNotFound        = errors.New("discipline: не найдена")
+	ErrCodeTaken       = errors.New("discipline: code уже занят")
+	ErrNameTaken       = errors.New("discipline: name уже занят")
+	ErrExternalIDTaken = errors.New("discipline: external_id уже используется")
+	ErrInvalidInput    = errors.New("discipline: некорректные параметры")
+	ErrAlreadyExists   = errors.New("discipline: привязка уже существует")
 )
 
 // Service инкапсулирует операции с дисциплинами.
@@ -86,6 +87,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput, actorID uuid.UUID)
 	if name == "" || code == "" {
 		return queries.Discipline{}, fmt.Errorf("%w: name и code обязательны", ErrInvalidInput)
 	}
+	if len([]rune(name)) > 255 {
+		return queries.Discipline{}, fmt.Errorf("%w: name не может превышать 255 символов", ErrInvalidInput)
+	}
+	if len([]rune(code)) > 50 {
+		return queries.Discipline{}, fmt.Errorf("%w: code не может превышать 50 символов", ErrInvalidInput)
+	}
 	source := in.Source
 	if source == "" {
 		source = sourceManual
@@ -113,6 +120,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput, actorID uuid.UUID)
 			CreatedBy:   pgutil.PgUUID(actorID),
 		})
 		if err != nil {
+			if repo.IsUniqueViolation(err, "idx_disciplines_name_lower") {
+				return ErrNameTaken
+			}
+			if repo.IsUniqueViolation(err, "idx_disciplines_external_id") {
+				return ErrExternalIDTaken
+			}
 			return fmt.Errorf("create: %w", err)
 		}
 		created = row
@@ -193,6 +206,9 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput, acto
 		if newName == "" {
 			return queries.Discipline{}, fmt.Errorf("%w: name не может быть пустым", ErrInvalidInput)
 		}
+		if len([]rune(newName)) > 255 {
+			return queries.Discipline{}, fmt.Errorf("%w: name не может превышать 255 символов", ErrInvalidInput)
+		}
 		in.Name = &newName
 	}
 
@@ -207,6 +223,12 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput, acto
 		if err != nil {
 			if repo.IsNotFound(err) {
 				return ErrNotFound
+			}
+			if repo.IsUniqueViolation(err, "idx_disciplines_name_lower") {
+				return ErrNameTaken
+			}
+			if repo.IsUniqueViolation(err, "idx_disciplines_code_lower") {
+				return ErrCodeTaken
 			}
 			return fmt.Errorf("update: %w", err)
 		}
@@ -259,8 +281,17 @@ func (s *Service) SoftDelete(ctx context.Context, id uuid.UUID, actorID uuid.UUI
 	})
 }
 
-// Restore возвращает soft-deleted запись.
+// Restore возвращает soft-deleted запись. Возвращает ErrNotFound, если
+// запись не существует вообще. Если запись уже активна — идемпотентно
+// возвращает nil (восстанавливать нечего, но это не ошибка).
 func (s *Service) Restore(ctx context.Context, id uuid.UUID, actorID uuid.UUID) error {
+	exists, err := s.store.DisciplineExists(ctx, pgutil.PgUUID(id))
+	if err != nil {
+		return fmt.Errorf("check exists: %w", err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
 	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		if err := q.RestoreDiscipline(ctx, pgutil.PgUUID(id)); err != nil {
 			return fmt.Errorf("restore: %w", err)

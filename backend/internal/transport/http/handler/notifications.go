@@ -17,7 +17,17 @@ func NewNotificationsHandler(svc *notify.Service) *NotificationsHandler {
 	return &NotificationsHandler{svc: svc}
 }
 
-// List — GET /api/notifications?limit=&offset=
+// List godoc
+//
+//	@Summary	Список уведомлений
+//	@Tags		notifications
+//	@Produce	json
+//	@Param		limit	query		int	false	"Лимит (default 20)"
+//	@Param		offset	query		int	false	"Смещение"
+//	@Success	200		{object}	dto.NotificationsListResponse
+//	@Failure	401		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/notifications [get]
 func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -35,7 +45,15 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.NotificationsListResponse{Items: dto.FromNotifications(items)})
 }
 
-// MarkRead — POST /api/notifications/:id/read
+// MarkRead godoc
+//
+//	@Summary	Отметить уведомление прочитанным
+//	@Tags		notifications
+//	@Param		id	path	string	true	"UUID уведомления"
+//	@Success	204
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/notifications/{id}/read [post]
 func (h *NotificationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
@@ -53,7 +71,15 @@ func (h *NotificationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UnreadCount — GET /api/notifications/unread-count
+// UnreadCount godoc
+//
+//	@Summary	Счётчик непрочитанных уведомлений
+//	@Tags		notifications
+//	@Produce	json
+//	@Success	200	{object}	dto.UnreadCountResponse
+//	@Failure	401	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/notifications/unread-count [get]
 func (h *NotificationsHandler) UnreadCount(w http.ResponseWriter, r *http.Request) {
 	userID, ok := mw.UserID(r.Context())
 	if !ok {
