@@ -32,11 +32,12 @@ func New(baseURL, apiKey string) *Client {
 
 // ChangeEntry — одна запись из GET /api/v1/changes.
 type ChangeEntry struct {
-	ID         int64     `json:"id"`
-	EntityType string    `json:"entity_type"`
-	EntityID   string    `json:"entity_id"`
-	Action     string    `json:"action"`
-	OccurredAt time.Time `json:"occurred_at"`
+	ID         string         `json:"id"`
+	EntityType string         `json:"entity_type"`
+	EntityID   string         `json:"entity_id"`
+	Action     string         `json:"action"`
+	OccurredAt time.Time      `json:"occurred_at"`
+	NewValue   map[string]any `json:"new_value"`
 }
 
 // DisciplineDTO — данные дисциплины из эмулятора.
@@ -74,7 +75,13 @@ type AccountDTO struct {
 
 // changesResponse — обёртка ответа GET /api/v1/changes.
 type changesResponse struct {
-	Items []ChangeEntry `json:"items"`
+	Data []ChangeEntry `json:"data"`
+	Meta changesMeta   `json:"meta"`
+}
+
+type changesMeta struct {
+	NextSince string `json:"next_since"`
+	HasMore   bool   `json:"has_more"`
 }
 
 // disciplineResponse — обёртка ответа GET /api/v1/disciplines/:id.
@@ -105,7 +112,7 @@ func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]
 	if err := c.get(ctx, "/api/v1/changes?"+params.Encode(), &resp); err != nil {
 		return nil, fmt.Errorf("get changes: %w", err)
 	}
-	return resp.Items, nil
+	return resp.Data, nil
 }
 
 // GetDiscipline возвращает дисциплину по внешнему ID.
