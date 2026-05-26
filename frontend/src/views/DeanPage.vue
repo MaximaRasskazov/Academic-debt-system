@@ -7,23 +7,94 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
 import UpcomingRetakes from '../components/UpcomingRetakes.vue'
+import { debtsApi } from '../api/debts'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
 
 const sidebarOpen = ref(false)
 
-// --- Mock данные: ближайшие пересдачи (заменить на API) ---
-const upcomingRetakes = [
-  { id: 1, subject: 'Математический анализ', day: 25, month: 4, year: 2026, time: '10:00', building: '1', room: '204' },
-  { id: 2, subject: 'Физика',                day: 27, month: 4, year: 2026, time: '14:00', building: '2', room: '308' },
-  { id: 3, subject: 'Линейная алгебра',      day: 30, month: 4, year: 2026, time: '09:00', building: '3', room: '112' },
-]
+// Реальные данные с бэка вместо моков.
+const allDebts = ref([])
+const allRetakes = ref([])
+const disciplines = ref([])
+const disciplineMap = ref({})
+const dashLoading = ref(true)
+const dashError = ref('')
 
-// --- Dashboard stats ---
-const stats = [
-  { label: 'Академических долгов', value: 156, accent: '#e63c5a' },
-  { label: 'Назначено пересдач',   value: 12,  accent: '#3b3fe0' },
-  { label: 'Проводится сейчас',    value: 2,   accent: '#f59e0b' },
-  { label: 'Завершено в месяце',   value: 34,  accent: '#10b981' },
-]
+async function loadDashboard() {
+  dashLoading.value = true
+  dashError.value = ''
+  try {
+    const [debtsResp, retakesResp, discsResp] = await Promise.all([
+      debtsApi.listAll({ limit: 500 }),
+      retakesApi.listAll({ limit: 200 }),
+      disciplinesApi.list({ limit: 200 }),
+    ])
+    allDebts.value = debtsResp.items || debtsResp || []
+    allRetakes.value = retakesResp.items || retakesResp || []
+    disciplines.value = discsResp.items || discsResp || []
+    disciplineMap.value = Object.fromEntries(
+      disciplines.value.map((d) => [d.id, d.name]),
+    )
+  } catch (e) {
+    dashError.value =
+      e.response?.data?.message || 'Не удалось загрузить данные'
+  } finally {
+    dashLoading.value = false
+  }
+}
+
+const stats = computed(() => {
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  return [
+    {
+      label: 'Академических долгов',
+      value: allDebts.value.filter((d) => d.status === 'open').length,
+      accent: '#e63c5a',
+    },
+    {
+      label: 'Назначено пересдач',
+      value: allRetakes.value.filter((r) => r.status === 'scheduled').length,
+      accent: '#3b3fe0',
+    },
+    {
+      label: 'Проводится сейчас',
+      value: allRetakes.value.filter((r) => r.status === 'in_progress').length,
+      accent: '#f59e0b',
+    },
+    {
+      label: 'Завершено в месяце',
+      value: allRetakes.value.filter(
+        (r) =>
+          r.status === 'completed' &&
+          new Date(r.completed_at || r.scheduled_at) >= monthStart,
+      ).length,
+      accent: '#10b981',
+    },
+  ]
+})
+
+// Адаптируем retake → формат для UpcomingRetakes.
+const upcomingRetakes = computed(() =>
+  allRetakes.value
+    .filter((r) => r.status === 'scheduled')
+    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
+    .slice(0, 5)
+    .map((r) => {
+      const dt = new Date(r.scheduled_at)
+      return {
+        id: r.id,
+        subject: disciplineMap.value[r.discipline_id] || 'Дисциплина',
+        day: dt.getDate(),
+        month: dt.getMonth() + 1,
+        year: dt.getFullYear(),
+        time: dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        building: r.building,
+        room: r.room,
+      }
+    }),
+)
 
 // --- Форма назначения пересдачи ---
 const retakeForm = reactive({
@@ -37,8 +108,70 @@ const retakeForm = reactive({
   teachers: [],
 })
 
-function submitRetake() {
-  console.log('create retake', { ...retakeForm })
+const submitting = ref(false)
+const submitError = ref('')
+const submitSuccess = ref('')
+
+// Реальное создание пересдачи через backend.
+//
+// Backend ждёт UUID дисциплины, kind=regular|commission, scheduled_at в
+// ISO8601 (RFC3339). retakeForm.subject здесь приходит строкой имени
+// дисциплины — для прода нужен select по списку, но пока ищем по
+// точному совпадению в загруженном disciplines[].
+//
+// TODO: заменить input на select с вариантами disciplines.value и
+// привязать teachers тоже к UUID пользователей (через teacher_id).
+async function submitRetake() {
+  submitError.value = ''
+  submitSuccess.value = ''
+
+  const disc = disciplines.value.find(
+    (d) =>
+      d.name.toLowerCase() === retakeForm.subject.toLowerCase() ||
+      d.code.toLowerCase() === retakeForm.subject.toLowerCase(),
+  )
+  if (!disc) {
+    submitError.value = `Дисциплина "${retakeForm.subject}" не найдена в справочнике`
+    return
+  }
+  if (!retakeForm.date) {
+    submitError.value = 'Укажите дату пересдачи'
+    return
+  }
+  if (!teacherCountOk.value) {
+    submitError.value = `Нужно минимум ${minTeachers.value} преподаватель(ей)`
+    return
+  }
+
+  // Собираем datetime: retakeForm.date + retakeForm.time
+  const [hh, mm] = (retakeForm.time || '00:00').split(':').map(Number)
+  const dt = new Date(retakeForm.date)
+  dt.setHours(hh, mm, 0, 0)
+
+  submitting.value = true
+  try {
+    const r = await retakesApi.create({
+      discipline_id: disc.id,
+      kind: retakeForm.type === 'commission' ? 'commission' : 'regular',
+      building: retakeForm.building,
+      room: retakeForm.room,
+      scheduled_at: dt.toISOString(),
+      duration_minutes: retakeForm.duration,
+    })
+    submitSuccess.value = `Пересдача создана. ID: ${r.id?.slice(0, 8) || ''}…`
+    // Очищаем форму, перезагружаем список
+    retakeForm.subject = ''
+    retakeForm.building = ''
+    retakeForm.room = ''
+    retakeForm.teachers = []
+    await loadDashboard()
+  } catch (e) {
+    submitError.value =
+      e.response?.data?.message ||
+      'Не удалось создать пересдачу. Проверьте поля'
+  } finally {
+    submitting.value = false
+  }
 }
 
 // --- Кастомный дропдаун типа пересдачи ---
@@ -54,7 +187,10 @@ function selectType(val) {
 function handleOutsideClick(e) {
   if (!e.target.closest('.custom-select')) typeDropdownOpen.value = false
 }
-onMounted(() => document.addEventListener('mousedown', handleOutsideClick))
+onMounted(() => {
+  document.addEventListener('mousedown', handleOutsideClick)
+  loadDashboard()
+})
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 // --- Время ---
@@ -123,7 +259,9 @@ watch(() => retakeForm.type, (type) => {
         <!-- Левая колонка 70% -->
         <section class="col-left">
 
-          <div class="stats-grid">
+          <div v-if="dashLoading" class="dash-state">Загрузка…</div>
+          <div v-else-if="dashError" class="dash-state dash-error">{{ dashError }}</div>
+          <div v-else class="stats-grid">
             <div v-for="s in stats" :key="s.label" class="stat-card">
               <div class="stat-accent" :style="{ background: s.accent }" />
               <div class="stat-value">{{ s.value }}</div>
@@ -248,7 +386,11 @@ watch(() => retakeForm.type, (type) => {
                 </div>
               </div>
 
-              <button class="btn-primary" type="submit">Назначить пересдачу</button>
+              <p v-if="submitError" class="form-error">{{ submitError }}</p>
+              <p v-if="submitSuccess" class="form-success">{{ submitSuccess }}</p>
+              <button class="btn-primary" type="submit" :disabled="submitting">
+                {{ submitting ? 'Создаём…' : 'Назначить пересдачу' }}
+              </button>
             </form>
           </div>
 
@@ -481,4 +623,12 @@ watch(() => retakeForm.type, (type) => {
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .col-right { grid-template-columns: 1fr; }
 }
+.dash-state {
+  background: #fff; border-radius: 10px; padding: 24px;
+  text-align: center; color: #6b7280; font-size: 14px;
+  box-shadow: 0 2px 8px rgba(20,22,60,.07);
+}
+.dash-error { color: #d63a51; }
+.form-error { color: #d63a51; font-size: 13px; margin: 8px 0 0; }
+.form-success { color: #059669; font-size: 13px; margin: 8px 0 0; }
 </style>

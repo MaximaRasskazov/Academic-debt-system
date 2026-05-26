@@ -1,14 +1,19 @@
 <script setup>
 import { reactive, ref, computed, onUnmounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { getHomeForRole } from '../router'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const view = ref('login')
 const loading = ref(false)
 const triedSubmit = ref(false)
+// Серверная ошибка логина — показывается под кнопкой при неверных
+// учётных данных, rate-limit, 5xx и т.д.
+const loginError = ref('')
 
 const titles = {
   'login':            'Авторизация',
@@ -28,19 +33,25 @@ const canSubmit = computed(() =>
 
 async function onSubmit() {
   triedSubmit.value = true
+  loginError.value = ''
   if (!canSubmit.value) return
   loading.value = true
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: form.email, password: form.password }),
-    })
-    const data = await res.json()
-    auth.login({ token: data.token, role: data.role, user: data.user })
-    router.push('/debts')
-  } catch {
-    // ошибку покажем через серверный ответ позже
+    await auth.login(form.email.trim(), form.password)
+    // После успешного login отправляем на "домашнюю" страницу роли:
+    // student → /debts, teacher → /teacher, dean → /dean. Если в query
+    // лежит ?next=... (роутер кладёт туда исходный путь, когда гость
+    // тыкается в защищённый маршрут) — возвращаемся туда.
+    const next = route.query.next
+    router.push(next || getHomeForRole(auth.primaryRole))
+  } catch (e) {
+    const status = e.response?.status
+    const msg = e.response?.data?.message
+    if (status === 401) loginError.value = 'Неверный email или пароль'
+    else if (status === 429)
+      loginError.value =
+        'Слишком много попыток входа. Подождите ~15 секунд и попробуйте снова'
+    else loginError.value = msg || 'Не удалось войти. Попробуйте позже'
   } finally {
     loading.value = false
   }
@@ -245,6 +256,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
             </label>
 
             <p v-if="!form.consent && triedSubmit" class="form-error">Необходимо согласие на использование cookie.</p>
+            <p v-if="loginError" class="form-error">{{ loginError }}</p>
 
             <button class="submit" type="submit" :disabled="!canSubmit || loading">
               {{ loading ? 'Входим…' : 'Войти' }}

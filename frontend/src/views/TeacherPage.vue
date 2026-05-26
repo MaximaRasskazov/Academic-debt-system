@@ -1,24 +1,95 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
 import UpcomingRetakes from '../components/UpcomingRetakes.vue'
+import { debtsApi } from '../api/debts'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
 
 const sidebarOpen = ref(false)
 
-const upcomingRetakes = [
-  { id: 1, subject: 'Математический анализ', day: 25, month: 4, year: 2026, time: '10:00', building: '1', room: '204' },
-  { id: 2, subject: 'Физика',                day: 27, month: 4, year: 2026, time: '14:00', building: '2', room: '308' },
-  { id: 3, subject: 'Линейная алгебра',      day: 30, month: 4, year: 2026, time: '09:00', building: '3', room: '112' },
-]
+// Сырьё с бэка
+const myDisciplines = ref([])
+const myDebts = ref([])
+const myRetakes = ref([])
+const disciplineMap = ref({})
+const loading = ref(true)
 
-const stats = [
-  { label: 'Мои предметы',       value: 5,  accent: '#3b3fe0' },
-  { label: 'Активных долгов',    value: 23, accent: '#e63c5a' },
-  { label: 'Назначено пересдач', value: 4,  accent: '#f59e0b' },
-  { label: 'Завершено в месяце', value: 8,  accent: '#10b981' },
-]
+onMounted(async () => {
+  loading.value = true
+  try {
+    // Параллельно — три независимых запроса.
+    const [discs, debts, retakes] = await Promise.all([
+      disciplinesApi.myAsTeacher(),
+      debtsApi.listByDiscipline(),
+      retakesApi.listMy(),
+    ])
+    myDisciplines.value = discs.items || discs || []
+    myDebts.value = debts.items || debts || []
+    myRetakes.value = retakes.items || retakes || []
+
+    // Имена дисциплин для UpcomingRetakes — нужен полный справочник,
+    // т.к. retake может быть и по чужой дисциплине (комиссия).
+    const all = await disciplinesApi.list({ limit: 200 })
+    const items = all.items || all
+    disciplineMap.value = Object.fromEntries(items.map((d) => [d.id, d.name]))
+  } finally {
+    loading.value = false
+  }
+})
+
+// Карточки наверху — счётчики по реальным данным.
+const stats = computed(() => [
+  { label: 'Мои предметы', value: myDisciplines.value.length, accent: '#3b3fe0' },
+  {
+    label: 'Активных долгов',
+    value: myDebts.value.filter((d) => d.status === 'open').length,
+    accent: '#e63c5a',
+  },
+  {
+    label: 'Назначено пересдач',
+    value: myRetakes.value.filter((r) => r.status === 'scheduled').length,
+    accent: '#f59e0b',
+  },
+  {
+    label: 'Завершено в месяце',
+    value: completedThisMonth(),
+    accent: '#10b981',
+  },
+])
+
+function completedThisMonth() {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  return myRetakes.value.filter((r) => {
+    if (r.status !== 'completed') return false
+    const dt = new Date(r.completed_at || r.scheduled_at)
+    return dt >= start
+  }).length
+}
+
+// Адаптация retake → формат компонента UpcomingRetakes (day/month/year/time).
+const upcomingRetakes = computed(() =>
+  myRetakes.value
+    .filter((r) => r.status === 'scheduled')
+    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
+    .slice(0, 5)
+    .map((r) => {
+      const dt = new Date(r.scheduled_at)
+      return {
+        id: r.id,
+        subject: disciplineMap.value[r.discipline_id] || 'Дисциплина',
+        day: dt.getDate(),
+        month: dt.getMonth() + 1,
+        year: dt.getFullYear(),
+        time: dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        building: r.building,
+        room: r.room,
+      }
+    }),
+)
 </script>
 
 <template>

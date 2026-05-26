@@ -1,13 +1,27 @@
 <script setup>
 import { ref, computed, reactive } from 'vue'
+import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 defineProps({ open: Boolean })
-defineEmits(['close'])
+const emit = defineEmits(['close'])
 
 const auth = useAuthStore()
+const router = useRouter()
 
-const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
+async function handleLogout() {
+  await auth.logout()
+  emit('close')
+  router.push('/login')
+}
+
+// Роли с backend приходят в lowercase (student/teacher/dean/admin).
+const ROLE_LABEL = {
+  student: 'Студент',
+  teacher: 'Преподаватель',
+  dean: 'Деканат',
+  admin: 'Администратор',
+}
 
 // ── Avatar ────────────────────────────────────────────────
 const avatarInput = ref(null)
@@ -68,13 +82,15 @@ function save() {
 
 // ── Computed ──────────────────────────────────────────────
 const initials = computed(() => {
-  const f = auth.user?.firstName?.[0] ?? ''
-  const l = auth.user?.lastName?.[0] ?? ''
+  const f = auth.user?.first_name?.[0] ?? ''
+  const l = auth.user?.last_name?.[0] ?? ''
   return (f + l).toUpperCase()
 })
 
 const fullName = computed(() =>
-  [auth.user?.lastName, auth.user?.firstName, auth.user?.middleName].filter(Boolean).join(' ')
+  [auth.user?.last_name, auth.user?.first_name, auth.user?.middle_name]
+    .filter(Boolean)
+    .join(' '),
 )
 </script>
 
@@ -116,7 +132,7 @@ const fullName = computed(() =>
               </button>
               <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarFile" />
               <div class="hero-name">{{ fullName }}</div>
-              <span class="role-chip">{{ ROLE_LABEL[auth.role] }}</span>
+              <span class="role-chip">{{ ROLE_LABEL[auth.primaryRole] }}</span>
               <button class="link-btn" @click="pickAvatar">Изменить фото</button>
             </div>
 
@@ -171,6 +187,12 @@ const fullName = computed(() =>
               </template>
               <template v-else>Сохранить изменения</template>
             </button>
+
+            <RouterLink to="/profile" class="link-btn" @click="$emit('close')">
+              Полная страница профиля
+            </RouterLink>
+
+            <button class="btn-logout" @click="handleLogout">Выйти из системы</button>
 
           </div>
         </div>
@@ -378,4 +400,28 @@ const fullName = computed(() =>
 }
 .panel-enter-from .panel,
 .panel-leave-to .panel { transform: translateX(100%); }
+
+.btn-logout {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #d63a51;
+  border: 1.5px solid #fecaca;
+  border-radius: 10px;
+  font: 500 13px/1 'Inter', sans-serif;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.btn-logout:hover { background: #fef2f2; border-color: #fca5a5; }
+.link-btn {
+  display: block;
+  text-align: center;
+  margin-top: 12px;
+  color: #3b6df0;
+  font-size: 13px;
+  text-decoration: none;
+}
+.link-btn:hover { text-decoration: underline; }
 </style>

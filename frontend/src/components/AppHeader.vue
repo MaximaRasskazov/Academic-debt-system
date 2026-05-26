@@ -8,11 +8,14 @@ defineEmits(['open-sidebar'])
 const auth = useAuthStore()
 const profileOpen = ref(false)
 
+// roles от backend приходят в lowercase ('dean', 'teacher', 'student',
+// 'admin'). primaryRole возвращает самую "высокую" из назначенных.
 const roleLabel = computed(() => ({
-  DEAN: 'Деканат',
-  TEACHER: 'Преподаватель',
-  STUDENT: 'Студент',
-}[auth.role] ?? ''))
+  admin: 'Администратор',
+  dean: 'Деканат',
+  teacher: 'Преподаватель',
+  student: 'Студент',
+}[auth.primaryRole] ?? ''))
 </script>
 
 <template>
@@ -25,12 +28,12 @@ const roleLabel = computed(() => ({
     </div>
     <div class="header-right">
       <div class="user-meta">
-        <span class="user-name">{{ auth.user?.lastName }} {{ auth.user?.firstName }} {{ auth.user?.middleName }}</span>
+        <span class="user-name">{{ auth.user?.last_name }} {{ auth.user?.first_name }} {{ auth.user?.middle_name || '' }}</span>
         <span class="user-role">{{ roleLabel }}</span>
       </div>
       <button class="avatar" @click="profileOpen = true" aria-label="Открыть профиль">
         <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="Фото профиля" />
-        <span v-else>{{ auth.user?.firstName?.[0] }}{{ auth.user?.lastName?.[0] }}</span>
+        <span v-else>{{ auth.user?.first_name?.[0] }}{{ auth.user?.last_name?.[0] }}</span>
       </button>
     </div>
   </header>

@@ -1,443 +1,312 @@
 <script setup>
-import { ref, computed, reactive } from 'vue'
+// Профиль пользователя. Backend сейчас не поддерживает смену email/пароля/
+// аватара (нет соответствующих endpoint'ов), поэтому страница read-only.
+// Если в будущем добавятся PATCH /api/users/me — переделать на форму.
+//
+// Студенту тут же показываем кнопку "Подать заявку на роль преподавателя"
+// — POST /api/teacher-requests с motivation. Список своих заявок ниже.
+import { ref, computed, onMounted } from 'vue'
+import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import AppHeader from '../components/AppHeader.vue'
-import AppSidebar from '../components/AppSidebar.vue'
+import { teacherRequestsApi } from '../api/teacherRequests'
 
 const auth = useAuthStore()
-const sidebarOpen = ref(false)
+const router = useRouter()
 
-const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
+// teacher-request: только для студентов
+const myRequests = ref([])
+const requestsLoading = ref(false)
+const requestsError = ref('')
+const motivation = ref('')
+const submitting = ref(false)
+const submitError = ref('')
+const submitSuccess = ref(false)
 
-// ── Avatar ────────────────────────────────────────────────
-const avatarInput = ref(null)
-const avatarPreview = ref(auth.user?.avatar || null)
-
-function pickAvatar() { avatarInput.value?.click() }
-
-function onAvatarFile(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = ev => { avatarPreview.value = ev.target.result }
-  reader.readAsDataURL(file)
-}
-
-// ── Email ─────────────────────────────────────────────────
-const emailEditing = ref(false)
-const emailDraft = ref(auth.user?.email || '')
-
-function startEmailEdit() {
-  emailDraft.value = auth.user?.email || ''
-  emailEditing.value = true
-}
-function cancelEmailEdit() {
-  emailDraft.value = auth.user?.email || ''
-  emailEditing.value = false
-}
-
-// ── Password ──────────────────────────────────────────────
-const pw = reactive({ current: '', next: '', confirm: '' })
-const pwError = ref('')
-const pwSuccess = ref(false)
-
-function changePassword() {
-  pwError.value = ''
-  if (!pw.current) { pwError.value = 'Введите текущий пароль'; return }
-  if (!pw.next)    { pwError.value = 'Введите новый пароль'; return }
-  if (pw.next !== pw.confirm) { pwError.value = 'Пароли не совпадают'; return }
-  // TODO: API call
-  pw.current = ''; pw.next = ''; pw.confirm = ''
-  pwSuccess.value = true
-  setTimeout(() => { pwSuccess.value = false }, 2500)
-}
-
-// ── Save ──────────────────────────────────────────────────
-const saved = ref(false)
-
-function save() {
-  if (emailEditing.value && auth.user) {
-    auth.user.email = emailDraft.value
-    emailEditing.value = false
+onMounted(async () => {
+  if (auth.isStudent) {
+    await loadMyRequests()
   }
-  if (avatarPreview.value !== (auth.user?.avatar || null) && auth.user) {
-    auth.user.avatar = avatarPreview.value
+})
+
+async function loadMyRequests() {
+  requestsLoading.value = true
+  requestsError.value = ''
+  try {
+    const resp = await teacherRequestsApi.listMy()
+    myRequests.value = resp.items || resp || []
+  } catch (e) {
+    requestsError.value =
+      e.response?.data?.message || 'Не удалось загрузить заявки'
+  } finally {
+    requestsLoading.value = false
   }
-  if (auth.user) localStorage.setItem('user', JSON.stringify(auth.user))
-  // TODO: API call
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2500)
 }
 
-// ── Computed ──────────────────────────────────────────────
+const hasPendingRequest = computed(() =>
+  myRequests.value.some((r) => r.status === 'pending'),
+)
+
+async function submitTeacherRequest() {
+  submitError.value = ''
+  submitSuccess.value = false
+  submitting.value = true
+  try {
+    await teacherRequestsApi.create(motivation.value.trim() || undefined)
+    motivation.value = ''
+    submitSuccess.value = true
+    await loadMyRequests()
+  } catch (e) {
+    if (e.response?.status === 409) {
+      submitError.value = 'У вас уже есть активная заявка'
+    } else {
+      submitError.value =
+        e.response?.data?.message || 'Не удалось отправить заявку'
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+
 const initials = computed(() => {
-  const f = auth.user?.firstName?.[0] ?? ''
-  const l = auth.user?.lastName?.[0] ?? ''
+  const f = auth.user?.first_name?.[0] ?? ''
+  const l = auth.user?.last_name?.[0] ?? ''
   return (f + l).toUpperCase()
 })
 
-const fullName = computed(() =>
-  [auth.user?.lastName, auth.user?.firstName, auth.user?.middleName].filter(Boolean).join(' ')
-)
+const roleLabel = computed(() => {
+  return {
+    admin: 'Администратор',
+    dean: 'Деканат',
+    teacher: 'Преподаватель',
+    student: 'Студент',
+  }[auth.primaryRole] || '—'
+})
+
+function statusLabel(s) {
+  return {
+    pending: 'На рассмотрении',
+    approved: 'Одобрена',
+    rejected: 'Отклонена',
+  }[s] || s
+}
+
+function formatDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+async function logout() {
+  await auth.logout()
+  router.push('/login')
+}
+
+function goHome() {
+  router.push('/')
+}
 </script>
 
 <template>
-  <div class="profile-root">
+  <div class="page">
+    <header class="head">
+      <div>
+        <h1>Профиль</h1>
+      </div>
+      <div class="head-actions">
+        <button class="link" @click="goHome">← На главную</button>
+        <button class="btn-logout" @click="logout">Выйти</button>
+      </div>
+    </header>
 
-    <AppSidebar :open="sidebarOpen" @close="sidebarOpen = false" />
+    <div v-if="!auth.user" class="state">Профиль не загружен</div>
 
-    <div class="page-wrap">
-      <AppHeader @open-sidebar="sidebarOpen = true" />
-
-      <main class="main">
-        <div class="profile-card">
-
-          <!-- Avatar + Name -->
-          <div class="hero-section">
-            <button class="avatar-btn" @click="pickAvatar" title="Изменить фото">
-              <img v-if="avatarPreview" :src="avatarPreview" class="avatar-img" alt="Фото профиля" />
-              <span v-else class="avatar-initials">{{ initials }}</span>
-              <div class="avatar-overlay">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-                  <circle cx="12" cy="13" r="4"/>
-                </svg>
-              </div>
-            </button>
-            <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarFile" />
-            <div class="hero-meta">
-              <div class="hero-name">{{ fullName }}</div>
-              <button class="link-btn" @click="pickAvatar">Изменить фото</button>
-            </div>
+    <template v-else>
+      <section class="card">
+        <div class="hero">
+          <div class="avatar">{{ initials || '?' }}</div>
+          <div class="hero-info">
+            <div class="name">{{ auth.fullName }}</div>
+            <div class="role-tag">{{ roleLabel }}</div>
           </div>
-
-          <div class="section-divider" />
-
-          <!-- ── Info fields: Student ── -->
-          <div v-if="auth.isStudent" class="fields-grid">
-            <div class="field-group">
-              <label class="field-label">ФИО</label>
-              <input class="field-input field-readonly" :value="fullName" readonly />
-            </div>
-            <div class="field-group">
-              <label class="field-label">Группа</label>
-              <input class="field-input field-readonly" :value="auth.user?.group || '—'" readonly />
-            </div>
-            <div class="field-group">
-              <label class="field-label">Курс</label>
-              <input class="field-input field-readonly" :value="auth.user?.course || '—'" readonly />
-            </div>
-          </div>
-
-          <!-- ── Info fields: Dean / Teacher ── -->
-          <div v-else class="fields-grid">
-            <div class="field-group">
-              <label class="field-label">ФИО</label>
-              <input class="field-input field-readonly" :value="fullName" readonly />
-            </div>
-            <div class="field-group">
-              <label class="field-label">Должность</label>
-              <input class="field-input field-readonly" :value="ROLE_LABEL[auth.role]" readonly />
-            </div>
-          </div>
-
-          <!-- ── Email ── -->
-          <div class="section-title">Почта</div>
-          <div class="email-row">
-            <div class="email-icon-wrap">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <rect x="2" y="4" width="20" height="16" rx="2"/>
-                <path d="M2 7l10 7 10-7"/>
-              </svg>
-            </div>
-            <template v-if="!emailEditing">
-              <span class="email-text">{{ auth.user?.email }}</span>
-              <button class="link-btn" @click="startEmailEdit">Изменить</button>
-            </template>
-            <template v-else>
-              <input
-                class="field-input email-input"
-                v-model="emailDraft"
-                type="email"
-                placeholder="Новый email"
-                autofocus
-              />
-              <button class="link-btn link-cancel" @click="cancelEmailEdit">Отмена</button>
-            </template>
-          </div>
-
-          <div class="section-divider" />
-
-          <!-- ── Password ── -->
-          <div class="section-title">Изменить пароль</div>
-          <div class="pw-row">
-            <div class="field-group">
-              <label class="field-label">Текущий пароль</label>
-              <input class="field-input" type="password" v-model="pw.current" placeholder="••••••" />
-            </div>
-            <div class="field-group">
-              <label class="field-label">Новый пароль</label>
-              <input class="field-input" type="password" v-model="pw.next" placeholder="••••••" />
-            </div>
-            <div class="field-group">
-              <label class="field-label">Повтор пароля</label>
-              <input class="field-input" type="password" v-model="pw.confirm" placeholder="••••••" />
-            </div>
-            <div class="pw-action">
-              <label class="field-label">&nbsp;</label>
-              <button class="btn-outline" @click="changePassword">Изменить</button>
-            </div>
-          </div>
-          <p v-if="pwError" class="pw-error">{{ pwError }}</p>
-          <p v-if="pwSuccess" class="pw-success">Пароль успешно изменён</p>
-
-          <!-- ── Save ── -->
-          <div class="save-row">
-            <button class="btn-primary btn-save" @click="save">
-              <template v-if="saved">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-                Сохранено
-              </template>
-              <template v-else>Сохранить</template>
-            </button>
-          </div>
-
         </div>
-      </main>
-    </div>
+
+        <div class="fields">
+          <div class="field">
+            <label>Email</label>
+            <div class="value">{{ auth.user.email }}</div>
+          </div>
+          <div v-if="auth.user.middle_name" class="field">
+            <label>Отчество</label>
+            <div class="value">{{ auth.user.middle_name }}</div>
+          </div>
+          <div v-if="auth.user.group_name" class="field">
+            <label>Группа</label>
+            <div class="value">{{ auth.user.group_name }}</div>
+          </div>
+          <div class="field">
+            <label>Роли</label>
+            <div class="value">
+              <span v-for="r in auth.roles" :key="r.id" class="role-chip">
+                {{ r.name }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Студенту даём подать заявку на роль преподавателя -->
+      <section v-if="auth.isStudent" class="card">
+        <h2>Стать преподавателем</h2>
+        <p class="hint">
+          Если вы хотите вести занятия и принимать пересдачи —
+          подайте заявку. Деканат рассмотрит её и при одобрении
+          ваша роль будет расширена.
+        </p>
+
+        <form v-if="!hasPendingRequest" @submit.prevent="submitTeacherRequest">
+          <label class="lbl">Мотивация (необязательно)</label>
+          <textarea
+            v-model="motivation"
+            class="textarea"
+            rows="3"
+            placeholder="Кратко напишите, почему хотите получить роль..."
+            :disabled="submitting"
+          />
+          <p v-if="submitError" class="form-error">{{ submitError }}</p>
+          <p v-if="submitSuccess" class="form-success">Заявка отправлена</p>
+          <button class="btn-primary" :disabled="submitting">
+            {{ submitting ? 'Отправляем…' : 'Подать заявку' }}
+          </button>
+        </form>
+
+        <p v-else class="info-box">
+          У вас уже есть активная заявка. Дождитесь решения деканата.
+        </p>
+
+        <div v-if="!requestsLoading && myRequests.length > 0" class="history">
+          <h3>История заявок</h3>
+          <ul class="list">
+            <li v-for="r in myRequests" :key="r.id" class="req-item">
+              <span :class="['badge', `badge-${r.status}`]">{{ statusLabel(r.status) }}</span>
+              <span class="req-date">{{ formatDate(r.created_at) }}</span>
+              <span v-if="r.review_reason" class="req-reason">
+                Причина: {{ r.review_reason }}
+              </span>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </template>
   </div>
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-*, *::before, *::after { box-sizing: border-box; }
-
-.profile-root {
-  --bg:        #f3f4f7;
-  --card:      #ffffff;
-  --ink:       #1a1d24;
-  --ink-soft:  #6b7280;
-  --line:      #d7d9e0;
-  --brand:     #3b3fe0;
-  --brand-ink: #2a2e9e;
-  --radius:    10px;
-  --shadow:    0 2px 8px rgba(20,22,60,.07);
-  --ease:      cubic-bezier(.2,.7,.2,1);
-
-  min-height: 100dvh;
-  font-family: 'Inter', system-ui, sans-serif;
-  color: var(--ink);
-  -webkit-font-smoothing: antialiased;
-}
-
-.page-wrap {
-  min-height: 100dvh;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-}
-
-.main {
-  flex: 1;
-  padding: 32px 24px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-}
-
-/* ── Profile card ── */
-.profile-card {
-  width: 100%;
+.page {
   max-width: 740px;
-  background: var(--card);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  border: 1px solid var(--line);
-  padding: 32px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #1a1d24;
 }
+.head {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
+}
+h1 { font-size: 28px; margin: 0; }
+.head-actions { display: flex; gap: 12px; align-items: center; }
+.link {
+  background: none; border: none; color: #3b6df0;
+  font-size: 14px; cursor: pointer; padding: 0;
+}
+.link:hover { text-decoration: underline; }
+.btn-logout {
+  background: none; border: 1.5px solid #d7d9e0;
+  border-radius: 8px; padding: 6px 12px; font-size: 13px;
+  cursor: pointer; color: #6b7280;
+}
+.btn-logout:hover { border-color: #b9bcc8; color: #1a1d24; }
 
-/* ── Hero ── */
-.hero-section {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  margin-bottom: 28px;
-}
+.state { text-align: center; padding: 60px; color: #6b7280; }
 
-.avatar-btn {
-  position: relative;
-  width: 88px; height: 88px; border-radius: 50%; flex-shrink: 0;
-  background: linear-gradient(135deg, #2b5cff, #8b3df0);
-  border: none; cursor: pointer; overflow: hidden; padding: 0;
-  display: grid; place-items: center;
-}
-.avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.avatar-initials {
-  font: 700 28px/1 'Inter', sans-serif; color: #fff;
-  pointer-events: none;
-}
-.avatar-overlay {
-  position: absolute; inset: 0;
-  background: rgba(10,12,30,.45);
-  display: grid; place-items: center;
-  opacity: 0; transition: opacity .2s var(--ease);
-}
-.avatar-btn:hover .avatar-overlay { opacity: 1; }
-.avatar-overlay svg { width: 24px; height: 24px; stroke: #fff; }
-
-.hero-meta { display: flex; flex-direction: column; gap: 6px; }
-.hero-name {
-  font: 700 20px/1.2 'Inter', sans-serif;
-  color: var(--ink);
-}
-
-.link-btn {
-  background: none; border: none; padding: 0;
-  font: 500 13px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; text-align: left;
-  transition: color .15s;
-}
-.link-btn:hover { color: var(--brand); }
-.link-cancel:hover { color: #dc2626; }
-
-/* ── Divider ── */
-.section-divider {
-  border: none; border-top: 1px solid var(--line); margin: 0 0 24px;
-}
-
-/* ── Fields grid ── */
-.fields-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px 24px;
-  margin-bottom: 28px;
-}
-
-.field-group { display: flex; flex-direction: column; gap: 6px; }
-.field-label {
-  font: 500 12px/1 'Inter', sans-serif;
-  color: var(--ink-soft);
-  text-transform: none;
-}
-
-.field-input {
-  appearance: none;
-  height: 44px; width: 100%;
-  border: 1.5px solid var(--line);
-  border-radius: var(--radius);
+.card {
   background: #fff;
-  padding: 0 14px;
-  font: 14px/1 'Inter', sans-serif;
-  color: var(--ink);
-  outline: none;
-  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(20,22,60,.05);
 }
-.field-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.1); }
-.field-input::placeholder { color: #b7b9c2; }
+.card h2 { margin: 0 0 8px; font-size: 18px; }
+.card h3 { margin: 16px 0 8px; font-size: 14px; color: #6b7280; }
 
-.field-readonly {
-  background: #f3f4f7;
-  color: var(--ink-soft);
-  cursor: default;
-}
-.field-readonly:focus { border-color: var(--line); box-shadow: none; }
-
-/* ── Section title ── */
-.section-title {
-  font: 700 14px/1 'Inter', sans-serif;
-  color: var(--ink);
-  margin-bottom: 14px;
-}
-
-/* ── Email ── */
-.email-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-
-.email-icon-wrap {
-  width: 36px; height: 36px; border-radius: 10px;
+.hero { display: flex; gap: 16px; align-items: center; margin-bottom: 20px; }
+.avatar {
+  width: 64px; height: 64px; border-radius: 50%;
   background: linear-gradient(135deg, #2b5cff, #8b3df0);
+  color: #fff; font: 600 22px/1 'Inter', sans-serif;
   display: grid; place-items: center; flex-shrink: 0;
 }
-.email-icon-wrap svg { width: 16px; height: 16px; stroke: #fff; }
-
-.email-text {
-  font: 14px/1 'Inter', sans-serif;
-  color: var(--ink);
-  flex: 1;
+.hero-info .name { font-weight: 600; font-size: 18px; }
+.role-tag {
+  display: inline-block; margin-top: 6px;
+  background: #e0e7ff; color: #3730a3;
+  padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
 }
 
-.email-input {
-  flex: 1;
-  min-width: 200px;
-  height: 38px;
+.fields { display: grid; gap: 12px; }
+.field { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid #f3f4f6; }
+.field:first-child { border-top: none; }
+.field label { width: 110px; font-size: 13px; color: #6b7280; flex-shrink: 0; }
+.field .value { font-size: 14px; color: #1a1d24; flex: 1; }
+.role-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 6px;
+  background: #f3f4f6; color: #374151; font-size: 12px;
+  margin-right: 6px;
 }
 
-/* ── Password ── */
-.pw-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
-  gap: 16px;
-  align-items: end;
-  margin-bottom: 8px;
+.hint { color: #6b7280; font-size: 13px; line-height: 1.5; margin: 0 0 12px; }
+.lbl { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+.textarea {
+  width: 100%; resize: vertical;
+  border: 1.5px solid #d7d9e0; border-radius: 8px;
+  padding: 8px 12px; font: 14px 'Inter', sans-serif;
+  margin-bottom: 12px; outline: none;
 }
-
-.pw-action { display: flex; flex-direction: column; gap: 6px; }
-
-.btn-outline {
-  height: 44px; padding: 0 18px;
-  background: none; border: 1.5px solid var(--line); border-radius: var(--radius);
-  font: 500 13px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; white-space: nowrap;
-  transition: border-color .15s, color .15s, background .15s;
-}
-.btn-outline:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
-
-.pw-error {
-  font: 13px/1 'Inter', sans-serif;
-  color: #dc2626;
-  margin: 0 0 16px;
-}
-.pw-success {
-  font: 13px/1 'Inter', sans-serif;
-  color: #059669;
-  margin: 0 0 16px;
-}
-
-/* ── Save ── */
-.save-row {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid var(--line);
-}
+.textarea:focus { border-color: #3b3fe0; box-shadow: 0 0 0 4px rgba(59,63,224,.1); }
 
 .btn-primary {
-  display: flex; align-items: center; gap: 8px;
-  height: 44px; padding: 0 40px; border: none; border-radius: var(--radius);
-  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
-  color: #fff; font: 600 14px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 4px 14px -6px rgba(91,59,217,.6);
-  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+  background: linear-gradient(135deg, #2b5cff, #5b3bd9);
+  color: #fff; border: none; border-radius: 8px;
+  padding: 8px 20px; font-size: 14px; font-weight: 500; cursor: pointer;
 }
-.btn-primary:hover { transform: scale(1.03); box-shadow: 0 4px 10px -4px rgba(91,59,217,.75); }
-.btn-save svg { width: 16px; height: 16px; }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 
-/* ── Responsive ── */
-@media (max-width: 640px) {
-  .main { padding: 16px; }
-  .profile-card { padding: 20px; }
-  .fields-grid { grid-template-columns: 1fr; }
-  .pw-row { grid-template-columns: 1fr; }
-  .pw-action { display: none; }
-  .hero-name { font-size: 17px; }
+.form-error { color: #d63a51; font-size: 13px; margin: 0 0 8px; }
+.form-success { color: #059669; font-size: 13px; margin: 0 0 8px; }
+
+.info-box {
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  margin: 0;
 }
+
+.list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.req-item {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 8px 12px; background: #f9fafb; border-radius: 8px; font-size: 13px;
+}
+.badge {
+  padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500;
+}
+.badge-pending { background: #fef3c7; color: #92400e; }
+.badge-approved { background: #d1fae5; color: #065f46; }
+.badge-rejected { background: #fee2e2; color: #991b1b; }
+.req-date { color: #6b7280; }
+.req-reason { color: #4b5563; font-style: italic; }
 </style>
