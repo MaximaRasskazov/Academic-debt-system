@@ -27,6 +27,12 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 )
 
+// pgUUIDForce конвертирует uuid.UUID в pgtype.UUID с Valid=true даже для uuid.Nil,
+// потому что system-пользователь (00000000-...) реально существует в БД.
+func pgUUIDForce(u uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: u, Valid: true}
+}
+
 const changesPageSize = 500
 
 // Service синхронизирует данные из эмулятора.
@@ -138,7 +144,7 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 				Code:         code,
 				Description:  d.Description,
 				ExternalID:   d.ID,
-				SystemUserID: pgutil.PgUUID(s.systemUserID),
+				SystemUserID: pgUUIDForce(s.systemUserID),
 			}); err != nil {
 				slog.Warn("sync: upsert discipline failed", "id", d.ID, "err", err)
 			}
@@ -174,7 +180,7 @@ func (s *Service) syncDiscipline(ctx context.Context, externalID string) error {
 		Code:         code,
 		Description:  d.Description,
 		ExternalID:   externalID,
-		SystemUserID: pgutil.PgUUID(s.systemUserID),
+		SystemUserID: pgUUIDForce(s.systemUserID),
 	})
 }
 
@@ -223,13 +229,13 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		g := int32(gradeVal) //nolint:gosec
 		finalGrade = &g
 		gradedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-		gradedBy = pgutil.PgUUID(teacherID)
+		gradedBy = pgUUIDForce(teacherID)
 	}
 
 	return s.store.UpsertDebtFromSync(ctx, repo.UpsertDebtParams{
 		StudentID:    pgutil.PgUUID(studentID),
 		DisciplineID: pgutil.PgUUID(disciplineID),
-		IssuedBy:     pgutil.PgUUID(teacherID),
+		IssuedBy:     pgUUIDForce(teacherID),
 		ExternalID:   externalID,
 		Notes:        d.Notes,
 		Status:       status,
