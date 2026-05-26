@@ -84,6 +84,19 @@ type changesMeta struct {
 	HasMore   bool   `json:"has_more"`
 }
 
+// disciplinesListResponse — обёртка ответа GET /api/v1/disciplines (список).
+type disciplinesListResponse struct {
+	Data []DisciplineDTO `json:"data"`
+	Meta paginationMeta  `json:"meta"`
+}
+
+type paginationMeta struct {
+	Page       int `json:"page"`
+	Limit      int `json:"limit"`
+	Total      int `json:"total"`
+	TotalPages int `json:"total_pages"`
+}
+
 // disciplineResponse — обёртка ответа GET /api/v1/disciplines/:id.
 type disciplineResponse struct {
 	Data DisciplineDTO `json:"data"`
@@ -113,6 +126,19 @@ func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]
 		return nil, fmt.Errorf("get changes: %w", err)
 	}
 	return resp.Data, nil
+}
+
+// ListDisciplines возвращает все дисциплины из эмулятора постранично.
+func (c *Client) ListDisciplines(ctx context.Context, page, limit int) ([]DisciplineDTO, paginationMeta, error) {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", page))
+	params.Set("limit", fmt.Sprintf("%d", limit))
+
+	var resp disciplinesListResponse
+	if err := c.get(ctx, "/api/v1/disciplines?"+params.Encode(), &resp); err != nil {
+		return nil, paginationMeta{}, fmt.Errorf("list disciplines: %w", err)
+	}
+	return resp.Data, resp.Meta, nil
 }
 
 // GetDiscipline возвращает дисциплину по внешнему ID.

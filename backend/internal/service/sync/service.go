@@ -52,6 +52,14 @@ func (s *Service) Sync(ctx context.Context) error {
 		return fmt.Errorf("sync: get last_synced_at: %w", err)
 	}
 
+	// При первом запуске (epoch) делаем полный импорт справочников.
+	if since.Year() == 1970 {
+		slog.Info("sync: первый запуск, полный импорт дисциплин")
+		if err := s.importAllDisciplines(ctx); err != nil {
+			slog.Warn("sync: ошибка импорта дисциплин", "err", err)
+		}
+	}
+
 	changes, err := s.client.GetChanges(ctx, since, changesPageSize)
 	if err != nil {
 		return fmt.Errorf("sync: get changes: %w", err)
@@ -59,6 +67,9 @@ func (s *Service) Sync(ctx context.Context) error {
 
 	if len(changes) == 0 {
 		slog.Info("sync: нет новых изменений", "since", since)
+		if err := s.store.SetLastSyncedAt(ctx, time.Now().UTC()); err != nil {
+			return fmt.Errorf("sync: set last_synced_at: %w", err)
+		}
 		return nil
 	}
 
@@ -105,6 +116,41 @@ func (s *Service) applyChange(ctx context.Context, ch emulator.ChangeEntry) erro
 		// Неизвестный тип — пропускаем без ошибки.
 		return nil
 	}
+}
+
+// importAllDisciplines постранично тянет все дисциплины из эмулятора и делает upsert.
+func (s *Service) importAllDisciplines(ctx context.Context) error {
+	const pageSize = 100
+	page := 1
+	total := 0
+	for {
+		items, meta, err := s.client.ListDisciplines(ctx, page, pageSize)
+		if err != nil {
+			return fmt.Errorf("page %d: %w", page, err)
+		}
+		for _, d := range items {
+			code := d.Code
+			if code == "" {
+				code = "EXT-" + d.ID
+			}
+			if err := s.store.UpsertDisciplineFromSync(ctx, repo.UpsertDisciplineParams{
+				Name:         d.Name,
+				Code:         code,
+				Description:  d.Description,
+				ExternalID:   d.ID,
+				SystemUserID: pgutil.PgUUID(s.systemUserID),
+			}); err != nil {
+				slog.Warn("sync: upsert discipline failed", "id", d.ID, "err", err)
+			}
+		}
+		total += len(items)
+		if page >= meta.TotalPages {
+			break
+		}
+		page++
+	}
+	slog.Info("sync: дисциплины импортированы", "count", total)
+	return nil
 }
 
 // syncDiscipline тянет дисциплину из эмулятора и делает upsert в БД.
