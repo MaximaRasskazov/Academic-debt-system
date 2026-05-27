@@ -49,6 +49,10 @@ func mapAuthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль")
 	case errors.Is(err, auth.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, "user_not_found", "пользователь не найден")
+	case errors.Is(err, auth.ErrInvalidPassword):
+		writeError(w, http.StatusUnauthorized, "invalid_password", "неверный текущий пароль")
+	case errors.Is(err, auth.ErrSamePassword):
+		writeError(w, http.StatusBadRequest, "same_password", "новый пароль совпадает с текущим")
 	case errors.Is(err, token.ErrRefreshNotFound),
 		errors.Is(err, token.ErrRefreshExhausted),
 		errors.Is(err, token.ErrRefreshReplay):

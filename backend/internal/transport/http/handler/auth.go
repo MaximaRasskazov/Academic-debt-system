@@ -186,6 +186,80 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UpdateMe godoc
+//
+//	@Summary	Обновить профиль текущего пользователя (PATCH-семантика)
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		dto.UpdateProfileRequest	true	"Поля для обновления (все опциональны)"
+//	@Success	200		{object}	dto.ProfileResponse
+//	@Failure	400		{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/me [patch]
+func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	userID, ok := mw.UserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
+		return
+	}
+
+	var req dto.UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
+		return
+	}
+
+	profile, err := h.auth.UpdateProfile(r.Context(), userID, auth.UpdateProfileInput{
+		FirstName:  req.FirstName,
+		LastName:   req.LastName,
+		MiddleName: req.MiddleName,
+		GroupName:  req.GroupName,
+		Birthday:   req.Birthday,
+	})
+	if err != nil {
+		mapAuthError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, dto.ProfileResponse{
+		User:        dto.FromUser(profile.User),
+		Roles:       dto.FromRoles(profile.Roles),
+		Permissions: profile.Permissions,
+	})
+}
+
+// ChangePassword godoc
+//
+//	@Summary	Сменить пароль (ревокует все access-токены)
+//	@Tags		auth
+//	@Accept		json
+//	@Param		body	body	dto.ChangePasswordRequest	true	"current_password + new_password"
+//	@Success	204
+//	@Failure	400	{object}	dto.ErrorResponse	"Пароль <8 символов или совпадает с текущим"
+//	@Failure	401	{object}	dto.ErrorResponse	"Неверный текущий пароль"
+//	@Security	BearerAuth
+//	@Router		/api/me/password [post]
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := mw.UserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
+		return
+	}
+
+	var req dto.ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
+		return
+	}
+
+	if err := h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword); err != nil {
+		mapAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // setRefreshCookie ставит refresh-токен в httpOnly-cookie с
 // параметрами из config (Secure/SameSite/Domain/Path).
 func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, value string, expires time.Time) {

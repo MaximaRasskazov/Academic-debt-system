@@ -26,6 +26,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
 )
@@ -48,6 +49,7 @@ type Deps struct {
 	NotifyHub       *notify.Hub
 	TeacherRequests *teacherrequest.Service
 	Sync            handler.Syncer
+	Users           *user.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -81,6 +83,16 @@ func NewRouter(d Deps) http.Handler {
 			})
 		})
 
+		// /api/me — обновление профиля и смена пароля текущего пользователя.
+		// Вынесено отдельной группой с auth-middleware (без CSRF в чистом
+		// виде, потому что у нас Bearer-токен в header — это самодостаточная
+		// защита, если фронт не хранит token в cookie).
+		r.Route("/api/me", func(r chi.Router) {
+			r.Use(mw.Auth(d.Tokens))
+			r.Patch("/", authH.UpdateMe)
+			r.Post("/password", authH.ChangePassword)
+		})
+
 		mountDisciplines(r, d)
 		mountMeDisciplines(r, d)
 		mountDebts(r, d)
@@ -91,6 +103,7 @@ func NewRouter(d Deps) http.Handler {
 		mountTeacherRequests(r, d)
 		mountRBAC(r, d)
 		mountSync(r, d)
+		mountUsers(r, d)
 	})
 
 	// Swagger UI — без таймаута, статика подаётся напрямую.
@@ -327,6 +340,24 @@ func mountTeacherRequests(r chi.Router, d Deps) {
 			r.Post("/{id}/approve", h.Approve)
 			r.Post("/{id}/reject", h.Reject)
 		})
+	})
+}
+
+// mountUsers регистрирует GET /api/users — список пользователей с
+// фильтрами по роли, поиском и пагинацией. Доступен dean и admin
+// (permission users.view). Нужен фронту для:
+//   - выбора преподавателя при создании пересдачи (multi-select)
+//   - выбора студента при привязке к дисциплине
+//   - админ-панели управления ролями
+func mountUsers(r chi.Router, d Deps) {
+	if d.Users == nil {
+		return
+	}
+	h := handler.NewUsersHandler(d.Users)
+	r.Route("/api/users", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "users.view"))
+		r.Get("/", h.List)
 	})
 }
 

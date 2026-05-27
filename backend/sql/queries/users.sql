@@ -16,15 +16,46 @@ FROM users
 WHERE LOWER(email) = LOWER($1);
 
 -- name: ListUsers :many
--- Пагинация: LIMIT $1, OFFSET $2. Сортировка по дате создания убывающая
--- (новые сверху), стабильный tie-break через id.
-SELECT *
-FROM users
-ORDER BY created_at DESC, id DESC
-LIMIT $1 OFFSET $2;
+-- Список пользователей с опциональными фильтрами. Используется для
+-- админ-панели и для UI деканата (выбор преподавателя при создании
+-- пересдачи, выбор студента для привязки к дисциплине).
+--
+-- Все фильтры опциональны:
+--   role_slug   — если задан, отдаём только пользователей с этой ролью
+--                 (JOIN с role_user + roles WHERE r.slug = ...)
+--   search      — подстрока (ILIKE) по email, first_name, last_name
+--   group_name  — точный матч (для отбора студентов по группе)
+--
+-- Сортировка по фамилии — так удобнее листать. limit/offset для пагинации.
+SELECT DISTINCT u.*
+FROM users u
+LEFT JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
+LEFT JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
+WHERE
+    (sqlc.narg('role_slug')::text IS NULL OR r.slug = sqlc.narg('role_slug')::text)
+AND (sqlc.narg('search')::text    IS NULL OR (
+        u.email      ILIKE '%' || sqlc.narg('search')::text || '%'
+     OR u.first_name ILIKE '%' || sqlc.narg('search')::text || '%'
+     OR u.last_name  ILIKE '%' || sqlc.narg('search')::text || '%'
+    ))
+AND (sqlc.narg('group_name')::text IS NULL OR u.group_name = sqlc.narg('group_name')::text)
+ORDER BY u.last_name ASC, u.first_name ASC, u.id ASC
+LIMIT sqlc.arg('limit_n')::int OFFSET sqlc.arg('offset_n')::int;
 
 -- name: CountUsers :one
-SELECT COUNT(*) FROM users;
+-- Считает с теми же фильтрами что и ListUsers — для total в пагинации.
+SELECT COUNT(DISTINCT u.id)
+FROM users u
+LEFT JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
+LEFT JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
+WHERE
+    (sqlc.narg('role_slug')::text IS NULL OR r.slug = sqlc.narg('role_slug')::text)
+AND (sqlc.narg('search')::text    IS NULL OR (
+        u.email      ILIKE '%' || sqlc.narg('search')::text || '%'
+     OR u.first_name ILIKE '%' || sqlc.narg('search')::text || '%'
+     OR u.last_name  ILIKE '%' || sqlc.narg('search')::text || '%'
+    ))
+AND (sqlc.narg('group_name')::text IS NULL OR u.group_name = sqlc.narg('group_name')::text);
 
 -- name: UpdateUserPassword :exec
 UPDATE users
