@@ -188,6 +188,47 @@ func (q *Queries) ListDisciplines(ctx context.Context, arg ListDisciplinesParams
 	return items, nil
 }
 
+const listDisciplinesByIDs = `-- name: ListDisciplinesByIDs :many
+SELECT id, name, code, description, external_id, source, created_at, created_by, updated_at, deleted_at, deleted_by
+FROM disciplines
+WHERE id = ANY($1::uuid[])
+  AND deleted_at IS NULL
+`
+
+// Батч-выборка дисциплин по списку ID. Используется в report.Service
+// вместо N одиночных GetDisciplineByID.
+func (q *Queries) ListDisciplinesByIDs(ctx context.Context, ids []pgtype.UUID) ([]Discipline, error) {
+	rows, err := q.db.Query(ctx, listDisciplinesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Discipline
+	for rows.Next() {
+		var i Discipline
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Code,
+			&i.Description,
+			&i.ExternalID,
+			&i.Source,
+			&i.CreatedAt,
+			&i.CreatedBy,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.DeletedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const restoreDiscipline = `-- name: RestoreDiscipline :exec
 UPDATE disciplines
 SET deleted_at = NULL,
