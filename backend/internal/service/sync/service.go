@@ -52,6 +52,12 @@ func New(store *repo.Store, client *emulator.Client, systemUserID uuid.UUID) *Se
 
 // Sync выполняет один цикл синхронизации: читает изменения из эмулятора
 // и применяет их к локальной БД.
+//
+// Если хотя бы один запрос к эмулятору упал с rate-limit (429 после
+// retry), last_synced_at НЕ сдвигается — при следующем тике эти change'ы
+// придут снова, и мы успеем их применить. Обычные ошибки данных
+// (битый student_id и т.п.) не блокируют сдвиг времени, иначе sync
+// зависнет на грязной записи на стороне эмулятора.
 func (s *Service) Sync(ctx context.Context) error {
 	since, err := s.store.GetLastSyncedAt(ctx)
 	if err != nil {
@@ -81,19 +87,31 @@ func (s *Service) Sync(ctx context.Context) error {
 
 	slog.Info("sync: получены изменения", "count", len(changes), "since", since)
 
-	var errs []string
+	var (
+		errs            []string
+		rateLimitedHits int
+	)
 	for _, ch := range changes {
 		if err := s.applyChange(ctx, ch); err != nil {
-			// Не прерываем весь прогон из-за одной записи — логируем
-			// и продолжаем. last_synced_at обновится, и при следующем
-			// прогоне эта запись уже не придёт повторно.
 			slog.Warn("sync: ошибка применения изменения",
 				"entity_type", ch.EntityType,
 				"entity_id", ch.EntityID,
 				"err", err,
 			)
 			errs = append(errs, fmt.Sprintf("%s/%s: %v", ch.EntityType, ch.EntityID, err))
+			if errors.Is(err, emulator.ErrRateLimited) {
+				rateLimitedHits++
+			}
 		}
+	}
+
+	// Если эмулятор throttle-ил хотя бы один запрос, не двигаем
+	// last_synced_at — иначе потеряем те change'ы, которые не успели
+	// применить (при следующем тике since уже их перескочит).
+	if rateLimitedHits > 0 {
+		slog.Warn("sync: rate limited, last_synced_at не сдвигается",
+			"hits", rateLimitedHits, "since", since)
+		return fmt.Errorf("sync: rate limited (%d запросов 429), повтор на следующем тике", rateLimitedHits)
 	}
 
 	if err := s.store.SetLastSyncedAt(ctx, time.Now().UTC()); err != nil {
