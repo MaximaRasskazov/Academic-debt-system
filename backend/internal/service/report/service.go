@@ -58,6 +58,10 @@ func (s *Service) DebtsSummary(ctx context.Context) ([]DisciplineSummary, error)
 		return nil, fmt.Errorf("summary by discipline: %w", err)
 	}
 
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
 	// Собираем все ID дисциплин одним срезом для батч-запроса.
 	ids := make([]pgtype.UUID, len(rows))
 	for i, r := range rows {
@@ -181,13 +185,15 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 	for id := range teacherUserIDSet {
 		teacherIDs = append(teacherIDs, id)
 	}
-	teacherUsers, err := s.store.ListUsersByIDs(ctx, teacherIDs)
-	if err != nil {
-		return nil, fmt.Errorf("list teacher users: %w", err)
-	}
-	userMap := make(map[pgtype.UUID]queries.User, len(teacherUsers))
-	for _, u := range teacherUsers {
-		userMap[u.ID] = u
+	userMap := make(map[pgtype.UUID]queries.User)
+	if len(teacherIDs) > 0 {
+		teacherUsers, err := s.store.ListUsersByIDs(ctx, teacherIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list teacher users: %w", err)
+		}
+		for _, u := range teacherUsers {
+			userMap[u.ID] = u
+		}
 	}
 
 	// --- сборка результата ---
