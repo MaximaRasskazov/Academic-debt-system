@@ -129,6 +129,9 @@ type Querier interface {
 	// Студент видит свои долги (permission debts.view.own).
 	ListDebtsForStudent(ctx context.Context, studentID pgtype.UUID) ([]Debt, error)
 	ListDisciplines(ctx context.Context, arg ListDisciplinesParams) ([]Discipline, error)
+	// Батч-выборка дисциплин по списку ID. Используется в report.Service
+	// вместо N одиночных GetDisciplineByID.
+	ListDisciplinesByIDs(ctx context.Context, ids []pgtype.UUID) ([]Discipline, error)
 	// Какие дисциплины изучает студент. Используется в личном кабинете
 	// и при создании долга (валидируем, что студент учится на дисциплине).
 	ListDisciplinesForStudent(ctx context.Context, studentID pgtype.UUID) ([]Discipline, error)
@@ -193,6 +196,9 @@ type Querier interface {
 	//
 	// Сортировка по фамилии — так удобнее листать. limit/offset для пагинации.
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
+	// Батч-выборка пользователей по списку ID. Используется в report.Service
+	// вместо N одиночных GetUserByID.
+	ListUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]User, error)
 	ListUsersInRole(ctx context.Context, roleID pgtype.UUID) ([]User, error)
 	MarkAllNotificationsReadForUser(ctx context.Context, userID pgtype.UUID) (int64, error)
 	// Идемпотентно: повторный вызов не перезаписывает read_at.

@@ -57,6 +57,13 @@ AND (sqlc.narg('search')::text    IS NULL OR (
     ))
 AND (sqlc.narg('group_name')::text IS NULL OR u.group_name = sqlc.narg('group_name')::text);
 
+-- name: ListUsersByIDs :many
+-- Батч-выборка пользователей по списку ID. Используется в report.Service
+-- вместо N одиночных GetUserByID.
+SELECT *
+FROM users
+WHERE id = ANY($1::uuid[]);
+
 -- name: UpdateUserPassword :exec
 UPDATE users
 SET password_hash = $2,
