@@ -85,6 +85,11 @@ type Querier interface {
 	// и is_revoked — если is_used=TRUE при попытке refresh, это replay
 	// и сервис должен отозвать все токены пользователя.
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
+	// То же, что GetRefreshTokenByHash, но с блокировкой строки FOR UPDATE.
+	// Используется внутри RunInTx в token.Rotate, чтобы две параллельные
+	// попытки обмена одного refresh не прошли проверку is_used=FALSE
+	// одновременно — второй вызов будет ждать коммита первого.
+	GetRefreshTokenByHashForUpdate(ctx context.Context, tokenHash string) (RefreshToken, error)
 	GetRetakeByID(ctx context.Context, id pgtype.UUID) (Retake, error)
 	GetRetakeChangeRequestByID(ctx context.Context, id pgtype.UUID) (RetakeChangeRequest, error)
 	GetRoleByID(ctx context.Context, id pgtype.UUID) (Role, error)
