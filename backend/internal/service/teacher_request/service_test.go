@@ -2,6 +2,7 @@ package teacher_request_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -155,6 +156,49 @@ func TestTeacherRequest_Reject_ReasonRequired(t *testing.T) {
 
 	_, err = f.svc.Reject(ctx, dean, pgutil.UUID(req.ID), "")
 	require.ErrorIs(t, err, teacherrequest.ErrReasonRequired)
+}
+
+// TestTeacherRequest_Reject_JSONInjection: причина содержит кавычки и
+// escape-символы — audit_log.details должен остаться валидным JSON.
+// Раньше код собирал JSON конкатенацией ('{"reason":"' + reason + '"}'),
+// и такой reason ломал парсер аудита.
+func TestTeacherRequest_Reject_JSONInjection(t *testing.T) {
+	f := setup(t)
+	dean := seedUser(t, f.store, "tr-inj-dean")
+	student := seedUser(t, f.store, "tr-inj-student")
+	attachRole(t, f.store, dean, "dean")
+	ctx := context.Background()
+
+	req, err := f.svc.Create(ctx, student, nil)
+	require.NoError(t, err)
+
+	// Причина с двойной кавычкой, бэкслешем и переводом строки —
+	// все опасные символы для наивной конкатенации.
+	malicious := `","role":"admin","x":"`
+	rejected, err := f.svc.Reject(ctx, dean, pgutil.UUID(req.ID), malicious)
+	require.NoError(t, err)
+	require.Equal(t, "rejected", rejected.Status)
+
+	// Достаём последнюю audit-запись по action и убеждаемся, что
+	// details — валидный JSON и поле reason содержит исходную строку
+	// без обрезаний и подмен.
+	var rawDetails []byte
+	err = f.store.Pool().QueryRow(ctx, `
+		SELECT details FROM audit_log
+		WHERE action = 'teacher_request.reject'
+		  AND target_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, pgutil.UUID(rejected.ID).String()).Scan(&rawDetails)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(rawDetails, &parsed),
+		"audit_log.details должен быть валидным JSON: %s", string(rawDetails))
+	require.Equal(t, malicious, parsed["reason"],
+		"reason должен сохраниться без искажений, без role:admin-инъекции")
+	require.NotContains(t, parsed, "role",
+		"инъекция не должна добавлять чужие поля в details")
 }
 
 func TestTeacherRequest_Approve_NotFound(t *testing.T) {
