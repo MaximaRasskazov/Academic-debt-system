@@ -114,6 +114,45 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	return i, err
 }
 
+const listUsersByIDs = `-- name: ListUsersByIDs :many
+SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
+FROM users
+WHERE id = ANY($1::uuid[])
+`
+
+// Батч-выборка пользователей по списку ID. Используется в report.Service
+// вместо N одиночных GetUserByID.
+func (q *Queries) ListUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsersByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.PasswordHash,
+			&i.FirstName,
+			&i.LastName,
+			&i.MiddleName,
+			&i.Birthday,
+			&i.GroupName,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
 SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
 FROM users

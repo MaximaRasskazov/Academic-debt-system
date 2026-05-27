@@ -88,6 +88,9 @@ func run() error {
 		Password: cfg.SMTPPassword,
 		From:     cfg.SMTPFrom,
 	})
+	// Закрываем email-воркер до pool.Close(): воркер может делать запросы
+	// к БД (GetUserByID для адреса), пул должен быть жив.
+	defer notifySvc.Close()
 
 	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)

@@ -33,6 +33,14 @@ LIMIT $1 OFFSET $2;
 -- name: CountDisciplines :one
 SELECT COUNT(*) FROM disciplines WHERE deleted_at IS NULL;
 
+-- name: ListDisciplinesByIDs :many
+-- Батч-выборка дисциплин по списку ID. Используется в report.Service
+-- вместо N одиночных GetDisciplineByID.
+SELECT *
+FROM disciplines
+WHERE id = ANY($1::uuid[])
+  AND deleted_at IS NULL;
+
 -- name: UpdateDiscipline :one
 UPDATE disciplines
 SET name        = COALESCE(sqlc.narg('name'),        name),

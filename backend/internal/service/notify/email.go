@@ -48,13 +48,59 @@ var subjectByKind = map[string]string{
 	KindRetakeGradeReceived: "Получена оценка за пересдачу",
 }
 
+const emailQueueSize = 100
+
+// emailNotifier отправляет письма через SMTP асинхронно:
+// основной путь (БД + WS) не блокируется на SMTP-соединении.
+// Письма ставятся в буферизованный канал и обрабатываются воркером.
+// При переполнении канала событие дропается с предупреждением в лог —
+// запись в БД к этому моменту уже есть, история уведомления сохранена.
 type emailNotifier struct {
 	cfg   EmailConfig
 	store *repo.Store
+	queue chan Event
+	done  chan struct{}
 }
 
 func newEmailNotifier(cfg EmailConfig, store *repo.Store) *emailNotifier {
-	return &emailNotifier{cfg: cfg, store: store}
+	e := &emailNotifier{
+		cfg:   cfg,
+		store: store,
+		queue: make(chan Event, emailQueueSize),
+		done:  make(chan struct{}),
+	}
+	go e.worker()
+	return e
+}
+
+// enqueue помещает событие в очередь. Не блокирует вызывающего.
+// Если очередь переполнена — логирует и дропает (best-effort канал).
+func (e *emailNotifier) enqueue(ev Event) {
+	select {
+	case e.queue <- ev:
+	default:
+		slog.Warn("notify: email queue full, dropping event",
+			"user_id", ev.UserID, "kind", ev.Kind)
+	}
+}
+
+// close дренирует очередь и останавливает воркер. Вызывается при
+// graceful shutdown сервера — гарантирует отправку писем из буфера.
+func (e *emailNotifier) close() {
+	close(e.queue)
+	<-e.done
+}
+
+// worker читает события из канала до его закрытия.
+// Ошибки SMTP не прерывают воркер — только в лог.
+func (e *emailNotifier) worker() {
+	defer close(e.done)
+	for ev := range e.queue {
+		if err := e.send(context.Background(), ev); err != nil {
+			slog.Warn("notify: email worker send failed",
+				"user_id", ev.UserID, "kind", ev.Kind, "err", err)
+		}
+	}
 }
 
 func (e *emailNotifier) send(ctx context.Context, ev Event) error {

@@ -177,6 +177,43 @@ func TestNotify_ListUnread_ReturnsOnlyUnread(t *testing.T) {
 	require.Equal(t, all[1].ID, unread[0].ID)
 }
 
+// TestNotify_Notify_EmailAsync проверяет, что 100 параллельных вызовов
+// Notify возвращаются быстро: email-канал асинхронный, SMTP не блокирует caller'а.
+// Тест намеренно использует пустой EmailConfig — send() мгновенно вернёт nil,
+// поэтому мы тестируем поведение очереди, а не SMTP.
+func TestNotify_Notify_EmailAsync(t *testing.T) {
+	store, svc := testService(t)
+	defer svc.Close()
+
+	userID := seedUser(t, store, "notify-async")
+	ctx := context.Background()
+
+	const n = 100
+	done := make(chan error, n)
+	start := time.Now()
+
+	for range n {
+		go func() {
+			done <- svc.Notify(ctx, notify.Event{
+				UserID: userID,
+				Kind:   notify.KindRetakeScheduled,
+			})
+		}()
+	}
+
+	for range n {
+		require.NoError(t, <-done)
+	}
+
+	elapsed := time.Since(start)
+	require.Less(t, elapsed, 5*time.Second,
+		"100 параллельных Notify заняли слишком долго: %v", elapsed)
+
+	count, err := svc.CountUnread(ctx, userID)
+	require.NoError(t, err)
+	require.EqualValues(t, n, count, "все уведомления должны быть в БД")
+}
+
 func TestNotify_List_Pagination(t *testing.T) {
 	store, svc := testService(t)
 	userID := seedUser(t, store, "notify-page")

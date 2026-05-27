@@ -51,13 +51,30 @@ type DisciplineSummary struct {
 }
 
 // DebtsSummary возвращает сводку открытых/закрытых долгов по каждой
-// дисциплине вместе с именами. Используется на главном дашборде
-// деканата как агрегат, без пагинации (дисциплин в учебном году
-// обычно десятки).
+// дисциплине вместе с именами. Использует батч-запрос вместо N+1.
 func (s *Service) DebtsSummary(ctx context.Context) ([]DisciplineSummary, error) {
 	rows, err := s.store.SummaryDebtsByDiscipline(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("summary by discipline: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// Собираем все ID дисциплин одним срезом для батч-запроса.
+	ids := make([]pgtype.UUID, len(rows))
+	for i, r := range rows {
+		ids[i] = r.DisciplineID
+	}
+
+	discs, err := s.store.ListDisciplinesByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list disciplines by ids: %w", err)
+	}
+	discMap := make(map[pgtype.UUID]queries.Discipline, len(discs))
+	for _, d := range discs {
+		discMap[d.ID] = d
 	}
 
 	out := make([]DisciplineSummary, 0, len(rows))
@@ -67,12 +84,9 @@ func (s *Service) DebtsSummary(ctx context.Context) ([]DisciplineSummary, error)
 			OpenCount:    r.OpenCount,
 			GradedCount:  r.GradedCount,
 		}
-		// Подтягиваем имя/код одиночными запросами. N+1, но дисциплин
-		// мало (десятки) и кешировать пока избыточно.
-		disc, err := s.store.GetDisciplineByID(ctx, r.DisciplineID)
-		if err == nil {
-			summary.DisciplineName = disc.Name
-			summary.DisciplineCode = disc.Code
+		if d, ok := discMap[r.DisciplineID]; ok {
+			summary.DisciplineName = d.Name
+			summary.DisciplineCode = d.Code
 		}
 		// Если дисциплина soft-deleted — оставляем пустые поля, чтобы
 		// в отчёте отразился factual count "долг был по неактуальной
@@ -110,7 +124,7 @@ type ParticipantInfo struct {
 
 // RetakesForPeriod возвращает детальный список проведённых пересдач
 // за период [from, to). Включает только status='completed' — для
-// архива защит/отчётности.
+// архива защит/отчётности. Использует батч-запросы вместо N+1.
 func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]RetakeReportRow, error) {
 	if !from.Before(to) {
 		return nil, ErrInvalidPeriod
@@ -123,7 +137,66 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 	if err != nil {
 		return nil, fmt.Errorf("list retakes in period: %w", err)
 	}
+	if len(retakes) == 0 {
+		return nil, nil
+	}
 
+	// --- батч дисциплин ---
+	discIDs := make([]pgtype.UUID, len(retakes))
+	for i, r := range retakes {
+		discIDs[i] = r.DisciplineID
+	}
+	discs, err := s.store.ListDisciplinesByIDs(ctx, discIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list disciplines for retakes: %w", err)
+	}
+	discMap := make(map[pgtype.UUID]queries.Discipline, len(discs))
+	for _, d := range discs {
+		discMap[d.ID] = d
+	}
+
+	// --- участники и батч пользователей ---
+	// Сначала собираем всех участников по всем пересдачам,
+	// потом одним запросом тянем нужных преподавателей.
+	type retakeParticipants struct {
+		students []queries.ListStudentParticipantsForRetakeRow
+		teachers []queries.RetakeParticipant
+	}
+	participantsMap := make(map[pgtype.UUID]retakeParticipants, len(retakes))
+
+	teacherUserIDSet := make(map[pgtype.UUID]struct{})
+	for _, r := range retakes {
+		students, err := s.store.ListStudentParticipantsForRetake(ctx, r.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list students for retake %s: %w", pgutil.UUID(r.ID), err)
+		}
+		teachers, err := s.store.ListTeacherParticipantsForRetake(ctx, r.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list teachers for retake %s: %w", pgutil.UUID(r.ID), err)
+		}
+		participantsMap[r.ID] = retakeParticipants{students: students, teachers: teachers}
+		for _, t := range teachers {
+			teacherUserIDSet[t.UserID] = struct{}{}
+		}
+	}
+
+	// Батч-выборка всех преподавателей одним запросом.
+	teacherIDs := make([]pgtype.UUID, 0, len(teacherUserIDSet))
+	for id := range teacherUserIDSet {
+		teacherIDs = append(teacherIDs, id)
+	}
+	userMap := make(map[pgtype.UUID]queries.User)
+	if len(teacherIDs) > 0 {
+		teacherUsers, err := s.store.ListUsersByIDs(ctx, teacherIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list teacher users: %w", err)
+		}
+		for _, u := range teacherUsers {
+			userMap[u.ID] = u
+		}
+	}
+
+	// --- сборка результата ---
 	out := make([]RetakeReportRow, 0, len(retakes))
 	for _, r := range retakes {
 		row := RetakeReportRow{
@@ -135,48 +208,34 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 			CompletedAt:     r.CompletedAt.Time,
 			DurationMinutes: r.DurationMinutes,
 		}
-
-		// Дисциплина.
-		disc, err := s.store.GetDisciplineByID(ctx, r.DisciplineID)
-		if err == nil {
-			row.DisciplineName = disc.Name
-			row.DisciplineCode = disc.Code
+		if d, ok := discMap[r.DisciplineID]; ok {
+			row.DisciplineName = d.Name
+			row.DisciplineCode = d.Code
 		}
 
-		// Студенты с расширенной инфой через специальный JOIN-запрос.
-		students, err := s.store.ListStudentParticipantsForRetake(ctx, r.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list students for retake %s: %w", pgutil.UUID(r.ID), err)
-		}
-		for _, p := range students {
+		p := participantsMap[r.ID]
+		for _, st := range p.students {
 			row.Students = append(row.Students, ParticipantInfo{
-				UserID:    pgutil.UUID(p.UserID),
-				FullName:  fullName(p.LastName, p.FirstName, p.MiddleName),
-				GroupName: p.GroupName,
-				Email:     p.Email,
-				Grade:     p.Grade,
+				UserID:    pgutil.UUID(st.UserID),
+				FullName:  fullName(st.LastName, st.FirstName, st.MiddleName),
+				GroupName: st.GroupName,
+				Email:     st.Email,
+				Grade:     st.Grade,
 			})
 		}
-
-		// Преподаватели + комиссия — без email/group, только имя.
-		teachers, err := s.store.ListTeacherParticipantsForRetake(ctx, r.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list teachers for retake %s: %w", pgutil.UUID(r.ID), err)
-		}
-		for _, p := range teachers {
-			user, err := s.store.GetUserByID(ctx, p.UserID)
-			if err != nil {
-				// Пропускаем участника без user — это data integrity
-				// проблема, но не повод ломать весь отчёт.
+		for _, t := range p.teachers {
+			u, ok := userMap[t.UserID]
+			if !ok {
+				// Пропускаем участника без user — data integrity проблема,
+				// но не повод ломать весь отчёт.
 				continue
 			}
 			row.Teachers = append(row.Teachers, ParticipantInfo{
-				UserID:   pgutil.UUID(p.UserID),
-				FullName: fullName(user.LastName, user.FirstName, user.MiddleName),
-				Email:    user.Email,
+				UserID:   pgutil.UUID(t.UserID),
+				FullName: fullName(u.LastName, u.FirstName, u.MiddleName),
+				Email:    u.Email,
 			})
 		}
-
 		out = append(out, row)
 	}
 	return out, nil
