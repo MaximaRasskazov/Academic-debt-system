@@ -195,6 +195,11 @@ type StudentDiscipline struct {
 	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
 }
 
+type SyncState struct {
+	Key          string             `json:"key"`
+	LastSyncedAt pgtype.Timestamptz `json:"last_synced_at"`
+}
+
 type TeacherDiscipline struct {
 	ID           pgtype.UUID        `json:"id"`
 	TeacherID    pgtype.UUID        `json:"teacher_id"`
