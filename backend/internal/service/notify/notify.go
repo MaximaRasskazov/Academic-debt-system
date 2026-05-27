@@ -81,6 +81,13 @@ func (s *Service) Notify(ctx context.Context, e Event) error {
 	return s.notifier.notify(ctx, e)
 }
 
+// Close останавливает фоновый email-воркер, дожидаясь отправки
+// всех писем из буфера. Вызывать при graceful shutdown сервера,
+// до закрытия пула соединений с БД.
+func (s *Service) Close() {
+	s.notifier.close()
+}
+
 // List возвращает историю уведомлений пользователя с пагинацией.
 func (s *Service) List(ctx context.Context, userID uuid.UUID, limit, offset int32) ([]Notification, error) {
 	rows, err := s.store.ListNotificationsForUser(ctx, queries.ListNotificationsForUserParams{
