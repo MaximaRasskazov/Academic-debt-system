@@ -278,7 +278,12 @@ func TestRetake_Create_201(t *testing.T) {
 
 // ── Start / Complete / Cancel ───────────────────────────────────────────────
 
-func TestRetake_Start_409_InvalidStatus(t *testing.T) {
+func TestRetake_Start_422_InvalidStatus(t *testing.T) {
+	// ErrInvalidStatus → 422 Unprocessable Entity (PR #40 от Андрея).
+	// 409 Conflict зарезервирован под коллизии уникальности
+	// (already_participant, email_taken и т.д.), а попытка стартовать
+	// уже идущую пересдачу — это semantic error в бизнес-логике, не
+	// конкурентный конфликт.
 	stub := &retakeServiceStub{
 		startFn: func(_ context.Context, _, _ uuid.UUID) error {
 			return fmt.Errorf("уже идёт: %w", retake.ErrInvalidStatus)
@@ -288,7 +293,7 @@ func TestRetake_Start_409_InvalidStatus(t *testing.T) {
 	req := withUser(httptest.NewRequest(http.MethodPost,
 		"/api/retakes/"+uuid.New().String()+"/start", nil), uuid.New())
 	retakeFixture(handler.NewRetakeHandler(stub)).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusConflict, rr.Code)
+	require.Equal(t, http.StatusUnprocessableEntity, rr.Code)
 }
 
 func TestRetake_Complete_204(t *testing.T) {
