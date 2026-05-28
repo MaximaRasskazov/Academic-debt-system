@@ -33,7 +33,8 @@ type Querier interface {
 	CountTeachersInRetake(ctx context.Context, retakeID pgtype.UUID) (int64, error)
 	// Badge-counter в шапке UI.
 	CountUnreadForUser(ctx context.Context, userID pgtype.UUID) (int64, error)
-	CountUsers(ctx context.Context) (int64, error)
+	// Считает с теми же фильтрами что и ListUsers — для total в пагинации.
+	CountUsers(ctx context.Context, arg CountUsersParams) (int64, error)
 	// ID генерируется на стороне сервиса (uuid.New()), потому что он же
 	// используется как jti в JWT-claims — необходимо знать значение до
 	// подписи токена.
@@ -188,8 +189,17 @@ type Querier interface {
 	ListTeachersForDiscipline(ctx context.Context, disciplineID pgtype.UUID) ([]User, error)
 	// Для подписки WebSocket-клиента на reconnect: догнать пропущенное.
 	ListUnreadNotificationsForUser(ctx context.Context, userID pgtype.UUID) ([]Notification, error)
-	// Пагинация: LIMIT $1, OFFSET $2. Сортировка по дате создания убывающая
-	// (новые сверху), стабильный tie-break через id.
+	// Список пользователей с опциональными фильтрами. Используется для
+	// админ-панели и для UI деканата (выбор преподавателя при создании
+	// пересдачи, выбор студента для привязки к дисциплине).
+	//
+	// Все фильтры опциональны:
+	//   role_slug   — если задан, отдаём только пользователей с этой ролью
+	//                 (JOIN с role_user + roles WHERE r.slug = ...)
+	//   search      — подстрока (ILIKE) по email, first_name, last_name
+	//   group_name  — точный матч (для отбора студентов по группе)
+	//
+	// Сортировка по фамилии — так удобнее листать. limit/offset для пагинации.
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	// Батч-выборка пользователей по списку ID. Используется в report.Service
 	// вместо N одиночных GetUserByID.

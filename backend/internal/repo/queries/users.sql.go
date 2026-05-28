@@ -12,11 +12,29 @@ import (
 )
 
 const countUsers = `-- name: CountUsers :one
-SELECT COUNT(*) FROM users
+SELECT COUNT(DISTINCT u.id)
+FROM users u
+LEFT JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
+LEFT JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
+WHERE
+    ($1::text IS NULL OR r.slug = $1::text)
+AND ($2::text    IS NULL OR (
+        u.email      ILIKE '%' || $2::text || '%'
+     OR u.first_name ILIKE '%' || $2::text || '%'
+     OR u.last_name  ILIKE '%' || $2::text || '%'
+    ))
+AND ($3::text IS NULL OR u.group_name = $3::text)
 `
 
-func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countUsers)
+type CountUsersParams struct {
+	RoleSlug  *string `json:"role_slug"`
+	Search    *string `json:"search"`
+	GroupName *string `json:"group_name"`
+}
+
+// Считает с теми же фильтрами что и ListUsers — для total в пагинации.
+func (q *Queries) CountUsers(ctx context.Context, arg CountUsersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers, arg.RoleSlug, arg.Search, arg.GroupName)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -154,21 +172,50 @@ func (q *Queries) ListUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]User
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
-FROM users
-ORDER BY created_at DESC, id DESC
-LIMIT $1 OFFSET $2
+SELECT DISTINCT u.id, u.email, u.password_hash, u.first_name, u.last_name, u.middle_name, u.birthday, u.group_name, u.created_at, u.updated_at
+FROM users u
+LEFT JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
+LEFT JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
+WHERE
+    ($1::text IS NULL OR r.slug = $1::text)
+AND ($2::text    IS NULL OR (
+        u.email      ILIKE '%' || $2::text || '%'
+     OR u.first_name ILIKE '%' || $2::text || '%'
+     OR u.last_name  ILIKE '%' || $2::text || '%'
+    ))
+AND ($3::text IS NULL OR u.group_name = $3::text)
+ORDER BY u.last_name ASC, u.first_name ASC, u.id ASC
+LIMIT $5::int OFFSET $4::int
 `
 
 type ListUsersParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	RoleSlug  *string `json:"role_slug"`
+	Search    *string `json:"search"`
+	GroupName *string `json:"group_name"`
+	OffsetN   int32   `json:"offset_n"`
+	LimitN    int32   `json:"limit_n"`
 }
 
-// Пагинация: LIMIT $1, OFFSET $2. Сортировка по дате создания убывающая
-// (новые сверху), стабильный tie-break через id.
+// Список пользователей с опциональными фильтрами. Используется для
+// админ-панели и для UI деканата (выбор преподавателя при создании
+// пересдачи, выбор студента для привязки к дисциплине).
+//
+// Все фильтры опциональны:
+//
+//	role_slug   — если задан, отдаём только пользователей с этой ролью
+//	              (JOIN с role_user + roles WHERE r.slug = ...)
+//	search      — подстрока (ILIKE) по email, first_name, last_name
+//	group_name  — точный матч (для отбора студентов по группе)
+//
+// Сортировка по фамилии — так удобнее листать. limit/offset для пагинации.
 func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error) {
-	rows, err := q.db.Query(ctx, listUsers, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listUsers,
+		arg.RoleSlug,
+		arg.Search,
+		arg.GroupName,
+		arg.OffsetN,
+		arg.LimitN,
+	)
 	if err != nil {
 		return nil, err
 	}

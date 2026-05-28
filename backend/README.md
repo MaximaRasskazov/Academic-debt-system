@@ -68,6 +68,13 @@ backend/
 | POST | `/api/auth/refresh` | — | Обмен refresh-cookie на новый access |
 | POST | `/api/auth/logout` | Auth | Закрытие сессии |
 | GET | `/api/auth/me` | Auth | Профиль + roles + permissions |
+| PATCH | `/api/me` | Auth | Обновить профиль (PATCH-семантика: first_name/last_name/middle_name/group_name/birthday). Email и пароль НЕ через этот endpoint. |
+| POST | `/api/me/password` | Auth | Сменить пароль: body `{current_password, new_password}`. Атомарно ревокует все access-токены пользователя — нужно перелогиниться. 401 при неверном current, 400 при new<8 или совпадающем с current. |
+
+### Users (список — admin / dean)
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| GET | `/api/users?role=&search=&group_name=&limit=&offset=` | `users.view` | Список пользователей с фильтрами. role: student/teacher/dean/admin. search — ILIKE по email/first_name/last_name. group_name — точный матч. Возвращает `{items, total, limit, offset}` с прикреплёнными ролями. |
 
 ### Disciplines
 | Метод | Путь | Permission | Назначение |

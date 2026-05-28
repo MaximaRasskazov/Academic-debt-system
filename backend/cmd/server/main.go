@@ -38,6 +38,7 @@ import (
 	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
+	usersvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
 
@@ -79,6 +80,7 @@ func run() error {
 	reportSvc := report.New(store)
 
 	teacherRequestSvc := teacherrequest.New(store, rbacSvc)
+	usersSvc := usersvc.New(store)
 
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
@@ -155,6 +157,7 @@ func run() error {
 		NotifyHub:       notifyHub,
 		TeacherRequests: teacherRequestSvc,
 		Sync:            syncSvc,
+		Users:           usersSvc,
 	})
 
 	srv := &http.Server{

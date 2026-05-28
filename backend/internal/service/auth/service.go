@@ -41,6 +41,8 @@ var (
 	ErrPasswordTooShort   = errors.New("auth: пароль слишком короткий")
 	ErrInvalidCredentials = errors.New("auth: неверный email или пароль")
 	ErrUserNotFound       = errors.New("auth: пользователь не найден")
+	ErrInvalidPassword    = errors.New("auth: текущий пароль неверен")
+	ErrSamePassword       = errors.New("auth: новый пароль совпадает с текущим")
 )
 
 // Service — обёртка над хранилищем и TokenService.
