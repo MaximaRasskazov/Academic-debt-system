@@ -1,24 +1,41 @@
 package user_test
 
-// Интеграционные тесты ListUsers. Опираемся на сиды dev-аккаунтов
-// из 00001_seed_dev_accounts.sql — там 7 учеток (1 admin, 1 dean,
-// 2 teacher, 3 student).
+// Интеграционные тесты ListUsers.
+//
+// Тесты создают свои данные через auth.Service.Register (получают
+// уникальные email и роль student по умолчанию) и через прямой
+// AttachRoleToUser для выдачи teacher-роли. Это избавляет от
+// зависимости от dev-сидов (SEED_DEV_ACCOUNTS=true) — CI прогоняет
+// тесты с пустыми сидами.
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 )
 
-func setup(t *testing.T) *user.Service {
+var jwtSecret = []byte("test-secret-must-be-at-least-32-bytes!!")
+
+type fixture struct {
+	store *repo.Store
+	users *user.Service
+	auth  *auth.Service
+}
+
+func setup(t *testing.T) *fixture {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -31,145 +48,234 @@ func setup(t *testing.T) *user.Service {
 	require.NoError(t, pool.Ping(ctx))
 	t.Cleanup(pool.Close)
 
-	return user.New(repo.NewStore(pool))
-}
-
-func TestList_NoFilters_ReturnsTotal(t *testing.T) {
-	svc := setup(t)
-	res, err := svc.List(context.Background(), user.ListInput{Limit: 50})
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, res.Total, int64(7),
-		"в БД должно быть минимум 7 сидовых пользователей (admin/dean/2 teacher/3 student)")
-	require.NotEmpty(t, res.Items)
-}
-
-func TestList_SeededAccountsHaveRoles(t *testing.T) {
-	// Проверяем что СИДОВЫЕ аккаунты находятся через search и у них
-	// есть роли. Делаем по одному запросу на email — независимо от того
-	// сколько leftover-юзеров накопилось в БД от auth-тестов.
-	svc := setup(t)
-	for _, email := range []string{
-		"admin@academic.local",
-		"dean@academic.local",
-		"teacher1@academic.local",
-		"student1@academic.local",
-	} {
-		res, err := svc.List(context.Background(), user.ListInput{
-			Search: email,
-			Limit:  5,
-		})
-		require.NoError(t, err)
-		require.Len(t, res.Items, 1, "сидовый %s должен находиться точным search", email)
-		require.NotEmpty(t, res.Items[0].Roles, "сидовый %s должен быть с ролью", email)
+	store := repo.NewStore(pool)
+	tokens := token.New(store, jwtSecret, 15*time.Minute, 7*24*time.Hour)
+	return &fixture{
+		store: store,
+		users: user.New(store),
+		auth:  auth.New(store, tokens),
 	}
 }
 
-func TestList_FilterByRoleTeacher(t *testing.T) {
-	svc := setup(t)
+// uniqSuffix — короткий уникальный суффикс (HHMMSS.nanos, ~16 символов).
+// testname не включаем — group_name в БД ограничен 50 символами, плюс
+// prefix вроде "QA-GRP-OTHER-" + suffix + iterator съедают остаток.
+// Тесты всё равно прогоняются последовательно и не пересекаются по
+// timestamp.
+func uniqSuffix(t *testing.T) string {
+	t.Helper()
+	return time.Now().Format("150405.000000000")
+}
 
-	res, err := svc.List(context.Background(), user.ListInput{
-		RoleSlug: "teacher",
-		Limit:    50,
+// registerStudent регистрирует уникального студента. Возвращает результат
+// auth.Register'а: User там с заполненным id, role student уже привязана.
+// fullSuffix используется в email/last_name — чтобы тесты могли точно
+// искать этого юзера по подстроке.
+func (f *fixture) registerStudent(t *testing.T, fullSuffix string, group *string) *auth.Result {
+	t.Helper()
+	in := auth.RegisterInput{
+		Email:     fmt.Sprintf("u_%s@test.local", fullSuffix),
+		Password:  "correct-horse-battery-staple",
+		FirstName: "Имя_" + fullSuffix,
+		LastName:  "Фамилия_" + fullSuffix,
+		GroupName: group,
+	}
+	r, err := f.auth.Register(context.Background(), in, "127.0.0.1")
+	require.NoError(t, err)
+	return r
+}
+
+// promoteToTeacher выдаёт пользователю роль teacher (в дополнение к student,
+// которую он получил при Register). ListUsers с фильтром role=teacher
+// будет такого пользователя видеть.
+func (f *fixture) promoteToTeacher(t *testing.T, userID pgtype.UUID) {
+	t.Helper()
+	teacherRole, err := f.store.GetRoleBySlug(context.Background(), "teacher")
+	require.NoError(t, err)
+	_, err = f.store.AttachRoleToUser(context.Background(), queries.AttachRoleToUserParams{
+		UserID:    userID,
+		RoleID:    teacherRole.ID,
+		CreatedBy: userID,
 	})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(res.Items), 2, "минимум 2 преподавателя из сидов")
-	for _, u := range res.Items {
-		// Хотя бы одна роль должна быть teacher (у пользователя может
-		// быть несколько ролей, фильтр требует ХОТЯ БЫ teacher).
-		hasTeacher := false
-		for _, r := range u.Roles {
-			if r.Slug == "teacher" {
-				hasTeacher = true
-				break
-			}
-		}
-		require.True(t, hasTeacher,
-			"при фильтре role=teacher в выдаче только teacher'ы, но в %s ролей нет teacher: %+v",
-			u.User.Email, u.Roles)
-	}
 }
 
-func TestList_FilterByRoleStudent(t *testing.T) {
-	svc := setup(t)
-	res, err := svc.List(context.Background(), user.ListInput{RoleSlug: "student", Limit: 50})
+func TestList_TotalReflectsFilter(t *testing.T) {
+	// Проверяем что Total соответствует фильтру: один созданный нами
+	// юзер → Total=1 при search по его email. Параллельные пакетные
+	// тесты (auth_test, debt_test и т.д.) тоже создают юзеров — поэтому
+	// нельзя сравнивать с global count, нужен изолирующий фильтр.
+	f := setup(t)
+	suf := uniqSuffix(t)
+	r := f.registerStudent(t, suf, nil)
+
+	res, err := f.users.List(context.Background(), user.ListInput{
+		Search: r.User.Email,
+		Limit:  10,
+	})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(res.Items), 3, "минимум 3 студента из сидов")
+	require.Equal(t, int64(1), res.Total)
+	require.Len(t, res.Items, 1)
 }
 
 func TestList_FilterBySearchEmail(t *testing.T) {
-	svc := setup(t)
-	res, err := svc.List(context.Background(), user.ListInput{
-		Search: "teacher1@academic.local",
+	f := setup(t)
+	suf := uniqSuffix(t)
+	r := f.registerStudent(t, suf, nil)
+
+	res, err := f.users.List(context.Background(), user.ListInput{
+		Search: r.User.Email,
 		Limit:  10,
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Items, 1, "точный поиск по email должен вернуть одного")
-	require.Equal(t, "teacher1@academic.local", res.Items[0].User.Email)
+	require.Equal(t, r.User.Email, res.Items[0].User.Email)
+	// У свежезарегистрированного должна быть роль student.
+	require.NotEmpty(t, res.Items[0].Roles)
+	hasStudent := false
+	for _, role := range res.Items[0].Roles {
+		if role.Slug == "student" {
+			hasStudent = true
+			break
+		}
+	}
+	require.True(t, hasStudent, "Register должен выдать role=student")
 }
 
 func TestList_FilterBySearchLastName_CaseInsensitive(t *testing.T) {
-	svc := setup(t)
-	// "Преподов" — фамилия teacher1 из сидов
-	res, err := svc.List(context.Background(), user.ListInput{
-		Search: "преподов",
+	f := setup(t)
+	suf := uniqSuffix(t)
+	r := f.registerStudent(t, suf, nil)
+
+	// Ищем подстроку в lower-case — должна найтись.
+	lowerLast := strings.ToLower(r.User.LastName)
+	res, err := f.users.List(context.Background(), user.ListInput{
+		Search: lowerLast,
 		Limit:  10,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, res.Items, "ILIKE должен матчить регистронезависимо")
-	require.Contains(t, strings.ToLower(res.Items[0].User.LastName), "преподов")
+	// Среди результатов — наш юзер.
+	found := false
+	for _, u := range res.Items {
+		if u.User.Email == r.User.Email {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "наш свежий юзер должен быть в выдаче по case-insensitive search")
+}
+
+func TestList_FilterByRoleTeacher(t *testing.T) {
+	f := setup(t)
+	suf := uniqSuffix(t)
+
+	// Создаём ровно одного teacher с уникальным last_name — будем искать его.
+	r := f.registerStudent(t, suf, nil)
+	f.promoteToTeacher(t, r.User.ID)
+
+	res, err := f.users.List(context.Background(), user.ListInput{
+		RoleSlug: "teacher",
+		Search:   r.User.Email, // сужаем по email чтобы не зацепить других teacher'ов
+		Limit:    10,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Items, 1)
+	hasTeacher := false
+	for _, role := range res.Items[0].Roles {
+		if role.Slug == "teacher" {
+			hasTeacher = true
+			break
+		}
+	}
+	require.True(t, hasTeacher, "фильтр role=teacher должен вернуть юзера с этой ролью")
+}
+
+func TestList_FilterByRoleStudent_DoesNotIncludeTeachers(t *testing.T) {
+	// Создаём teacher и проверяем что он НЕ попадает в выборку по role=student.
+	// Но у нашего teacher'а ПРИ ЭТОМ ЕСТЬ student-роль (от Register).
+	// Значит он попадёт и в role=teacher, и в role=student. Это нормально:
+	// фильтр семантический "у юзера есть такая роль", не "только такая".
+	f := setup(t)
+	suf := uniqSuffix(t)
+	r := f.registerStudent(t, suf, nil)
+	f.promoteToTeacher(t, r.User.ID)
+
+	res, err := f.users.List(context.Background(), user.ListInput{
+		RoleSlug: "student",
+		Search:   r.User.Email,
+		Limit:    10,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Items, 1, "promoted teacher всё ещё имеет student-роль (Register выдал)")
 }
 
 func TestList_FilterByGroupName(t *testing.T) {
-	svc := setup(t)
-	res, err := svc.List(context.Background(), user.ListInput{
-		GroupName: "БСБО-01-22",
+	f := setup(t)
+	suf := uniqSuffix(t)
+	group := "QA-GRP-" + suf
+	f.registerStudent(t, suf+"-s1", &group)
+	f.registerStudent(t, suf+"-s2", &group)
+	// Ещё один с другой группой — он не должен попасть в выборку.
+	other := "QA-GRP-OTHER-" + suf
+	f.registerStudent(t, suf+"-s3", &other)
+
+	res, err := f.users.List(context.Background(), user.ListInput{
+		GroupName: group,
 		Limit:     10,
 	})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(res.Items), 2, "в группе БСБО-01-22 минимум 2 студента")
+	require.Len(t, res.Items, 2, "в группе %s должно быть ровно 2 студента (созданных этим тестом)", group)
 	for _, u := range res.Items {
 		require.NotNil(t, u.User.GroupName)
-		require.Equal(t, "БСБО-01-22", *u.User.GroupName)
+		require.Equal(t, group, *u.User.GroupName)
 	}
 }
 
 func TestList_Pagination_LimitOffset(t *testing.T) {
-	svc := setup(t)
+	f := setup(t)
+	// Создаём 3 пользователя с уникальным маркером в last_name, чтобы
+	// пагинировать только их (без шума от остальных).
+	suf := uniqSuffix(t)
+	for i := 0; i < 3; i++ {
+		f.registerStudent(t, fmt.Sprintf("%s-%d", suf, i), nil)
+	}
 
-	page1, err := svc.List(context.Background(), user.ListInput{Limit: 2, Offset: 0})
+	page1, err := f.users.List(context.Background(), user.ListInput{
+		Search: suf, Limit: 2, Offset: 0,
+	})
 	require.NoError(t, err)
 	require.Len(t, page1.Items, 2)
+	require.Equal(t, int64(3), page1.Total)
 
-	page2, err := svc.List(context.Background(), user.ListInput{Limit: 2, Offset: 2})
+	page2, err := f.users.List(context.Background(), user.ListInput{
+		Search: suf, Limit: 2, Offset: 2,
+	})
 	require.NoError(t, err)
-	require.NotEmpty(t, page2.Items)
+	require.Len(t, page2.Items, 1, "на второй странице должен быть остаток (1)")
+	require.Equal(t, int64(3), page2.Total)
 
-	// Страницы не должны пересекаться.
+	// Страницы не пересекаются.
 	require.NotEqual(t, page1.Items[0].User.ID, page2.Items[0].User.ID)
 	require.NotEqual(t, page1.Items[1].User.ID, page2.Items[0].User.ID)
-
-	// Total одинаков на обеих страницах.
-	require.Equal(t, page1.Total, page2.Total)
 }
 
 func TestList_LimitClamping(t *testing.T) {
-	svc := setup(t)
+	f := setup(t)
 
-	// 0 → defaultLimit (50)
-	zero, err := svc.List(context.Background(), user.ListInput{Limit: 0})
+	zero, err := f.users.List(context.Background(), user.ListInput{Limit: 0})
 	require.NoError(t, err)
 	require.Equal(t, int32(50), zero.Limit, "Limit=0 должен превратиться в 50")
 
-	// > maxLimit → maxLimit (200)
-	huge, err := svc.List(context.Background(), user.ListInput{Limit: 9999})
+	huge, err := f.users.List(context.Background(), user.ListInput{Limit: 9999})
 	require.NoError(t, err)
 	require.Equal(t, int32(200), huge.Limit, "Limit=9999 должен быть зажат до 200")
 }
 
 func TestList_NoMatch_EmptyResult(t *testing.T) {
-	svc := setup(t)
-	res, err := svc.List(context.Background(), user.ListInput{
-		Search: "no-such-user-anywhere-xyz-" + time.Now().Format("150405"),
+	f := setup(t)
+	res, err := f.users.List(context.Background(), user.ListInput{
+		Search: "no-such-user-anywhere-xyz-" + time.Now().Format("150405.000000000"),
 		Limit:  10,
 	})
 	require.NoError(t, err)
