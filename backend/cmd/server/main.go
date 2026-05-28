@@ -22,6 +22,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
@@ -29,6 +30,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacherrequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
 )
@@ -71,6 +73,8 @@ func run() error {
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc)
 	retakeSvc := retake.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
+	teacherReqSvc := teacherrequest.New(store)
+	changeReqSvc := changerequest.New(store)
 
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
@@ -93,6 +97,8 @@ func run() error {
 		Reports:     reportSvc,
 		Notify:      notifySvc,
 		NotifyHub:   notifyHub,
+		TeacherReqs: teacherReqSvc,
+		ChangeReqs:  changeReqSvc,
 	})
 
 	srv := &http.Server{

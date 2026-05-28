@@ -15,12 +15,14 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacherrequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
@@ -30,17 +32,19 @@ import (
 // Сделано отдельной структурой, чтобы main.go не разрастался
 // сигнатурой NewRouter(a, b, c, d, ...).
 type Deps struct {
-	Cfg         *config.Config
-	Pool        *pgxpool.Pool
-	Auth        *auth.Service
-	Tokens      *token.Service
-	RBAC        *rbac.Service
-	Disciplines *discipline.Service
-	Debts       *debt.Service
-	Retakes     *retake.Service
-	Reports     *report.Service
-	Notify      *notify.Service
-	NotifyHub   *notify.Hub
+	Cfg            *config.Config
+	Pool           *pgxpool.Pool
+	Auth           *auth.Service
+	Tokens         *token.Service
+	RBAC           *rbac.Service
+	Disciplines    *discipline.Service
+	Debts          *debt.Service
+	Retakes        *retake.Service
+	Reports        *report.Service
+	Notify         *notify.Service
+	NotifyHub      *notify.Hub
+	TeacherReqs    *teacherrequest.Service
+	ChangeReqs     *changerequest.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
@@ -80,6 +84,8 @@ func NewRouter(d Deps) http.Handler {
 		mountRetakes(r, d)
 		mountReports(r, d)
 		mountNotificationsREST(r, d)
+		mountTeacherRequests(r, d)
+		mountChangeRequests(r, d)
 	})
 
 	// WebSocket — без таймаута, соединение живёт пока клиент не отключится.
@@ -275,6 +281,32 @@ func mountNotificationsREST(r chi.Router, d Deps) {
 func mountNotificationsWS(r chi.Router, d Deps) {
 	wsH := handler.NewWSHandler(d.Tokens, d.Notify, d.NotifyHub, d.Cfg.AllowedOrigins)
 	r.Get("/ws/notifications", wsH.ServeNotifications)
+}
+
+// mountTeacherRequests регистрирует /api/teacher-requests/*.
+// Просмотр и ревью — только деканат (teacher_request.review).
+func mountTeacherRequests(r chi.Router, d Deps) {
+	h := handler.NewTeacherRequestHandler(d.TeacherReqs)
+	r.Route("/api/teacher-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "teacher_request.review"))
+		r.Get("/", h.ListPending)
+		r.Post("/{id}/approve", h.Approve)
+		r.Post("/{id}/reject", h.Reject)
+	})
+}
+
+// mountChangeRequests регистрирует /api/retake-change-requests/*.
+// Просмотр и ревью — только деканат (retakes.approve_change).
+func mountChangeRequests(r chi.Router, d Deps) {
+	h := handler.NewChangeRequestHandler(d.ChangeReqs)
+	r.Route("/api/retake-change-requests", func(r chi.Router) {
+		r.Use(mw.Auth(d.Tokens))
+		r.Use(mw.RequirePermission(d.RBAC, "retakes.approve_change"))
+		r.Get("/", h.ListPending)
+		r.Post("/{id}/approve", h.Approve)
+		r.Post("/{id}/reject", h.Reject)
+	})
 }
 
 // healthHandler — копия логики из cmd/server/main.go, вынесенная в
