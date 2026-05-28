@@ -87,6 +87,27 @@ type Claims struct {
 // Issue создаёт новую пару access+refresh для userID. ip опционален,
 // записывается в access_tokens для аудита (история сессий).
 func (s *Service) Issue(ctx context.Context, userID uuid.UUID, ip string) (*Pair, error) {
+	var pair *Pair
+	err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		p, err := s.issueTx(ctx, q, userID, ip)
+		if err != nil {
+			return err
+		}
+		pair = p
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pair, nil
+}
+
+// issueTx — внутренняя версия Issue, работающая в уже открытой транзакции.
+// Используется напрямую из Rotate, чтобы создание новой пары и пометка
+// старого refresh шли в одной транзакции с FOR UPDATE-блокировкой.
+// Иначе между rollover и issue вклинивается параллельный replay-detect
+// и не успевает ревокнуть только что созданный новый access.
+func (s *Service) issueTx(ctx context.Context, q *queries.Queries, userID uuid.UUID, ip string) (*Pair, error) {
 	accessID := uuid.New()
 	now := s.now().UTC()
 	accessExpires := now.Add(s.accessTTL)
@@ -96,38 +117,26 @@ func (s *Service) Issue(ctx context.Context, userID uuid.UUID, ip string) (*Pair
 	if err != nil {
 		return nil, fmt.Errorf("sign access: %w", err)
 	}
-
 	refreshPlain, err := generateRefreshToken()
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh: %w", err)
 	}
 
-	accessHash := hashToken(accessJWT)
-	refreshHash := hashToken(refreshPlain)
-
-	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		_, err := q.CreateAccessToken(ctx, queries.CreateAccessTokenParams{
-			ID:        pgutil.PgUUID(accessID),
-			UserID:    pgutil.PgUUID(userID),
-			TokenHash: accessHash,
-			ExpiresAt: pgtype.Timestamptz{Time: accessExpires, Valid: true},
-			IpAddress: stringPtr(ip),
-		})
-		if err != nil {
-			return fmt.Errorf("insert access: %w", err)
-		}
-		_, err = q.CreateRefreshToken(ctx, queries.CreateRefreshTokenParams{
-			AccessTokenID: pgutil.PgUUID(accessID),
-			TokenHash:     refreshHash,
-			ExpiresAt:     pgtype.Timestamptz{Time: refreshExpires, Valid: true},
-		})
-		if err != nil {
-			return fmt.Errorf("insert refresh: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	if _, err := q.CreateAccessToken(ctx, queries.CreateAccessTokenParams{
+		ID:        pgutil.PgUUID(accessID),
+		UserID:    pgutil.PgUUID(userID),
+		TokenHash: hashToken(accessJWT),
+		ExpiresAt: pgtype.Timestamptz{Time: accessExpires, Valid: true},
+		IpAddress: stringPtr(ip),
+	}); err != nil {
+		return nil, fmt.Errorf("insert access: %w", err)
+	}
+	if _, err := q.CreateRefreshToken(ctx, queries.CreateRefreshTokenParams{
+		AccessTokenID: pgutil.PgUUID(accessID),
+		TokenHash:     hashToken(refreshPlain),
+		ExpiresAt:     pgtype.Timestamptz{Time: refreshExpires, Valid: true},
+	}); err != nil {
+		return nil, fmt.Errorf("insert refresh: %w", err)
 	}
 
 	return &Pair{
@@ -186,6 +195,7 @@ func (s *Service) Rotate(ctx context.Context, refreshPlain, ip string) (*Pair, e
 		userID    uuid.UUID
 		rotateErr error
 		replay    bool
+		newPair   *Pair
 	)
 
 	err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
@@ -223,9 +233,12 @@ func (s *Service) Rotate(ctx context.Context, refreshPlain, ip string) (*Pair, e
 			return rotateErr
 		}
 
-		// Помечаем старый refresh использованным и ревокуем старый
-		// access — атомарный rollover внутри той же транзакции,
+		// Помечаем старый refresh использованным, ревокуем старый
+		// access и СРАЗУ ЖЕ создаём новую пару — всё в одной транзакции,
 		// которая держит FOR UPDATE-блокировку на строке refresh.
+		// Это критично для безопасности: иначе параллельный replay-detect
+		// другого вызова Rotate может выполниться МЕЖДУ rollover и issue,
+		// и не поймать только что созданный access (он ещё не в БД).
 		if err := q.MarkRefreshTokenUsed(ctx, row.ID); err != nil {
 			return fmt.Errorf("mark used: %w", err)
 		}
@@ -234,12 +247,23 @@ func (s *Service) Rotate(ctx context.Context, refreshPlain, ip string) (*Pair, e
 		}
 
 		userID = pgutil.UUID(access.UserID)
+
+		p, err := s.issueTx(ctx, q, userID, ip)
+		if err != nil {
+			return fmt.Errorf("issue new pair: %w", err)
+		}
+		newPair = p
 		return nil
 	})
 
 	if replay {
 		// Транзакция откатилась, но мы знаем userID — ревокуем все
 		// access-токены отдельной операцией, разрывая сессию атакующего.
+		// На этот момент успешный параллельный Rotate (если он был)
+		// уже закоммитил свою транзакцию с новой парой — наш revoke
+		// сразу поймает и старые, и только что выданные access-токены,
+		// потому что обе операции идут после FOR UPDATE-локка одной
+		// и той же строки refresh.
 		_ = s.store.RevokeAllAccessTokensForUser(ctx, pgutil.PgUUID(userID))
 		return nil, ErrRefreshReplay
 	}
@@ -250,7 +274,7 @@ func (s *Service) Rotate(ctx context.Context, refreshPlain, ip string) (*Pair, e
 		return nil, fmt.Errorf("rotate tx: %w", err)
 	}
 
-	return s.Issue(ctx, userID, ip)
+	return newPair, nil
 }
 
 // Revoke отзывает конкретный access-токен (logout текущей сессии).
