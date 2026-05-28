@@ -1,118 +1,97 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import http from '../api/http'
 
 const sidebarOpen = ref(false)
 
-/* ─── Mock data (48 пользователей) ──────────────────────────── */
-const ALL_USERS = [
-  /* Деканат */
-  { id: 1,  role: 'DEAN',    lastName: 'Смирнова',    firstName: 'Татьяна',    middleName: 'Викторовна',    group: null,     email: 'smirnova@university.ru',    avatar: null },
-  { id: 2,  role: 'DEAN',    lastName: 'Крылов',      firstName: 'Игорь',      middleName: 'Петрович',      group: null,     email: 'krylov@university.ru',      avatar: null },
-  /* Преподаватели */
-  { id: 3,  role: 'TEACHER', lastName: 'Иванов',      firstName: 'Иван',       middleName: 'Иванович',      group: null,     email: 'ivanov@university.ru',      avatar: null },
-  { id: 4,  role: 'TEACHER', lastName: 'Волков',      firstName: 'Владимир',   middleName: 'Иванович',      group: null,     email: 'volkov@university.ru',      avatar: null },
-  { id: 5,  role: 'TEACHER', lastName: 'Белов',       firstName: 'Алексей',    middleName: 'Николаевич',    group: null,     email: 'belov@university.ru',       avatar: null },
-  { id: 6,  role: 'TEACHER', lastName: 'Смирнов',     firstName: 'Сергей',     middleName: 'Сергеевич',     group: null,     email: 'smirnov.s@university.ru',   avatar: null },
-  { id: 7,  role: 'TEACHER', lastName: 'Кузнецов',    firstName: 'Андрей',     middleName: 'Владимирович',  group: null,     email: 'kuznetsov@university.ru',   avatar: null },
-  { id: 8,  role: 'TEACHER', lastName: 'Попов',       firstName: 'Николай',    middleName: 'Михайлович',    group: null,     email: 'popov@university.ru',       avatar: null },
-  { id: 9,  role: 'TEACHER', lastName: 'Орлова',      firstName: 'Елена',      middleName: 'Дмитриевна',    group: null,     email: 'orlova@university.ru',      avatar: null },
-  { id: 10, role: 'TEACHER', lastName: 'Захаров',     firstName: 'Михаил',     middleName: 'Алексеевич',    group: null,     email: 'zakharov.m@university.ru',  avatar: null },
-  /* Студенты — ИВТ-21 */
-  { id: 11, role: 'STUDENT', lastName: 'Петров',      firstName: 'Алексей',    middleName: 'Сергеевич',     group: 'ИВТ-21', email: 'petrov@student.ru',         avatar: null },
-  { id: 12, role: 'STUDENT', lastName: 'Сидорова',    firstName: 'Мария',      middleName: 'Ивановна',      group: 'ИВТ-21', email: 'sidorova@student.ru',       avatar: null },
-  { id: 13, role: 'STUDENT', lastName: 'Козлов',      firstName: 'Дмитрий',    middleName: 'Александрович', group: 'ИВТ-21', email: 'kozlov@student.ru',         avatar: null },
-  { id: 14, role: 'STUDENT', lastName: 'Новикова',    firstName: 'Анна',       middleName: 'Петровна',      group: 'ИВТ-21', email: 'novikova@student.ru',       avatar: null },
-  { id: 15, role: 'STUDENT', lastName: 'Морозов',     firstName: 'Антон',      middleName: 'Викторович',    group: 'ИВТ-21', email: 'morozov@student.ru',        avatar: null },
-  { id: 16, role: 'STUDENT', lastName: 'Волкова',     firstName: 'Ирина',      middleName: 'Сергеевна',     group: 'ИВТ-21', email: 'volkova@student.ru',        avatar: null },
-  { id: 17, role: 'STUDENT', lastName: 'Соколов',     firstName: 'Денис',      middleName: 'Олегович',      group: 'ИВТ-21', email: 'sokolov@student.ru',        avatar: null },
-  { id: 18, role: 'STUDENT', lastName: 'Герасимов',   firstName: 'Евгений',    middleName: 'Андреевич',     group: 'ИВТ-21', email: 'gerasimov@student.ru',      avatar: null },
-  /* Студенты — ИВТ-22 */
-  { id: 19, role: 'STUDENT', lastName: 'Захаров',     firstName: 'Павел',      middleName: 'Алексеевич',    group: 'ИВТ-22', email: 'zakharov@student.ru',       avatar: null },
-  { id: 20, role: 'STUDENT', lastName: 'Чернова',     firstName: 'Ольга',      middleName: 'Сергеевна',     group: 'ИВТ-22', email: 'chernova@student.ru',       avatar: null },
-  { id: 21, role: 'STUDENT', lastName: 'Орлов',       firstName: 'Максим',     middleName: 'Дмитриевич',    group: 'ИВТ-22', email: 'orlov@student.ru',          avatar: null },
-  { id: 22, role: 'STUDENT', lastName: 'Крылова',     firstName: 'Виктория',   middleName: 'Олеговна',      group: 'ИВТ-22', email: 'krylova@student.ru',        avatar: null },
-  { id: 23, role: 'STUDENT', lastName: 'Тихонова',    firstName: 'Юлия',       middleName: 'Андреевна',     group: 'ИВТ-22', email: 'tikhonova@student.ru',      avatar: null },
-  { id: 24, role: 'STUDENT', lastName: 'Абрамов',     firstName: 'Илья',       middleName: 'Николаевич',    group: 'ИВТ-22', email: 'abramov@student.ru',        avatar: null },
-  { id: 25, role: 'STUDENT', lastName: 'Васильева',   firstName: 'Светлана',   middleName: 'Олеговна',      group: 'ИВТ-22', email: 'vasilieva@student.ru',      avatar: null },
-  { id: 26, role: 'STUDENT', lastName: 'Калинина',    firstName: 'Алина',      middleName: 'Романовна',     group: 'ИВТ-22', email: 'kalinina@student.ru',       avatar: null },
-  /* Студенты — ИВТ-23 */
-  { id: 27, role: 'STUDENT', lastName: 'Михайлова',   firstName: 'Екатерина',  middleName: 'Юрьевна',       group: 'ИВТ-23', email: 'mikhailova@student.ru',     avatar: null },
-  { id: 28, role: 'STUDENT', lastName: 'Орешников',   firstName: 'Борис',      middleName: 'Александрович', group: 'ИВТ-23', email: 'oreshnikov@student.ru',     avatar: null },
-  { id: 29, role: 'STUDENT', lastName: 'Лебедев',     firstName: 'Артём',      middleName: 'Сергеевич',     group: 'ИВТ-23', email: 'lebedev@student.ru',        avatar: null },
-  { id: 30, role: 'STUDENT', lastName: 'Морозова',    firstName: 'Алина',      middleName: 'Петровна',      group: 'ИВТ-23', email: 'morozova@student.ru',       avatar: null },
-  { id: 31, role: 'STUDENT', lastName: 'Соколова',    firstName: 'Дарья',      middleName: 'Денисовна',     group: 'ИВТ-23', email: 'sokolova@student.ru',       avatar: null },
-  { id: 32, role: 'STUDENT', lastName: 'Никитин',     firstName: 'Роман',      middleName: 'Игоревич',      group: 'ИВТ-23', email: 'nikitin@student.ru',        avatar: null },
-  { id: 33, role: 'STUDENT', lastName: 'Щербаков',    firstName: 'Николай',    middleName: 'Иванович',      group: 'ИВТ-23', email: 'shcherbakov@student.ru',    avatar: null },
-  /* Студенты — ФИЗ-21 */
-  { id: 34, role: 'STUDENT', lastName: 'Семёнов',     firstName: 'Кирилл',     middleName: 'Андреевич',     group: 'ФИЗ-21', email: 'semenov@student.ru',        avatar: null },
-  { id: 35, role: 'STUDENT', lastName: 'Голубева',    firstName: 'Мария',      middleName: 'Константиновна',group: 'ФИЗ-21', email: 'golubeva@student.ru',       avatar: null },
-  { id: 36, role: 'STUDENT', lastName: 'Зайцев',      firstName: 'Никита',     middleName: 'Леонидович',    group: 'ФИЗ-21', email: 'zaitsev@student.ru',        avatar: null },
-  { id: 37, role: 'STUDENT', lastName: 'Виноградов',  firstName: 'Степан',     middleName: 'Евгеньевич',    group: 'ФИЗ-21', email: 'vinogradov@student.ru',     avatar: null },
-  { id: 38, role: 'STUDENT', lastName: 'Ковалёва',    firstName: 'Полина',     middleName: 'Андреевна',     group: 'ФИЗ-21', email: 'kovaleva@student.ru',       avatar: null },
-  { id: 39, role: 'STUDENT', lastName: 'Медведев',    firstName: 'Данил',      middleName: 'Сергеевич',     group: 'ФИЗ-21', email: 'medvedev@student.ru',       avatar: null },
-  /* Студенты — ФИЗ-22 */
-  { id: 40, role: 'STUDENT', lastName: 'Федоров',     firstName: 'Игорь',      middleName: 'Борисович',     group: 'ФИЗ-22', email: 'fedorov@student.ru',        avatar: null },
-  { id: 41, role: 'STUDENT', lastName: 'Лебедева',    firstName: 'Надежда',    middleName: 'Сергеевна',     group: 'ФИЗ-22', email: 'lebedeva@student.ru',       avatar: null },
-  { id: 42, role: 'STUDENT', lastName: 'Крылов',      firstName: 'Виктор',     middleName: 'Олегович',      group: 'ФИЗ-22', email: 'krylov.v@student.ru',       avatar: null },
-  /* Студенты — ЭКО-22 */
-  { id: 43, role: 'STUDENT', lastName: 'Степанова',   firstName: 'Анастасия',  middleName: 'Михайловна',    group: 'ЭКО-22', email: 'stepanova@student.ru',      avatar: null },
-  { id: 44, role: 'STUDENT', lastName: 'Андреев',     firstName: 'Глеб',       middleName: 'Викторович',    group: 'ЭКО-22', email: 'andreev@student.ru',        avatar: null },
-  { id: 45, role: 'STUDENT', lastName: 'Романова',    firstName: 'Ксения',     middleName: 'Олеговна',      group: 'ЭКО-22', email: 'romanova@student.ru',       avatar: null },
-  { id: 46, role: 'STUDENT', lastName: 'Ильин',       firstName: 'Тимур',      middleName: 'Павлович',      group: 'ЭКО-22', email: 'ilyin@student.ru',          avatar: null },
-  { id: 47, role: 'STUDENT', lastName: 'Борисова',    firstName: 'Валерия',    middleName: 'Дмитриевна',    group: 'ЭКО-22', email: 'borisova@student.ru',       avatar: null },
-  { id: 48, role: 'STUDENT', lastName: 'Кузьмин',     firstName: 'Евгений',    middleName: 'Сергеевич',     group: 'ЭКО-22', email: 'kuzmin@student.ru',         avatar: null },
-]
+/* ─── State ──────────────────────────────────────────────────── */
+const users      = ref([])
+const total      = ref(0)
+const allGroups  = ref([])
+const loading    = ref(false)
+const forbidden  = ref(false)
 
-/* ─── Фильтры ────────────────────────────────────────────────── */
-const PAGE_SIZE = 20
+const PAGE_SIZE   = 20
+const searchQuery = ref('')
+const filterRole  = ref('')   // '' = все, 'student', 'teacher', 'dean'
+const filterGroup = ref('')
+const currentPage = ref(1)
 
-const searchQuery  = ref('')
-const filterRole   = ref('all')
-const filterGroup  = ref('')
-const currentPage  = ref(1)
+/* ─── Fetch ──────────────────────────────────────────────────── */
+async function fetchUsers() {
+  loading.value = true
+  forbidden.value = false
+  try {
+    const params = {
+      limit:  PAGE_SIZE,
+      offset: (currentPage.value - 1) * PAGE_SIZE,
+    }
+    if (filterRole.value)          params.role       = filterRole.value
+    if (filterGroup.value)         params.group_name = filterGroup.value
+    if (searchQuery.value.trim())  params.search     = searchQuery.value.trim()
 
-/* Сброс страницы при смене фильтров */
-watch([searchQuery, filterRole, filterGroup], () => { currentPage.value = 1 })
+    const { data } = await http.get('/api/users', { params })
+    users.value = (data.items ?? []).map(normalizeUser)
+    total.value = data.total ?? 0
+  } catch (e) {
+    if (e.response?.status === 403) forbidden.value = true
+    users.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
 
-const allGroups = computed(() =>
-  [...new Set(ALL_USERS.filter(u => u.group).map(u => u.group))].sort()
-)
+function normalizeUser(u) {
+  const role = (u.roles?.[0]?.slug ?? 'student').toUpperCase()
+  return {
+    id:         u.id,
+    role,
+    lastName:   u.last_name   ?? '',
+    firstName:  u.first_name  ?? '',
+    middleName: u.middle_name ?? '',
+    group:      u.group_name  ?? null,
+    email:      u.email,
+    avatar:     null,
+  }
+}
 
-const filteredUsers = computed(() => {
-  const q = searchQuery.value.toLowerCase().trim()
-  return ALL_USERS.filter(u => {
-    const name  = `${u.lastName} ${u.firstName} ${u.middleName}`.toLowerCase()
-    const email = u.email.toLowerCase()
-    const matchSearch = !q || name.includes(q) || email.includes(q) || (u.group?.toLowerCase().includes(q))
-    const matchRole  = filterRole.value === 'all'    || u.role === filterRole.value
-    const matchGroup = !filterGroup.value             || u.group === filterGroup.value
-    return matchSearch && matchRole && matchGroup
-  })
+/* ─── Watchers ───────────────────────────────────────────────── */
+watch([filterRole, filterGroup], () => { currentPage.value = 1; fetchUsers() })
+watch(currentPage, fetchUsers)
+
+let searchTimer = null
+watch(searchQuery, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => { currentPage.value = 1; fetchUsers() }, 350)
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredUsers.value.length / PAGE_SIZE)))
-
-const paginatedUsers = computed(() => {
-  const start = (currentPage.value - 1) * PAGE_SIZE
-  return filteredUsers.value.slice(start, start + PAGE_SIZE)
+/* ─── Init ───────────────────────────────────────────────────── */
+onMounted(async () => {
+  try {
+    const { data } = await http.get('/api/users', { params: { role: 'student', limit: 200 } })
+    allGroups.value = [
+      ...new Set((data.items ?? []).filter(u => u.group_name).map(u => u.group_name)),
+    ].sort()
+  } catch {}
+  fetchUsers()
 })
 
-const rangeStart = computed(() => (currentPage.value - 1) * PAGE_SIZE + 1)
-const rangeEnd   = computed(() => Math.min(currentPage.value * PAGE_SIZE, filteredUsers.value.length))
+/* ─── Pagination ─────────────────────────────────────────────── */
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const rangeStart = computed(() => total.value === 0 ? 0 : (currentPage.value - 1) * PAGE_SIZE + 1)
+const rangeEnd   = computed(() => Math.min(currentPage.value * PAGE_SIZE, total.value))
 
-/* Умная пагинация — показываем не больше 7 кнопок */
 const visiblePages = computed(() => {
-  const total = totalPages.value
-  const cur   = currentPage.value
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-
+  const t = totalPages.value, c = currentPage.value
+  if (t <= 7) return Array.from({ length: t }, (_, i) => i + 1)
   const pages = [1]
-  if (cur > 3) pages.push('…')
-  for (let i = Math.max(2, cur - 1); i <= Math.min(total - 1, cur + 1); i++) pages.push(i)
-  if (cur < total - 2) pages.push('…')
-  pages.push(total)
+  if (c > 3) pages.push('…')
+  for (let i = Math.max(2, c - 1); i <= Math.min(t - 1, c + 1); i++) pages.push(i)
+  if (c < t - 2) pages.push('…')
+  pages.push(t)
   return pages
 })
 
@@ -122,7 +101,9 @@ function goPage(p) {
 }
 
 /* ─── Helpers ────────────────────────────────────────────────── */
-function fullName(u) { return `${u.lastName} ${u.firstName} ${u.middleName}` }
+function fullName(u) {
+  return [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ')
+}
 
 function roleLabel(u) {
   if (u.role === 'DEAN')    return 'Деканат'
@@ -131,10 +112,14 @@ function roleLabel(u) {
 }
 
 const ROLE_STYLE = {
-  DEAN:    { bg: 'rgba(217,119,6,.1)',   color: '#b45309' },
-  TEACHER: { bg: 'rgba(139,61,240,.1)',  color: '#7c22d6' },
-  STUDENT: { bg: 'rgba(59,63,224,.1)',   color: '#3b3fe0' },
+  DEAN:    { bg: 'rgba(217,119,6,.1)',  color: '#b45309' },
+  TEACHER: { bg: 'rgba(139,61,240,.1)', color: '#7c22d6' },
+  STUDENT: { bg: 'rgba(59,63,224,.1)',  color: '#3b3fe0' },
+  ADMIN:   { bg: 'rgba(16,185,129,.1)', color: '#065f46' },
 }
+const DEFAULT_ROLE_STYLE = { bg: 'rgba(107,114,128,.1)', color: '#374151' }
+
+function roleStyle(role) { return ROLE_STYLE[role] ?? DEFAULT_ROLE_STYLE }
 
 const AVATAR_PALETTE = [
   '#3b3fe0','#e63c5a','#f59e0b','#10b981',
@@ -149,15 +134,9 @@ function avatarBg(u) {
   return AVATAR_PALETTE[h % AVATAR_PALETTE.length]
 }
 
-function initials(u) { return `${u.lastName[0]}${u.firstName[0]}` }
-
-/* Счётчики по ролям для отображения под фильтром */
-const counts = computed(() => ({
-  all:     ALL_USERS.length,
-  STUDENT: ALL_USERS.filter(u => u.role === 'STUDENT').length,
-  TEACHER: ALL_USERS.filter(u => u.role === 'TEACHER').length,
-  DEAN:    ALL_USERS.filter(u => u.role === 'DEAN').length,
-}))
+function initials(u) {
+  return ((u.lastName?.[0] ?? '') + (u.firstName?.[0] ?? '')).toUpperCase()
+}
 </script>
 
 <template>
@@ -171,7 +150,7 @@ const counts = computed(() => ({
       <div class="page-bar">
         <div class="page-bar-left">
           <h1 class="page-title">Пользователи</h1>
-          <span class="total-chip">{{ counts.all }} в системе</span>
+          <span v-if="total > 0" class="total-chip">{{ total }} в системе</span>
         </div>
       </div>
 
@@ -196,22 +175,22 @@ const counts = computed(() => ({
 
         <!-- Роли -->
         <div class="chips">
-          <button class="chip" :class="{ active: filterRole === 'all' }" @click="filterRole = 'all'">
-            Все <span class="chip-cnt">{{ counts.all }}</span>
+          <button class="chip" :class="{ active: filterRole === '' }" @click="filterRole = ''">
+            Все
           </button>
-          <button class="chip" :class="{ active: filterRole === 'STUDENT' }" @click="filterRole = 'STUDENT'; filterGroup = ''">
-            Студенты <span class="chip-cnt">{{ counts.STUDENT }}</span>
+          <button class="chip" :class="{ active: filterRole === 'student' }" @click="filterRole = 'student'; filterGroup = ''">
+            Студенты
           </button>
-          <button class="chip" :class="{ active: filterRole === 'TEACHER' }" @click="filterRole = 'TEACHER'; filterGroup = ''">
-            Преподаватели <span class="chip-cnt">{{ counts.TEACHER }}</span>
+          <button class="chip" :class="{ active: filterRole === 'teacher' }" @click="filterRole = 'teacher'; filterGroup = ''">
+            Преподаватели
           </button>
-          <button class="chip" :class="{ active: filterRole === 'DEAN' }" @click="filterRole = 'DEAN'; filterGroup = ''">
-            Деканат <span class="chip-cnt">{{ counts.DEAN }}</span>
+          <button class="chip" :class="{ active: filterRole === 'dean' }" @click="filterRole = 'dean'; filterGroup = ''">
+            Деканат
           </button>
         </div>
 
         <!-- Группа (только когда фильтр = студенты или все) -->
-        <div v-if="filterRole !== 'TEACHER' && filterRole !== 'DEAN'" class="group-select-wrap">
+        <div v-if="filterRole !== 'teacher' && filterRole !== 'dean'" class="group-select-wrap">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
             <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
@@ -226,16 +205,26 @@ const counts = computed(() => ({
 
       <!-- ── Счётчик результатов ── -->
       <div class="results-bar">
-        <span v-if="filteredUsers.length > 0" class="results-text">
-          Показано&nbsp;<strong>{{ rangeStart }}–{{ rangeEnd }}</strong>&nbsp;из&nbsp;<strong>{{ filteredUsers.length }}</strong>
+        <span v-if="loading" class="results-text results-empty">Загрузка…</span>
+        <span v-else-if="total > 0" class="results-text">
+          Показано&nbsp;<strong>{{ rangeStart }}–{{ rangeEnd }}</strong>&nbsp;из&nbsp;<strong>{{ total }}</strong>
         </span>
-        <span v-else class="results-text results-empty">Никого не найдено</span>
+        <span v-else-if="!forbidden" class="results-text results-empty">Никого не найдено</span>
+      </div>
+
+      <!-- ── 403 ── -->
+      <div v-if="forbidden" class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d7d9e0" stroke-width="1.2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+        </svg>
+        <p class="empty-title">Нет доступа</p>
+        <p class="empty-sub">Просмотр списка пользователей доступен только сотрудникам деканата</p>
       </div>
 
       <!-- ── Сетка карточек ── -->
-      <div class="users-grid" v-if="paginatedUsers.length">
+      <div class="users-grid" v-else-if="!loading && users.length">
         <div
-          v-for="u in paginatedUsers"
+          v-for="u in users"
           :key="u.id"
           class="user-card"
         >
@@ -251,7 +240,7 @@ const counts = computed(() => ({
           <!-- Роль / группа -->
           <span
             class="u-badge"
-            :style="{ background: ROLE_STYLE[u.role].bg, color: ROLE_STYLE[u.role].color }"
+            :style="{ background: roleStyle(u.role).bg, color: roleStyle(u.role).color }"
           >{{ roleLabel(u) }}</span>
 
           <!-- Почта -->
@@ -265,13 +254,13 @@ const counts = computed(() => ({
       </div>
 
       <!-- Пустое состояние -->
-      <div v-else class="empty-state">
+      <div v-else-if="!loading && !forbidden" class="empty-state">
         <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d7d9e0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
         </svg>
         <p class="empty-title">Никого не найдено</p>
         <p class="empty-sub">Попробуйте изменить запрос или сбросить фильтры</p>
-        <button class="btn-reset" @click="searchQuery = ''; filterRole = 'all'; filterGroup = ''">Сбросить фильтры</button>
+        <button class="btn-reset" @click="searchQuery = ''; filterRole = ''; filterGroup = ''">Сбросить фильтры</button>
       </div>
 
       <!-- ── Пагинация ── -->

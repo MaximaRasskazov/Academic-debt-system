@@ -15,4 +15,7 @@ export const authApi = {
 
   refresh: () =>
     http.post('/api/auth/refresh'),
+
+  changePassword: (currentPassword, newPassword) =>
+    http.post('/api/me/password', { current_password: currentPassword, new_password: newPassword }),
 }

@@ -8,7 +8,16 @@
       "Bash(Get-ChildItem -Path \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\src\" -Recurse -Name)",
       "Bash(docker compose *)",
       "Bash(curl -s http://localhost:8080/api/debts?limit=3 -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhY2FkZW1pYy1kZWJ0cyIsInN1YiI6ImJiYmIwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSIsImV4cCI6MTc3OTgwODkzMywibmJmIjoxNzc5ODA4MDMzLCJpYXQiOjE3Nzk4MDgwMzMsImp0aSI6ImY1NDdkMGI2LTg0MjMtNDQ3MS04ZTlmLWY5MGZlMzkyMmJlOSJ9.GKirVJ6rXpiRZ-ki9xlKODxkKLSZVXa88ErgUUGBkho')",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "Bash(git fetch *)",
+      "Bash(docker exec *)",
+      "PowerShell(docker cp \"d:\\\\Practic\\\\Academic-debt-system\\\\frontend\\\\dist\\\\.\" academic-debt-system-frontend-1:/usr/share/nginx/html/)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Practic\\\\Academic-debt-system\" -Directory)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Practic\\\\Academic-debt-system\\\\backend\" -Recurse -Directory | Select-Object -ExpandProperty FullName | ForEach-Object { $_.Replace\\('d:\\\\Practic\\\\Academic-debt-system\\\\backend', ''\\) })",
+      "PowerShell(docker exec academic-debt-system-frontend-1 nginx -s reload)",
+      "PowerShell(Start-Process \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "PowerShell(docker exec academic-debt-system-postgres-1 psql -U academic -d academic_debts -c \"SELECT first_name, last_name, email FROM users LIMIT 10;\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")"
     ]
   }
 }

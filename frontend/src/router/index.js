@@ -13,11 +13,14 @@ import TeacherRequestsPage from '../views/TeacherRequestsPage.vue'
 import StatementsPage from '../views/StatementsPage.vue'
 import UsersPage from '../views/UsersPage.vue'
 
+const HOME = { STUDENT: '/student', TEACHER: '/teacher', DEAN: '/dean' }
+const homeFor = (role) => HOME[role] ?? '/login'
+
 const routes = [
-  { path: '/', redirect: '/student' },
+  { path: '/', redirect: () => homeFor(useAuthStore().role) },
   { path: '/login', component: LoginPage, meta: { guest: true } },
   { path: '/register', component: RegisterPage, meta: { guest: true } },
-  { path: '/student', component: StudentPage, meta: { auth: true } },
+  { path: '/student', component: StudentPage, meta: { auth: true, roles: ['STUDENT'] } },
   { path: '/retakes', component: RetakesPage, meta: { auth: true } },
   { path: '/retakes/create', component: RetakeCreatePage, meta: { auth: true, roles: ['DEAN'] } },
   { path: '/requests', component: RequestsPage, meta: { auth: true, roles: ['DEAN'] } },
@@ -41,11 +44,11 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.guest && auth.isLoggedIn) {
-    return '/student'
+    return homeFor(auth.role)
   }
 
   if (to.meta.roles && !to.meta.roles.includes(auth.role)) {
-    return '/student'
+    return homeFor(auth.role)
   }
 })
 

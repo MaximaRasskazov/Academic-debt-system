@@ -20,7 +20,10 @@ http.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config
-    if (err.response?.status !== 401 || original._retry) {
+    const errCode = err.response?.data?.error
+    // Не рефрешим если это бизнес-ошибка аутентификации, а не истёкший токен
+    const isBusinessAuthError = errCode === 'invalid_password' || errCode === 'invalid_credentials'
+    if (err.response?.status !== 401 || original._retry || isBusinessAuthError) {
       return Promise.reject(err)
     }
     original._retry = true

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, reactive } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { authApi } from '../api/auth'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 
@@ -9,64 +10,30 @@ const sidebarOpen = ref(false)
 
 const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
 
-// ── Avatar ────────────────────────────────────────────────
-const avatarInput = ref(null)
-const avatarPreview = ref(auth.user?.avatar || null)
-
-function pickAvatar() { avatarInput.value?.click() }
-
-function onAvatarFile(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = ev => { avatarPreview.value = ev.target.result }
-  reader.readAsDataURL(file)
-}
-
-// ── Email ─────────────────────────────────────────────────
-const emailEditing = ref(false)
-const emailDraft = ref(auth.user?.email || '')
-
-function startEmailEdit() {
-  emailDraft.value = auth.user?.email || ''
-  emailEditing.value = true
-}
-function cancelEmailEdit() {
-  emailDraft.value = auth.user?.email || ''
-  emailEditing.value = false
-}
-
 // ── Password ──────────────────────────────────────────────
 const pw = reactive({ current: '', next: '', confirm: '' })
 const pwError = ref('')
 const pwSuccess = ref(false)
+const pwLoading = ref(false)
 
-function changePassword() {
+async function changePassword() {
   pwError.value = ''
-  if (!pw.current) { pwError.value = 'Введите текущий пароль'; return }
-  if (!pw.next)    { pwError.value = 'Введите новый пароль'; return }
-  if (pw.next !== pw.confirm) { pwError.value = 'Пароли не совпадают'; return }
-  // TODO: API call
-  pw.current = ''; pw.next = ''; pw.confirm = ''
-  pwSuccess.value = true
-  setTimeout(() => { pwSuccess.value = false }, 2500)
-}
-
-// ── Save ──────────────────────────────────────────────────
-const saved = ref(false)
-
-function save() {
-  if (emailEditing.value && auth.user) {
-    auth.user.email = emailDraft.value
-    emailEditing.value = false
+  pwSuccess.value = false
+  if (!pw.current)               { pwError.value = 'Введите текущий пароль'; return }
+  if (pw.next.length < 8)        { pwError.value = 'Минимум 8 символов'; return }
+  if (pw.next !== pw.confirm)    { pwError.value = 'Пароли не совпадают'; return }
+  pwLoading.value = true
+  try {
+    await authApi.changePassword(pw.current, pw.next)
+    pw.current = ''; pw.next = ''; pw.confirm = ''
+    pwSuccess.value = true
+    setTimeout(() => { pwSuccess.value = false }, 3000)
+  } catch (e) {
+    const msg = e.response?.data?.message || e.response?.data?.error
+    pwError.value = msg || 'Неверный текущий пароль'
+  } finally {
+    pwLoading.value = false
   }
-  if (avatarPreview.value !== (auth.user?.avatar || null) && auth.user) {
-    auth.user.avatar = avatarPreview.value
-  }
-  if (auth.user) localStorage.setItem('user', JSON.stringify(auth.user))
-  // TODO: API call
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2500)
 }
 
 // ── Computed ──────────────────────────────────────────────
@@ -94,20 +61,12 @@ const fullName = computed(() =>
 
           <!-- Avatar + Name -->
           <div class="hero-section">
-            <button class="avatar-btn" @click="pickAvatar" title="Изменить фото">
-              <img v-if="avatarPreview" :src="avatarPreview" class="avatar-img" alt="Фото профиля" />
-              <span v-else class="avatar-initials">{{ initials }}</span>
-              <div class="avatar-overlay">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-                  <circle cx="12" cy="13" r="4"/>
-                </svg>
-              </div>
-            </button>
-            <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarFile" />
+            <div class="avatar-btn">
+              <span class="avatar-initials">{{ initials }}</span>
+            </div>
             <div class="hero-meta">
               <div class="hero-name">{{ fullName }}</div>
-              <button class="link-btn" @click="pickAvatar">Изменить фото</button>
+              <span class="role-label">{{ ROLE_LABEL[auth.role] ?? auth.role }}</span>
             </div>
           </div>
 
@@ -150,20 +109,7 @@ const fullName = computed(() =>
                 <path d="M2 7l10 7 10-7"/>
               </svg>
             </div>
-            <template v-if="!emailEditing">
-              <span class="email-text">{{ auth.user?.email }}</span>
-              <button class="link-btn" @click="startEmailEdit">Изменить</button>
-            </template>
-            <template v-else>
-              <input
-                class="field-input email-input"
-                v-model="emailDraft"
-                type="email"
-                placeholder="Новый email"
-                autofocus
-              />
-              <button class="link-btn link-cancel" @click="cancelEmailEdit">Отмена</button>
-            </template>
+            <span class="email-text">{{ auth.user?.email }}</span>
           </div>
 
           <div class="section-divider" />
@@ -185,24 +131,14 @@ const fullName = computed(() =>
             </div>
             <div class="pw-action">
               <label class="field-label">&nbsp;</label>
-              <button class="btn-outline" @click="changePassword">Изменить</button>
+              <button class="btn-outline" :disabled="pwLoading" @click="changePassword">
+                {{ pwLoading ? 'Сохранение…' : 'Изменить' }}
+              </button>
             </div>
           </div>
           <p v-if="pwError" class="pw-error">{{ pwError }}</p>
           <p v-if="pwSuccess" class="pw-success">Пароль успешно изменён</p>
 
-          <!-- ── Save ── -->
-          <div class="save-row">
-            <button class="btn-primary btn-save" @click="save">
-              <template v-if="saved">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-                Сохранено
-              </template>
-              <template v-else>Сохранить</template>
-            </button>
-          </div>
 
         </div>
       </main>
@@ -294,14 +230,10 @@ const fullName = computed(() =>
   color: var(--ink);
 }
 
-.link-btn {
-  background: none; border: none; padding: 0;
-  font: 500 13px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; text-align: left;
-  transition: color .15s;
+.role-label {
+  font: 500 13px/1 'Inter', sans-serif;
+  color: var(--ink-soft);
 }
-.link-btn:hover { color: var(--brand); }
-.link-cancel:hover { color: #dc2626; }
 
 /* ── Divider ── */
 .section-divider {
@@ -374,12 +306,6 @@ const fullName = computed(() =>
   flex: 1;
 }
 
-.email-input {
-  flex: 1;
-  min-width: 200px;
-  height: 38px;
-}
-
 /* ── Password ── */
 .pw-row {
   display: grid;
@@ -410,26 +336,6 @@ const fullName = computed(() =>
   color: #059669;
   margin: 0 0 16px;
 }
-
-/* ── Save ── */
-.save-row {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid var(--line);
-}
-
-.btn-primary {
-  display: flex; align-items: center; gap: 8px;
-  height: 44px; padding: 0 40px; border: none; border-radius: var(--radius);
-  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
-  color: #fff; font: 600 14px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 4px 14px -6px rgba(91,59,217,.6);
-  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
-}
-.btn-primary:hover { transform: scale(1.03); box-shadow: 0 4px 10px -4px rgba(91,59,217,.75); }
-.btn-save svg { width: 16px; height: 16px; }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {

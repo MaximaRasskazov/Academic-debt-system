@@ -1,10 +1,14 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
 
+const route = useRoute()
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────
@@ -28,7 +32,46 @@ function handleOutsideClick(e) {
     editTypeOpen.value     = false
   }
 }
-onMounted(()  => document.addEventListener('mousedown', handleOutsideClick))
+onMounted(async () => {
+  document.addEventListener('mousedown', handleOutsideClick)
+
+  const retakeId = route.query.retakeId
+  if (retakeId) {
+    try {
+      const [retakeRes, discRes] = await Promise.allSettled([
+        retakesApi.getById(retakeId),
+        disciplinesApi.getAll({ limit: 500 }),
+      ])
+
+      const discMap = {}
+      if (discRes.status === 'fulfilled') {
+        const items = discRes.value.data.items ?? discRes.value.data ?? []
+        items.forEach(d => { discMap[d.id] = d.name || d.code })
+      }
+
+      if (retakeRes.status === 'fulfilled') {
+        const r = retakeRes.value.data
+        const scheduled = r.scheduled_at ? new Date(r.scheduled_at) : null
+
+        form.subject  = discMap[r.discipline_id] || r.discipline_id || ''
+        form.type     = r.kind || 'normal'
+        form.date     = scheduled
+          ? scheduled.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+          : null
+        form.duration = r.duration_minutes || 90
+        form.building = r.building || ''
+        form.room     = r.room     || ''
+
+        if (scheduled) {
+          hourDisplay.value   = String(scheduled.getHours()).padStart(2, '0')
+          minuteDisplay.value = String(scheduled.getMinutes()).padStart(2, '0')
+        }
+
+        activeTab.value = 'submit'
+      }
+    } catch { /* ignore prefill errors */ }
+  }
+})
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 // ── My Requests data ──────────────────────────────────────
