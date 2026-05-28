@@ -1,22 +1,48 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/dto"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
 )
 
-// RetakeHandler собирает зависимости для /api/retakes/*.
-type RetakeHandler struct {
-	svc *retake.Service
+// RetakeService — узкий интерфейс ровно под методы, которые дёргает
+// HTTP-handler. Сделан публичным чтобы тесты handler-слоя могли подсунуть
+// stub без поднятия БД (см. retake_test.go). *retake.Service автоматически
+// удовлетворяет интерфейс, поэтому wire-up в main.go и router.go не
+// меняется.
+type RetakeService interface {
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]queries.Retake, error)
+	ListAll(ctx context.Context, status string, limit, offset int32) ([]queries.Retake, error)
+	Get(ctx context.Context, id uuid.UUID) (queries.Retake, error)
+	Create(ctx context.Context, in retake.CreateInput, actorID uuid.UUID) (queries.Retake, error)
+	UpdateSchedule(ctx context.Context, id uuid.UUID, in retake.UpdateScheduleInput, actorID uuid.UUID) (queries.Retake, error)
+	Start(ctx context.Context, id, actorID uuid.UUID) error
+	Complete(ctx context.Context, id, actorID uuid.UUID) error
+	Cancel(ctx context.Context, id, actorID uuid.UUID) error
+	ListParticipants(ctx context.Context, retakeID uuid.UUID) ([]queries.RetakeParticipant, error)
+	AddStudent(ctx context.Context, retakeID, studentID, debtID, actorID uuid.UUID) error
+	AddTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
+	RemoveStudent(ctx context.Context, retakeID, studentID, actorID uuid.UUID) error
+	RemoveTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
+	GradeStudent(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, gradedBy uuid.UUID) error
 }
 
-func NewRetakeHandler(svc *retake.Service) *RetakeHandler {
+// RetakeHandler собирает зависимости для /api/retakes/*.
+type RetakeHandler struct {
+	svc RetakeService
+}
+
+func NewRetakeHandler(svc RetakeService) *RetakeHandler {
 	return &RetakeHandler{svc: svc}
 }
 
