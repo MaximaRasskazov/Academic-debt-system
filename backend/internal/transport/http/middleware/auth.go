@@ -74,6 +74,20 @@ func TokenID(ctx context.Context) (uuid.UUID, bool) {
 	return v, ok
 }
 
+// WithUserContext имитирует прохождение запроса через Auth-middleware:
+// кладёт userID и tokenID в context под теми же приватными ключами.
+// Использовать ТОЛЬКО в тестах handler-слоя (см. handler/retake_test.go),
+// чтобы не поднимать token-сервис и JWT-валидацию.
+//
+// В production-коде userID попадает в context только из реального Auth-
+// middleware; ctxKey приватные, этим инжектором извне злоупотребить
+// нельзя.
+func WithUserContext(ctx context.Context, userID, tokenID uuid.UUID) context.Context {
+	ctx = context.WithValue(ctx, ctxKeyUserID, userID)
+	ctx = context.WithValue(ctx, ctxKeyTokenID, tokenID)
+	return ctx
+}
+
 // extractBearer выделяет токен из заголовка вида "Bearer <jwt>".
 // Любое отклонение от формата считаем "нет токена" — без подсказок
 // клиенту, что именно не так.

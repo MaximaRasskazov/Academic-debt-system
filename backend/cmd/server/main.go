@@ -40,6 +40,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	usersvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 	httpx "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http"
+	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
 )
 
 const (
@@ -178,10 +179,11 @@ func run() error {
 }
 
 func setupLogger() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Используем middleware-обёртку: JSONHandler + автоматическое
+	// добавление request_id и user_id из context. Логгер общий через
+	// slog.SetDefault, поэтому слою кода нужно просто звать
+	// slog.InfoContext(ctx, ...) и trace-id попадёт в JSON-вывод.
+	mw.SetupContextLogger(slog.LevelInfo)
 }
 
 func newPool(cfg *config.Config) (*pgxpool.Pool, error) {
