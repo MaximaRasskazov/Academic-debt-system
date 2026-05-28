@@ -57,9 +57,16 @@ apiClient.interceptors.response.use(
       if (!refreshPromise) {
         refreshPromise = apiClient
           .post('/auth/refresh')
-          .then((r) => {
-            authStoreRef?.setAccessToken(r.data.access_token)
-            return r.data.access_token
+          .then(async (r) => {
+            const newToken = r.data.access_token
+            authStoreRef?.setAccessToken(newToken)
+            // Переподключаем WS с новым токеном. Ленивый импорт разрывает
+            // циклическую зависимость client ↔ notifications store.
+            try {
+              const { useNotificationsStore } = await import('../stores/notifications')
+              useNotificationsStore().connect(newToken)
+            } catch { /* pinia ещё не инициализирована при cold start */ }
+            return newToken
           })
           .catch((e) => {
             authStoreRef?.reset()
