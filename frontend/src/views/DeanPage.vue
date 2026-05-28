@@ -760,10 +760,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .picker-option:hover { background: rgba(59,63,224,.07); }
 .picker-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
-<<<<<<< Updated upstream
-=======
 .picker-hint  { padding: 6px 14px 10px; font: 11px/1.4 'Inter', sans-serif; color: #9ca3af; border-top: 1px solid var(--line); }
->>>>>>> Stashed changes
 
 .suggest-group {
   font-size: 11px; color: var(--ink-soft);
