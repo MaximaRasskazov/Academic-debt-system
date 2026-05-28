@@ -10,6 +10,7 @@ import UpcomingRetakes from '../components/UpcomingRetakes.vue'
 import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
 
 const sidebarOpen = ref(false)
 
@@ -94,7 +95,7 @@ watch(disciplineId, async (id) => {
   try {
     const [studRes, teachRes, debtsRes] = await Promise.allSettled([
       disciplinesApi.getStudents(id),
-      disciplinesApi.getTeachers(id),
+      usersApi.getAll({ role: 'teacher', limit: 100 }),
       debtsApi.getAll({ limit: 500 }),
     ])
 
@@ -117,7 +118,8 @@ watch(disciplineId, async (id) => {
     }
 
     if (teachRes.status === 'fulfilled') {
-      availableTeachers.value = (teachRes.value.data ?? []).map(u => ({
+      const teacherItems = teachRes.value.data.items ?? teachRes.value.data ?? []
+      availableTeachers.value = teacherItems.map(u => ({
         id: u.id,
         name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '),
       }))
@@ -509,6 +511,12 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                     <div v-else class="picker-empty">
                       {{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}
                     </div>
+<<<<<<< Updated upstream
+=======
+                    <div v-if="disciplineId && !loadingParticipants && !availableStudents.length" class="picker-hint">
+                      Студенты появятся после синхронизации долгов с эмулятором
+                    </div>
+>>>>>>> Stashed changes
                   </div>
                 </div>
 
@@ -752,6 +760,10 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .picker-option:hover { background: rgba(59,63,224,.07); }
 .picker-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+<<<<<<< Updated upstream
+=======
+.picker-hint  { padding: 6px 14px 10px; font: 11px/1.4 'Inter', sans-serif; color: #9ca3af; border-top: 1px solid var(--line); }
+>>>>>>> Stashed changes
 
 .suggest-group {
   font-size: 11px; color: var(--ink-soft);

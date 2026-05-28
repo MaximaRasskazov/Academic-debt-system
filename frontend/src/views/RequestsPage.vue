@@ -1,189 +1,116 @@
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import { changeRequestsApi } from '../api/changeRequests'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
 
 const sidebarOpen = ref(false)
-const activeTab = ref('retakes')
 
-// ── Mock data ──────────────────────────────────────────────
-const retakeRequests = ref([
-  {
-    id: 1, number: '001',
-    teacher: 'Смирнов Андрей Валерьевич',
-    subject: 'Математический анализ',
-    student: 'Иванов Иван Иванович', group: 'ИС-31',
-    submittedAt: '2026-05-20T14:32', preferredDate: '28.05.2026',
-    status: 'pending', attempts: 1,
-    reason: 'Болезнь в период сессии. Медицинская справка прилагается.',
-  },
-  {
-    id: 2, number: '002',
-    teacher: 'Гришина Ольга Михайловна',
-    subject: 'Физика',
-    student: 'Петрова Анна Сергеевна', group: 'ИС-32',
-    submittedAt: '2026-05-21T09:15', preferredDate: '30.05.2026',
-    status: 'assigned', attempts: 2,
-    reason: 'Пропуск по уважительной причине (семейные обстоятельства).',
-    assignedDate: '30.05.2026', assignedTime: '14:00', assignedBuilding: '2', assignedRoom: '308',
-  },
-  {
-    id: 3, number: '003',
-    teacher: 'Смирнов Андрей Валерьевич',
-    subject: 'Линейная алгебра',
-    student: 'Сидоров Алексей Петрович', group: 'ИТ-21',
-    submittedAt: '2026-05-21T11:47', preferredDate: '05.06.2026',
-    status: 'rejected', attempts: 1,
-    reason: 'Не явился на экзамен без предупреждения.',
-    rejectReason: 'Нет оснований для пересдачи.',
-  },
-  {
-    id: 4, number: '004',
-    teacher: 'Карпов Игорь Степанович',
-    subject: 'Теория вероятностей',
-    student: 'Козлова Мария Дмитриевна', group: 'ИС-31',
-    submittedAt: '2026-05-22T08:55', preferredDate: '02.06.2026',
-    status: 'pending', attempts: 1,
-    reason: 'Технические проблемы при подключении во время онлайн-экзамена.',
-  },
-])
+// ── Data ──────────────────────────────────────────────────
+const requests  = ref([])
+const retakeMap = ref({})
+const discMap   = ref({})
+const userMap   = ref({})
+const loading   = ref(true)
+const loadErr   = ref('')
 
-const roleRequests = ref([
-  {
-    id: 1, number: '101', user: 'Козлов Дмитрий Николаевич', email: 'd.kozlov@university.ru',
-    currentRole: 'STUDENT', requestedRole: 'TEACHER',
-    submittedAt: '2026-05-19T10:00', status: 'pending',
-    comment: 'Являюсь аспирантом кафедры математики, веду практические занятия.',
-  },
-  {
-    id: 2, number: '102', user: 'Жукова Екатерина Олеговна', email: 'e.zhukova@university.ru',
-    currentRole: 'TEACHER', requestedRole: 'DEAN',
-    submittedAt: '2026-05-20T16:30', status: 'approved',
-    comment: '',
-  },
-])
+onMounted(async () => {
+  try {
+    const [reqRes, retakesRes, discsRes, usersRes] = await Promise.allSettled([
+      changeRequestsApi.getAll({ limit: 200 }),
+      retakesApi.getAll({ limit: 500 }),
+      disciplinesApi.getAll({ limit: 500 }),
+      usersApi.getAll({ limit: 200 }),
+    ])
 
-// ── Helpers ────────────────────────────────────────────────
-const STATUS_MAP = {
-  pending:  { label: 'Ожидает',   color: '#d97706', bg: 'rgba(245,158,11,.12)'  },
-  assigned: { label: 'Назначено', color: '#059669', bg: 'rgba(16,185,129,.12)'  },
-  rejected: { label: 'Отклонено', color: '#dc2626', bg: 'rgba(239,68,68,.12)'   },
-  approved: { label: 'Одобрено',  color: '#059669', bg: 'rgba(16,185,129,.12)'  },
+    if (discsRes.status === 'fulfilled')
+      (discsRes.value.data.items ?? discsRes.value.data ?? [])
+        .forEach(d => { discMap.value[d.id] = d.name || d.code })
+
+    if (retakesRes.status === 'fulfilled')
+      (retakesRes.value.data.items ?? retakesRes.value.data ?? [])
+        .forEach(r => { retakeMap.value[r.id] = r })
+
+    if (usersRes.status === 'fulfilled')
+      (usersRes.value.data.items ?? usersRes.value.data ?? [])
+        .forEach(u => {
+          userMap.value[u.id] = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email
+        })
+
+    if (reqRes.status === 'fulfilled')
+      requests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
+    else
+      loadErr.value = 'Не удалось загрузить заявки'
+  } finally {
+    loading.value = false
+  }
+})
+
+// ── Helpers ───────────────────────────────────────────────
+function disciplineName(r) {
+  const retake = retakeMap.value[r.retake_id]
+  return retake ? (discMap.value[retake.discipline_id] || 'Дисциплина') : '—'
 }
-const ROLE_MAP = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
-
-function fmt(iso) {
+function retakeDate(r) {
+  const retake = retakeMap.value[r.retake_id]
+  if (!retake?.scheduled_at) return '—'
+  return new Date(retake.scheduled_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+function fmtDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+function fmtTime(iso) {
+  if (!iso) return ''
   const d = new Date(iso)
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' +
-    d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-// ── Column filters: retakes ────────────────────────────────
-const rf = reactive({ number: '', teacher: '', subject: '', student: '', group: '', status: 'all' })
-
-// ── Column filters: roles ──────────────────────────────────
-const roleF = reactive({ user: '', email: '', currentRole: 'all', requestedRole: 'all', status: 'all' })
-
-function resetFilters() {
-  rf.number = ''; rf.teacher = ''; rf.subject = ''
-  rf.student = ''; rf.group = ''; rf.status = 'all'
-  roleF.user = ''; roleF.email = ''
-  roleF.currentRole = 'all'; roleF.requestedRole = 'all'; roleF.status = 'all'
+function changesSummary(r) {
+  const c = r.requested_changes || {}
+  const parts = []
+  if (c.scheduled_at)     parts.push(`Дата: ${fmtDate(c.scheduled_at)} ${fmtTime(c.scheduled_at)}`)
+  if (c.building)         parts.push(`Корпус: ${c.building}`)
+  if (c.room)             parts.push(`Ауд.: ${c.room}`)
+  if (c.duration_minutes) parts.push(`Длит.: ${c.duration_minutes} мин`)
+  if (c.notes)            parts.push(`Заметки: ${c.notes}`)
+  return parts.join(' · ') || '—'
 }
 
-function refresh() { /* TODO: API */ }
+// ── Approve ───────────────────────────────────────────────
+const approving  = ref(null)
 
-const filteredRetakes = computed(() =>
-  retakeRequests.value.filter(r => {
-    if (rf.number  && !r.number.includes(rf.number)) return false
-    if (rf.teacher && !r.teacher.toLowerCase().includes(rf.teacher.toLowerCase())) return false
-    if (rf.subject && !r.subject.toLowerCase().includes(rf.subject.toLowerCase())) return false
-    if (rf.student && !r.student.toLowerCase().includes(rf.student.toLowerCase())) return false
-    if (rf.group   && !r.group.toLowerCase().includes(rf.group.toLowerCase())) return false
-    if (rf.status !== 'all' && r.status !== rf.status) return false
-    return true
-  })
-)
-
-const filteredRoles = computed(() =>
-  roleRequests.value.filter(r => {
-    if (roleF.user  && !r.user.toLowerCase().includes(roleF.user.toLowerCase())) return false
-    if (roleF.email && !r.email.toLowerCase().includes(roleF.email.toLowerCase())) return false
-    if (roleF.currentRole  !== 'all' && r.currentRole  !== roleF.currentRole)  return false
-    if (roleF.requestedRole !== 'all' && r.requestedRole !== roleF.requestedRole) return false
-    if (roleF.status !== 'all' && r.status !== roleF.status) return false
-    return true
-  })
-)
-
-const pendingRetakesCount = computed(() => retakeRequests.value.filter(r => r.status === 'pending').length)
-const pendingRolesCount   = computed(() => roleRequests.value.filter(r => r.status === 'pending').length)
-
-// ── Detail modal ───────────────────────────────────────────
-const detail = reactive({ open: false, req: null, editing: false, draft: null })
-
-function openDetail(req) {
-  detail.req = req
-  detail.draft = { subject: req.subject, reason: req.reason, preferredDate: req.preferredDate }
-  detail.editing = false
-  detail.open = true
-}
-function saveEdit() {
-  const found = retakeRequests.value.find(r => r.id === detail.req.id)
-  if (found) Object.assign(found, detail.draft)
-  Object.assign(detail.req, detail.draft)
-  detail.editing = false
+async function doApprove(r) {
+  approving.value = r.id
+  try {
+    await changeRequestsApi.approve(r.id)
+    requests.value = requests.value.filter(req => req.id !== r.id)
+  } catch { /* silent — row stays, user can retry */ }
+  finally { approving.value = null }
 }
 
-// ── Assign modal ───────────────────────────────────────────
-const assign = reactive({ open: false, req: null, date: '', time: '', building: '', room: '', teacher: '' })
+// ── Reject modal ──────────────────────────────────────────
+const rejectModal  = ref(null)
+const rejectReason = ref('')
+const rejecting    = ref(false)
+const rejectErr    = ref('')
 
-function openAssign(req) {
-  assign.req = req
-  assign.date = req.preferredDate || ''
-  assign.time = ''
-  assign.building = ''
-  assign.room = ''
-  assign.teacher = req.teacher || ''
-  assign.open = true
-}
-function confirmAssign() {
-  const found = retakeRequests.value.find(r => r.id === assign.req.id)
-  if (found) {
-    Object.assign(found, {
-      status: 'assigned',
-      assignedDate: assign.date,
-      assignedTime: assign.time,
-      assignedBuilding: assign.building,
-      assignedRoom: assign.room,
-    })
-  }
-  assign.open = false
-}
+function openReject(r)  { rejectModal.value = r; rejectReason.value = ''; rejectErr.value = '' }
+function closeReject()  { rejectModal.value = null }
 
-// ── Reject modal ───────────────────────────────────────────
-const rejectModal = reactive({ open: false, req: null, reason: '', type: 'retake' })
-
-function openReject(req, type = 'retake') {
-  rejectModal.req = req
-  rejectModal.reason = ''
-  rejectModal.type = type
-  rejectModal.open = true
-}
-function confirmReject() {
-  if (rejectModal.type === 'retake') {
-    const found = retakeRequests.value.find(r => r.id === rejectModal.req.id)
-    if (found) Object.assign(found, { status: 'rejected', rejectReason: rejectModal.reason })
-  } else {
-    const found = roleRequests.value.find(r => r.id === rejectModal.req.id)
-    if (found) found.status = 'rejected'
-  }
-  rejectModal.open = false
-}
-
-function approveRole(req) {
-  const found = roleRequests.value.find(r => r.id === req.id)
-  if (found) found.status = 'approved'
+async function doReject() {
+  if (!rejectReason.value.trim()) { rejectErr.value = 'Укажите причину отклонения'; return }
+  rejecting.value = true; rejectErr.value = ''
+  try {
+    await changeRequestsApi.reject(rejectModal.value.id, rejectReason.value.trim())
+    requests.value = requests.value.filter(r => r.id !== rejectModal.value.id)
+    closeReject()
+  } catch (e) {
+    rejectErr.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка'
+  } finally { rejecting.value = false }
 }
 </script>
 
@@ -196,364 +123,134 @@ function approveRole(req) {
       <AppHeader @open-sidebar="sidebarOpen = true" />
 
       <main class="main">
+        <div class="content-wrap">
 
-        <!-- Top bar -->
-        <div class="page-top">
-          <h1 class="page-title">Центр заявок</h1>
-          <div class="page-actions">
-            <button class="btn-ghost" @click="resetFilters">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M3 6h18M7 12h10M11 18h2"/>
-              </svg>
-              Сбросить фильтры
-            </button>
-            <button class="btn-ghost" @click="refresh">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M23 4v6h-6M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-              </svg>
-              Обновить
-            </button>
+          <!-- ── Loading ── -->
+          <div v-if="loading" class="state-center">
+            <div class="spinner" /><span>Загрузка заявок…</span>
           </div>
-        </div>
 
-        <!-- Tabs -->
-        <div class="tabs-bar">
-          <button class="tab-btn" :class="{ active: activeTab === 'retakes' }" @click="activeTab = 'retakes'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 12h-6l-2 3H10l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>
+          <div v-else-if="loadErr" class="state-center state-error">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
-            Заявки на пересдачи
-            <span v-if="pendingRetakesCount" class="tab-badge">{{ pendingRetakesCount }}</span>
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'changes' }" @click="activeTab = 'changes'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-            </svg>
-            Изменения пересдач
-          </button>
-          <button class="tab-btn" :class="{ active: activeTab === 'roles' }" @click="activeTab = 'roles'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
-            </svg>
-            Смена роли
-            <span v-if="pendingRolesCount" class="tab-badge">{{ pendingRolesCount }}</span>
-          </button>
-        </div>
-
-        <!-- ── Tab: Retake requests ── -->
-        <div v-if="activeTab === 'retakes'" class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr class="head-row">
-                <th>№</th>
-                <th>Преподаватель</th>
-                <th>Предмет</th>
-                <th>Студент</th>
-                <th>Группа</th>
-                <th>Дата заявки</th>
-                <th>Желаемая дата</th>
-                <th>Попытка</th>
-                <th>Статус</th>
-                <th>Действия</th>
-              </tr>
-              <tr class="filter-row">
-                <th><input class="col-filter" v-model="rf.number"  placeholder="Поиск..." /></th>
-                <th><input class="col-filter" v-model="rf.teacher" placeholder="Поиск..." /></th>
-                <th><input class="col-filter" v-model="rf.subject" placeholder="Поиск..." /></th>
-                <th><input class="col-filter" v-model="rf.student" placeholder="Поиск..." /></th>
-                <th><input class="col-filter" v-model="rf.group"   placeholder="Поиск..." /></th>
-                <th></th>
-                <th></th>
-                <th></th>
-                <th>
-                  <select class="col-filter col-select" v-model="rf.status">
-                    <option value="all">Все</option>
-                    <option value="pending">Ожидает</option>
-                    <option value="assigned">Назначено</option>
-                    <option value="rejected">Отклонено</option>
-                  </select>
-                </th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="req in filteredRetakes" :key="req.id">
-                <td class="td-num">#{{ req.number }}</td>
-                <td>{{ req.teacher }}</td>
-                <td>{{ req.subject }}</td>
-                <td>{{ req.student }}</td>
-                <td><span class="group-chip">{{ req.group }}</span></td>
-                <td class="td-date">{{ fmt(req.submittedAt) }}</td>
-                <td class="td-date">{{ req.preferredDate }}</td>
-                <td class="td-center">№{{ req.attempts }}</td>
-                <td>
-                  <span class="status-badge"
-                    :style="{ color: STATUS_MAP[req.status].color, background: STATUS_MAP[req.status].bg }">
-                    {{ STATUS_MAP[req.status].label }}
-                  </span>
-                </td>
-                <td>
-                  <div class="row-actions">
-                    <button class="btn-outline btn-sm" @click="openDetail(req)">Подробнее</button>
-                    <template v-if="req.status === 'pending'">
-                      <button class="btn-danger btn-sm" @click="openReject(req, 'retake')">Отклонить</button>
-                      <button class="btn-primary btn-sm" @click="openAssign(req)">Назначить</button>
-                    </template>
-                  </div>
-                </td>
-              </tr>
-              <tr v-if="filteredRetakes.length === 0">
-                <td colspan="10">
-                  <div class="empty-state">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                      <path d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
-                    </svg>
-                    <p>Заявок не найдено</p>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- ── Tab: Changes (empty) ── -->
-        <div v-else-if="activeTab === 'changes'">
-          <div class="empty-state empty-state--page">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-            </svg>
-            <p>Раздел в разработке</p>
-            <span>Функциональность изменения пересдач будет добавлена позже</span>
+            {{ loadErr }}
           </div>
-        </div>
 
-        <!-- ── Tab: Role requests ── -->
-        <div v-else-if="activeTab === 'roles'" class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr class="head-row">
-                <th>№</th>
-                <th>ФИО</th>
-                <th>Email</th>
-                <th>Текущая роль</th>
-                <th>Запрашиваемая роль</th>
-                <th>Дата заявки</th>
-                <th>Статус</th>
-                <th>Действия</th>
-              </tr>
-              <tr class="filter-row">
-                <th></th>
-                <th><input class="col-filter" v-model="roleF.user"  placeholder="Поиск..." /></th>
-                <th><input class="col-filter" v-model="roleF.email" placeholder="Поиск..." /></th>
-                <th>
-                  <select class="col-filter col-select" v-model="roleF.currentRole">
-                    <option value="all">Все</option>
-                    <option value="STUDENT">Студент</option>
-                    <option value="TEACHER">Преподаватель</option>
-                    <option value="DEAN">Деканат</option>
-                  </select>
-                </th>
-                <th>
-                  <select class="col-filter col-select" v-model="roleF.requestedRole">
-                    <option value="all">Все</option>
-                    <option value="STUDENT">Студент</option>
-                    <option value="TEACHER">Преподаватель</option>
-                    <option value="DEAN">Деканат</option>
-                  </select>
-                </th>
-                <th></th>
-                <th>
-                  <select class="col-filter col-select" v-model="roleF.status">
-                    <option value="all">Все</option>
-                    <option value="pending">Ожидает</option>
-                    <option value="approved">Одобрено</option>
-                    <option value="rejected">Отклонено</option>
-                  </select>
-                </th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="req in filteredRoles" :key="req.id">
-                <td class="td-num">#{{ req.number }}</td>
-                <td>{{ req.user }}</td>
-                <td class="td-muted">{{ req.email }}</td>
-                <td><span class="role-chip">{{ ROLE_MAP[req.currentRole] }}</span></td>
-                <td><span class="role-chip role-chip--new">{{ ROLE_MAP[req.requestedRole] }}</span></td>
-                <td class="td-date">{{ fmt(req.submittedAt) }}</td>
-                <td>
-                  <span class="status-badge"
-                    :style="{ color: STATUS_MAP[req.status]?.color, background: STATUS_MAP[req.status]?.bg }">
-                    {{ STATUS_MAP[req.status]?.label }}
-                  </span>
-                </td>
-                <td>
-                  <div v-if="req.status === 'pending'" class="row-actions">
-                    <button class="btn-danger btn-sm" @click="openReject(req, 'role')">Отклонить</button>
-                    <button class="btn-primary btn-sm" @click="approveRole(req)">Одобрить</button>
-                  </div>
-                </td>
-              </tr>
-              <tr v-if="filteredRoles.length === 0">
-                <td colspan="8">
-                  <div class="empty-state">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                      <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
-                      <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
-                    </svg>
-                    <p>Заявок не найдено</p>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+          <template v-else>
+            <div class="section-card">
 
+              <div class="table-header">
+                <div class="title-row">
+                  <h2 class="section-title">Заявки на изменение пересдач</h2>
+                  <span class="count-badge">{{ requests.length }}</span>
+                </div>
+                <p class="subtitle">Новые заявки от преподавателей — ожидают решения</p>
+              </div>
+
+              <div v-if="requests.length === 0" class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <path d="M22 12h-6l-2 3H10l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>
+                </svg>
+                <span>Новых заявок нет</span>
+                <p>Когда преподаватели подадут заявки, они появятся здесь</p>
+              </div>
+
+              <div v-else class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr class="head-row">
+                      <th>№</th>
+                      <th>Дисциплина</th>
+                      <th>Преподаватель</th>
+                      <th>Запрашиваемые изменения</th>
+                      <th>Причина</th>
+                      <th>Пересдача</th>
+                      <th>Подана</th>
+                      <th>Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, i) in requests" :key="r.id">
+                      <td class="td-num">{{ i + 1 }}</td>
+                      <td class="td-subject">{{ disciplineName(r) }}</td>
+                      <td class="td-nowrap">{{ userMap[r.requested_by] || '—' }}</td>
+                      <td class="td-changes">{{ changesSummary(r) }}</td>
+                      <td class="td-reason">{{ r.reason || '—' }}</td>
+                      <td class="td-nowrap td-soft">{{ retakeDate(r) }}</td>
+                      <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
+                      <td>
+                        <div class="action-btns">
+                          <button
+                            class="btn-sm btn-approve-sm"
+                            :disabled="approving === r.id"
+                            @click="doApprove(r)"
+                          >
+                            {{ approving === r.id ? '…' : 'Одобрить' }}
+                          </button>
+                          <button
+                            class="btn-sm btn-reject-sm"
+                            :disabled="approving === r.id"
+                            @click="openReject(r)"
+                          >
+                            Отклонить
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+            </div>
+          </template>
+
+        </div>
       </main>
     </div>
 
-    <!-- ── Modal: Detail ── -->
-    <Transition name="modal">
-      <div v-if="detail.open" class="modal-overlay" @click.self="detail.open = false">
-        <div class="modal-card">
-          <div class="modal-head">
-            <h3 class="modal-title">Заявка #{{ detail.req?.number }}</h3>
-            <div class="modal-head-right">
-              <button
-                v-if="!detail.editing && detail.req?.status === 'pending'"
-                class="btn-edit" @click="detail.editing = true"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                Редактировать
-              </button>
-              <button class="modal-close" @click="detail.open = false" aria-label="Закрыть">
+    <!-- ── Reject modal ── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="rejectModal" class="modal-overlay" @click.self="closeReject">
+          <div class="modal">
+
+            <div class="modal-head">
+              <span class="modal-title">Отклонить заявку</span>
+              <button class="modal-close" @click="closeReject" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                   <path d="M18 6L6 18M6 6l12 12"/>
                 </svg>
               </button>
             </div>
-          </div>
-          <div class="modal-body">
-            <div class="detail-row">
-              <span class="detail-label">Преподаватель</span>
-              <span class="detail-value">{{ detail.req?.teacher }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Студент</span>
-              <span class="detail-value">{{ detail.req?.student }}, {{ detail.req?.group }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Дисциплина</span>
-              <span v-if="!detail.editing" class="detail-value">{{ detail.req?.subject }}</span>
-              <input v-else class="detail-input" v-model="detail.draft.subject" />
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Попытка</span>
-              <span class="detail-value">№{{ detail.req?.attempts }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Желаемая дата</span>
-              <span v-if="!detail.editing" class="detail-value">{{ detail.req?.preferredDate }}</span>
-              <input v-else class="detail-input" v-model="detail.draft.preferredDate" placeholder="дд.мм.гггг" />
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Причина</span>
-              <span v-if="!detail.editing" class="detail-value">{{ detail.req?.reason }}</span>
-              <textarea v-else class="detail-input detail-textarea" v-model="detail.draft.reason" />
-            </div>
-            <div v-if="detail.req?.status === 'assigned'" class="detail-row">
-              <span class="detail-label">Пересдача назначена</span>
-              <span class="detail-value">
-                {{ detail.req?.assignedDate }}, {{ detail.req?.assignedTime }}
-                · корп. {{ detail.req?.assignedBuilding }}, ауд. {{ detail.req?.assignedRoom }}
-              </span>
-            </div>
-            <div v-if="detail.req?.status === 'rejected' && detail.req?.rejectReason" class="detail-row">
-              <span class="detail-label">Причина отказа</span>
-              <span class="detail-value detail-value--danger">{{ detail.req?.rejectReason }}</span>
-            </div>
-          </div>
-          <div v-if="detail.editing" class="modal-footer">
-            <button class="btn-ghost" @click="detail.editing = false">Отмена</button>
-            <button class="btn-primary" @click="saveEdit">Сохранить</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
 
-    <!-- ── Modal: Assign ── -->
-    <Transition name="modal">
-      <div v-if="assign.open" class="modal-overlay" @click.self="assign.open = false">
-        <div class="modal-card">
-          <div class="modal-head">
-            <h3 class="modal-title">Назначить пересдачу</h3>
-            <button class="modal-close" @click="assign.open = false" aria-label="Закрыть">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-          <div class="modal-body">
-            <p class="assign-info">{{ assign.req?.student }} · {{ assign.req?.subject }}</p>
-            <div class="assign-form">
-              <div class="assign-field">
-                <label>Дата</label>
-                <input class="input" v-model="assign.date" placeholder="дд.мм.гггг" />
-              </div>
-              <div class="assign-field">
-                <label>Время</label>
-                <input class="input" v-model="assign.time" placeholder="09:00" />
-              </div>
-              <div class="assign-field">
-                <label>Корпус</label>
-                <input class="input" v-model="assign.building" placeholder="№ корпуса" />
-              </div>
-              <div class="assign-field">
-                <label>Аудитория</label>
-                <input class="input" v-model="assign.room" placeholder="№ аудитории" />
-              </div>
-              <div class="assign-field assign-field--full">
-                <label>Преподаватель</label>
-                <input class="input" v-model="assign.teacher" placeholder="ФИО преподавателя" />
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn-ghost" @click="assign.open = false">Отмена</button>
-            <button class="btn-primary" @click="confirmAssign">Назначить</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+            <div class="modal-body">
+              <div class="modal-disc">{{ disciplineName(rejectModal) }}</div>
+              <div class="modal-teacher">{{ userMap[rejectModal.requested_by] || 'Преподаватель' }}</div>
 
-    <!-- ── Modal: Reject ── -->
-    <Transition name="modal">
-      <div v-if="rejectModal.open" class="modal-overlay" @click.self="rejectModal.open = false">
-        <div class="modal-card modal-card--sm">
-          <div class="modal-head">
-            <h3 class="modal-title">Отклонить заявку</h3>
-            <button class="modal-close" @click="rejectModal.open = false" aria-label="Закрыть">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-          <div class="modal-body">
-            <p class="reject-hint">Укажите причину отклонения (необязательно)</p>
-            <textarea class="input input--area" v-model="rejectModal.reason" placeholder="Причина отклонения..." />
-          </div>
-          <div class="modal-footer">
-            <button class="btn-ghost" @click="rejectModal.open = false">Отмена</button>
-            <button class="btn-danger-solid" @click="confirmReject">Отклонить</button>
+              <div class="field">
+                <label class="field-label">Причина отклонения <span class="required">*</span></label>
+                <textarea
+                  class="input textarea"
+                  v-model="rejectReason"
+                  placeholder="Укажите причину — она будет отправлена преподавателю…"
+                  rows="4"
+                />
+              </div>
+              <p v-if="rejectErr" class="form-error">{{ rejectErr }}</p>
+            </div>
+
+            <div class="modal-foot">
+              <button class="btn-outline" @click="closeReject">Отмена</button>
+              <button class="btn-reject-confirm" :disabled="rejecting" @click="doReject">
+                {{ rejecting ? 'Отклонение…' : 'Отклонить' }}
+              </button>
+            </div>
+
           </div>
         </div>
-      </div>
-    </Transition>
+      </Transition>
+    </Teleport>
 
   </div>
 </template>
@@ -581,294 +278,132 @@ function approveRole(req) {
   -webkit-font-smoothing: antialiased;
 }
 
-.page-wrap {
-  min-height: 100dvh;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-}
+.page-wrap    { min-height: 100dvh; background: var(--bg); display: flex; flex-direction: column; }
+.main         { flex: 1; padding: 24px; }
+.content-wrap { max-width: 1200px; display: flex; flex-direction: column; gap: 20px; }
 
-.main {
-  flex: 1;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Page top ── */
-.page-top {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-bottom: 24px; flex-wrap: wrap;
-}
-.page-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
-  font-size: 22px; font-weight: 700; color: #3C38B6; margin: 0;
-}
-.page-actions { display: flex; gap: 8px; }
-
-.btn-ghost {
-  display: flex; align-items: center; gap: 6px;
-  height: 36px; padding: 0 14px;
-  background: var(--card); border: 1.5px solid var(--line);
-  border-radius: var(--radius);
-  font: 13px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; white-space: nowrap;
-  transition: border-color .15s, color .15s, background .15s;
-}
-.btn-ghost:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
-.btn-ghost svg { width: 15px; height: 15px; flex-shrink: 0; }
-
-/* ── Tabs ── */
-.tabs-bar {
-  display: flex; gap: 6px;
-  background: var(--card); border-radius: 14px; padding: 6px;
-  box-shadow: var(--shadow); margin-bottom: 20px;
-}
-.tab-btn {
-  flex: 1; height: 44px; border: none; border-radius: 10px;
-  font: 600 13px/1 'Inter', sans-serif; color: var(--ink-soft); background: transparent;
-  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
-  white-space: nowrap; flex-shrink: 0;
-  transition: background .2s var(--ease), color .2s var(--ease), box-shadow .2s var(--ease);
-}
-.tab-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
-.tab-btn.active {
-  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
-  color: #fff;
-  box-shadow: 0 4px 14px -4px rgba(91,59,217,.5);
-}
-.tab-btn:not(.active):hover { background: rgba(59,63,224,.06); color: var(--brand); }
-.tab-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 20px; padding: 0 5px;
-  background: rgba(245,158,11,.25); color: #b45309;
-  border-radius: 10px; font: 700 11px/1 'Inter', sans-serif;
-}
-.tab-btn.active .tab-badge { background: rgba(255,255,255,.25); color: #fff; }
-
-/* ── Table ── */
-.table-wrap {
-  background: var(--card);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  border: 1px solid var(--line);
-  overflow: auto;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font: 13px/1.4 'Inter', sans-serif;
-}
-
-/* Label header row */
-.head-row th {
-  background: #f8f9fb;
-  color: var(--ink-soft);
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  padding: 13px 14px;
-  text-align: left;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-}
-
-/* Filter header row */
-.filter-row th {
-  background: #f3f4f7;
-  padding: 7px 10px;
-  border-bottom: 2px solid var(--line);
-  position: sticky;
-  top: 40px;
-  z-index: 1;
-}
-
-.col-filter {
-  width: 100%;
-  appearance: none;
-  height: 28px;
-  border: 1.5px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  padding: 0 8px;
-  font: 12px/1 'Inter', sans-serif;
-  color: var(--ink);
-  outline: none;
-  transition: border-color .15s, box-shadow .15s;
-  min-width: 70px;
-}
-.col-filter:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
-.col-filter::placeholder { color: #b7b9c2; }
-.col-select { cursor: pointer; }
-
-/* Body */
-.data-table tbody tr {
-  border-bottom: 1px solid var(--line);
-  transition: background .1s;
-}
-.data-table tbody tr:last-child { border-bottom: none; }
-.data-table tbody tr:hover { background: rgba(59,63,224,.025); }
-
-.data-table tbody td {
-  padding: 13px 14px;
-  vertical-align: middle;
-  color: var(--ink);
-}
-
-.td-num   { font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
-.td-date  { white-space: nowrap; font-size: 12px; color: var(--ink-soft); }
-.td-center { text-align: center; font-size: 12px; color: var(--ink-soft); }
-.td-muted { font-size: 12px; color: var(--ink-soft); }
-
-.group-chip {
-  display: inline-block; padding: 2px 8px; border-radius: 4px;
-  background: rgba(59,63,224,.08); color: var(--brand-ink);
-  font: 500 11px/1.4 'Inter', sans-serif; white-space: nowrap;
-}
-
-.status-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 10px; border-radius: 20px;
-  font: 600 12px/1 'Inter', sans-serif; white-space: nowrap;
-}
-.status-badge::before {
-  content: ''; width: 6px; height: 6px;
-  border-radius: 50%; background: currentColor; opacity: .7; flex-shrink: 0;
-}
-
-.role-chip {
-  display: inline-block; padding: 3px 10px; border-radius: 20px;
-  background: rgba(107,114,128,.1); color: var(--ink-soft);
-  font: 500 12px/1.4 'Inter', sans-serif; white-space: nowrap;
-}
-.role-chip--new { background: rgba(59,63,224,.1); color: var(--brand-ink); }
-
-/* Row actions */
-.row-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-
-.btn-sm { height: 30px !important; padding: 0 12px !important; font-size: 12px !important; }
-
-.btn-primary {
-  height: 36px; padding: 0 20px; border: none; border-radius: var(--radius);
-  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
-  color: #fff; font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 4px 14px -6px rgba(91,59,217,.6);
-  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
-}
-.btn-primary:hover { transform: scale(1.03); box-shadow: 0 4px 10px -4px rgba(91,59,217,.75); }
-
-.btn-outline {
-  height: 36px; padding: 0 16px;
-  background: none; border: 1.5px solid var(--line); border-radius: var(--radius);
-  font: 500 13px/1 'Inter', sans-serif; color: var(--ink-soft); cursor: pointer;
-  transition: border-color .15s, color .15s, background .15s;
-}
-.btn-outline:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
-
-.btn-danger {
-  height: 36px; padding: 0 16px;
-  background: none; border: 1.5px solid rgba(220,38,38,.3); border-radius: var(--radius);
-  font: 500 13px/1 'Inter', sans-serif; color: #dc2626; cursor: pointer;
-  transition: border-color .15s, background .15s;
-}
-.btn-danger:hover { border-color: #dc2626; background: rgba(220,38,38,.06); }
-
-.btn-danger-solid {
-  height: 36px; padding: 0 20px; border: none; border-radius: var(--radius);
-  background: #dc2626; color: #fff;
-  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 4px 14px -6px rgba(220,38,38,.5);
-  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
-}
-.btn-danger-solid:hover { transform: scale(1.02); box-shadow: 0 4px 10px -4px rgba(220,38,38,.65); }
-
-/* ── Empty state ── */
-.empty-state {
+/* ── States ── */
+.state-center {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 8px; padding: 48px 24px; color: var(--ink-soft); text-align: center;
+  gap: 12px; padding: 80px 20px;
+  font: 500 15px/1.5 'Inter', sans-serif; color: var(--ink-soft); text-align: center;
 }
-.empty-state svg { width: 44px; height: 44px; opacity: .3; }
-.empty-state p { font: 600 15px/1 'Inter', sans-serif; margin: 0; }
-.empty-state--page {
-  background: var(--card); border-radius: var(--radius);
-  box-shadow: var(--shadow); min-height: 300px;
+.state-error { color: #dc2626; }
+.state-error svg { width: 36px; height: 36px; }
+.spinner {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 3px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite;
 }
-.empty-state--page span { font-size: 13px; max-width: 300px; line-height: 1.5; }
+@keyframes spin { to { transform: rotate(360deg) } }
 
-/* ── Modal ── */
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(10,12,30,.5); z-index: 200;
-  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
-  display: grid; place-items: center; padding: 20px;
+/* ── Card ── */
+.section-card {
+  background: var(--card); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 24px;
 }
-.modal-card {
-  background: var(--card); border-radius: 16px;
-  box-shadow: 0 24px 56px -12px rgba(10,12,30,.3);
-  width: min(560px, 100%); max-height: 88vh;
-  display: flex; flex-direction: column; overflow: hidden;
-}
-.modal-card--sm { max-width: 420px; }
-.modal-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 24px; border-bottom: 1px solid var(--line); flex-shrink: 0;
-}
-.modal-title {
+
+.table-header { margin-bottom: 4px; }
+.title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.section-title {
   font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0;
 }
-.modal-head-right { display: flex; align-items: center; gap: 8px; }
+.count-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 22px; padding: 0 7px; border-radius: 11px;
+  background: rgba(59,63,224,.1); color: var(--brand-ink);
+  font: 600 12px/1 'Inter', sans-serif;
+}
+.subtitle { font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); margin: 0 0 18px; }
+
+/* ── Empty ── */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 48px 20px; color: var(--ink-soft); text-align: center;
+}
+.empty-state svg { width: 40px; height: 40px; opacity: .3; }
+.empty-state span { font: 500 14px/1 'Inter', sans-serif; }
+.empty-state p    { font: 13px/1.5 'Inter', sans-serif; color: #9ca3af; margin: 0; }
+
+/* ── Table ── */
+.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.data-table { width: 100%; border-collapse: collapse; font: 13px/1.4 'Inter', sans-serif; }
+.head-row th {
+  position: sticky; top: 0; z-index: 2;
+  background: #f8f9fb; padding: 10px 14px;
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line);
+}
+.data-table tbody tr { transition: background .12s; }
+.data-table tbody tr:hover { background: rgba(59,63,224,.03); }
+.data-table td { padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-num     { color: var(--ink-soft); width: 36px; }
+.td-subject { font-weight: 600; min-width: 140px; }
+.td-nowrap  { white-space: nowrap; }
+.td-soft    { color: var(--ink-soft); }
+.td-changes { max-width: 240px; font-size: 12px; color: var(--brand-ink); }
+.td-reason  { max-width: 180px; font-size: 12px; color: var(--ink-soft); }
+
+/* ── Actions ── */
+.action-btns { display: flex; gap: 6px; }
+
+.btn-sm { height: 30px; padding: 0 12px; border-radius: 8px; font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap; border: none; transition: opacity .15s, transform .1s; }
+.btn-sm:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn-approve-sm { background: rgba(16,185,129,.12); color: #065f46; }
+.btn-approve-sm:hover:not(:disabled) { background: rgba(16,185,129,.2); }
+
+.btn-reject-sm { background: rgba(220,38,38,.08); color: #b91c1c; }
+.btn-reject-sm:hover:not(:disabled) { background: rgba(220,38,38,.15); }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(10,12,30,.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  /* CSS-переменные для teleport-контента */
+  --bg:        #f3f4f7;
+  --card:      #ffffff;
+  --ink:       #1a1d24;
+  --ink-soft:  #6b7280;
+  --line:      #d7d9e0;
+  --brand:     #3b3fe0;
+  --brand-ink: #2a2e9e;
+  --radius:    10px;
+  --ease:      cubic-bezier(.2,.7,.2,1);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+.modal {
+  background: var(--card); border-radius: 16px; width: 100%; max-width: 440px;
+  box-shadow: 0 24px 64px -12px rgba(10,12,30,.3);
+  display: flex; flex-direction: column;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px; border-bottom: 1px solid var(--line);
+}
+.modal-title {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 15px; font-weight: 600; color: #3C38B6;
+}
 .modal-close {
   width: 32px; height: 32px; border-radius: 8px;
   background: none; border: none; cursor: pointer;
-  display: grid; place-items: center; flex-shrink: 0;
-  color: var(--ink-soft); transition: background .15s, color .15s;
+  display: grid; place-items: center; color: var(--ink-soft);
+  transition: background .15s;
 }
-.modal-close:hover { background: var(--bg); color: var(--ink); }
+.modal-close:hover { background: var(--bg); }
 .modal-close svg { width: 16px; height: 16px; }
 
-.btn-edit {
-  display: flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 12px;
-  background: none; border: 1.5px solid var(--line); border-radius: 6px;
-  font: 500 12px/1 'Inter', sans-serif; color: var(--ink-soft); cursor: pointer;
-  transition: border-color .15s, color .15s;
-}
-.btn-edit:hover { border-color: var(--brand); color: var(--brand); }
-.btn-edit svg { width: 13px; height: 13px; }
+.modal-body   { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal-disc   { font: 700 14px/1.3 'Inter', sans-serif; color: var(--ink); }
+.modal-teacher{ font: 500 13px/1   'Inter', sans-serif; color: var(--ink-soft); }
 
-.modal-body {
-  flex: 1; overflow-y: auto; padding: 20px 24px;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.modal-body::-webkit-scrollbar { width: 4px; }
-.modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-.detail-row { display: flex; gap: 12px; align-items: flex-start; }
-.detail-label {
-  font: 500 13px/1.5 'Inter', sans-serif; color: var(--ink-soft);
-  min-width: 140px; flex-shrink: 0;
-}
-.detail-value { font: 13px/1.5 'Inter', sans-serif; color: var(--ink); }
-.detail-value--danger { color: #dc2626; }
-.detail-input {
-  flex: 1; appearance: none; border: 1.5px solid var(--line); border-radius: 6px;
-  background: #fff; padding: 6px 10px;
-  font: 13px/1.4 'Inter', sans-serif; color: var(--ink); outline: none;
-  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
-}
-.detail-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
-.detail-textarea { resize: vertical; min-height: 80px; padding: 8px 10px; line-height: 1.5; }
-
-.assign-info { font: 600 14px/1.4 'Inter', sans-serif; color: var(--ink); margin: 0 0 16px; }
-.assign-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.assign-field { display: flex; flex-direction: column; gap: 6px; }
-.assign-field--full { grid-column: 1 / -1; }
-.assign-field label { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
+.field        { display: flex; flex-direction: column; gap: 6px; }
+.field-label  { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
+.required     { color: #dc2626; }
 
 .input {
   appearance: none; height: 38px; width: 100%;
@@ -877,32 +412,39 @@ function approveRole(req) {
   font: 13px/1 'Inter', sans-serif; color: var(--ink); outline: none;
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
-.input::placeholder { color: #b7b9c2; }
-.input--area { height: auto; min-height: 80px; padding: 8px 12px; line-height: 1.5; resize: vertical; }
+.input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.textarea { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+.form-error { font: 12px/1.4 'Inter', sans-serif; color: #dc2626; margin: 0; }
 
-.reject-hint { font: 13px/1.5 'Inter', sans-serif; color: var(--ink-soft); margin: 0 0 10px; }
-
-.modal-footer {
-  display: flex; gap: 8px; justify-content: flex-end;
-  padding: 14px 24px; border-top: 1px solid var(--line); flex-shrink: 0;
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 20px; border-top: 1px solid var(--line);
 }
+.btn-outline {
+  padding: 0 18px; height: 40px; background: #fff;
+  border: 1.5px solid #c5c7d4; border-radius: var(--radius);
+  font: 600 13px/1 'Inter', sans-serif; color: var(--ink); cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.btn-outline:hover { border-color: var(--brand); color: var(--brand); }
 
-/* ── Transition ── */
+.btn-reject-confirm {
+  padding: 0 20px; height: 40px; border: none; border-radius: var(--radius);
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  color: #fff; font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  box-shadow: 0 4px 14px -4px rgba(185,28,28,.5);
+  transition: transform .15s var(--ease);
+}
+.btn-reject-confirm:hover:not(:disabled) { transform: scale(1.03); }
+.btn-reject-confirm:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Modal transition ── */
 .modal-enter-active { transition: opacity .2s var(--ease); }
-.modal-leave-active { transition: opacity .15s var(--ease); }
+.modal-leave-active { transition: opacity .18s var(--ease); }
 .modal-enter-from, .modal-leave-to { opacity: 0; }
-.modal-enter-active .modal-card { transition: transform .25s var(--ease); }
-.modal-leave-active  .modal-card { transition: transform .2s  var(--ease); }
-.modal-enter-from .modal-card, .modal-leave-to .modal-card { transform: scale(.96) translateY(12px); }
+.modal-enter-active .modal { transition: transform .25s var(--ease); }
+.modal-leave-active  .modal { transition: transform .2s var(--ease); }
+.modal-enter-from .modal, .modal-leave-to .modal { transform: scale(.96) translateY(10px); }
 
-/* ── Responsive ── */
-@media (max-width: 768px) {
-  .main { padding: 16px; }
-  .page-top { flex-direction: column; align-items: flex-start; }
-  .assign-form { grid-template-columns: 1fr; }
-  .assign-field--full { grid-column: auto; }
-  .detail-row { flex-direction: column; gap: 4px; }
-  .detail-label { min-width: unset; }
-}
+@media (max-width: 640px) { .main { padding: 16px; } }
 </style>

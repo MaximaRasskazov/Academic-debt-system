@@ -35,39 +35,33 @@ function handleOutsideClick(e) {
 onMounted(async () => {
   document.addEventListener('mousedown', handleOutsideClick)
 
+  // Пре-заполнение при переходе с RetakesPage → кнопка "Изменить"
   const retakeId = route.query.retakeId
   if (retakeId) {
+    activeTab.value = 'submit'
     try {
-      const [retakeRes, discRes] = await Promise.allSettled([
+      const [retakeRes, discsRes] = await Promise.allSettled([
         retakesApi.getById(retakeId),
         disciplinesApi.getAll({ limit: 500 }),
       ])
-
       const discMap = {}
-      if (discRes.status === 'fulfilled') {
-        const items = discRes.value.data.items ?? discRes.value.data ?? []
-        items.forEach(d => { discMap[d.id] = d.name || d.code })
-      }
+      if (discsRes.status === 'fulfilled')
+        (discsRes.value.data.items ?? discsRes.value.data ?? [])
+          .forEach(d => { discMap[d.id] = d.name || d.code })
 
       if (retakeRes.status === 'fulfilled') {
         const r = retakeRes.value.data
-        const scheduled = r.scheduled_at ? new Date(r.scheduled_at) : null
-
-        form.subject  = discMap[r.discipline_id] || r.discipline_id || ''
-        form.type     = r.kind || 'normal'
-        form.date     = scheduled
-          ? scheduled.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-          : null
+        const s = r.scheduled_at ? new Date(r.scheduled_at) : null
+        form.subject  = discMap[r.discipline_id] || ''
+        form.type     = r.kind === 'commission' ? 'commission' : 'normal'
+        form.date     = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
         form.duration = r.duration_minutes || 90
         form.building = r.building || ''
         form.room     = r.room     || ''
-
-        if (scheduled) {
-          hourDisplay.value   = String(scheduled.getHours()).padStart(2, '0')
-          minuteDisplay.value = String(scheduled.getMinutes()).padStart(2, '0')
+        if (s) {
+          hourDisplay.value   = String(s.getHours()).padStart(2, '0')
+          minuteDisplay.value = String(s.getMinutes()).padStart(2, '0')
         }
-
-        activeTab.value = 'submit'
       }
     } catch { /* ignore prefill errors */ }
   }
@@ -75,34 +69,7 @@ onMounted(async () => {
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 // ── My Requests data ──────────────────────────────────────
-const myRequests = ref([
-  {
-    id: 1, subject: 'Математический анализ', type: 'normal',
-    date: '15.05.2026', time: '10:00', duration: 90,
-    teachers: ['Иванов И.И.'], students: ['Петров А.А.', 'Сидоров Б.Б.'],
-    group: 'ИВТ-21', building: '1', room: '204',
-    description: 'Студенты пропустили экзамен по уважительной причине',
-    status: 'pending', submittedAt: '01.05.2026', rejectReason: '',
-  },
-  {
-    id: 2, subject: 'Физика', type: 'commission',
-    date: '20.05.2026', time: '14:00', duration: 120,
-    teachers: ['Иванов И.И.', 'Козлов В.В.', 'Морозов С.С.'],
-    students: ['Алексеев Д.Д.'],
-    group: 'ФИЗ-22', building: '2', room: '308',
-    description: 'Пересдача с комиссией для студента с тремя попытками',
-    status: 'approved', submittedAt: '28.04.2026', rejectReason: '',
-  },
-  {
-    id: 3, subject: 'Линейная алгебра', type: 'normal',
-    date: '25.05.2026', time: '09:00', duration: 60,
-    teachers: ['Иванов И.И.'],
-    students: ['Новиков Е.Е.', 'Попов Ж.Ж.', 'Лебедев З.З.'],
-    group: 'МАТ-21', building: '3', room: '112', description: '',
-    status: 'rejected', submittedAt: '25.04.2026',
-    rejectReason: 'Указанная аудитория недоступна в это время',
-  },
-])
+const myRequests = ref([])
 
 const statusFilter = ref('all')
 const filteredRequests = computed(() =>
@@ -270,12 +237,20 @@ function closeDetail()  { detailModal.value = null }
           <div v-if="activeTab === 'my-requests'" class="section-card">
             <div class="table-header">
               <h2 class="section-title" style="margin:0">Мои заявки</h2>
-              <select class="filter-select" v-model="statusFilter">
-                <option value="all">Все статусы</option>
-                <option value="pending">Ожидает</option>
-                <option value="approved">Одобрена</option>
-                <option value="rejected">Отклонена</option>
-              </select>
+              <div class="table-header-actions">
+                <select class="filter-select" v-model="statusFilter">
+                  <option value="all">Все статусы</option>
+                  <option value="pending">Ожидает</option>
+                  <option value="approved">Одобрена</option>
+                  <option value="rejected">Отклонена</option>
+                </select>
+                <button class="btn-primary btn-sm-primary" @click="activeTab = 'submit'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                  Подать заявку
+                </button>
+              </div>
             </div>
 
             <div class="table-wrap">
@@ -313,7 +288,12 @@ function closeDetail()  { detailModal.value = null }
                     </td>
                   </tr>
                   <tr v-if="filteredRequests.length === 0">
-                    <td colspan="8" class="empty-row">Заявок не найдено</td>
+                    <td colspan="8" class="empty-row">
+                      <div class="empty-cell">
+                        <span>Заявок пока нет</span>
+                        <button class="btn-link" @click="activeTab = 'submit'">Подать первую заявку →</button>
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -355,7 +335,7 @@ function closeDetail()  { detailModal.value = null }
                 <div class="field field--shrink">
                   <label>Время</label>
                   <div class="time-picker">
-                    <input class="time-input" type="text" inputmode="numeric" v-model="hourDisplay"   maxlength="2" placeholder="00" @input="onTimeInput" @blur="onHourBlur" />
+                    <input class="time-input" type="text" inputmode="numeric" v-model="hourDisplay"   maxlength="2" placeholder="09" @input="onTimeInput" @blur="onHourBlur" />
                     <span class="time-colon">:</span>
                     <input class="time-input" type="text" inputmode="numeric" v-model="minuteDisplay" maxlength="2" placeholder="00" @input="onTimeInput" @blur="onMinuteBlur" />
                   </div>
@@ -372,10 +352,12 @@ function closeDetail()  { detailModal.value = null }
 
               <div class="form-row">
                 <div class="field field--full">
-                  <label>{{ isCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
+                  <label>{{ isCommission ? 'Преподаватели комиссии' : 'Преподаватель' }}</label>
                   <div class="tags-wrap">
                     <span v-for="(t, i) in form.teachers" :key="'t'+i" class="tag">{{ t }}<button type="button" class="tag-remove" @click="removeTeacher(i)">×</button></span>
-                    <input v-if="isCommission || form.teachers.length === 0" class="tag-input" v-model="teacherInput" :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'" @keydown.enter.prevent="addTeacher" />
+                    <input v-if="isCommission || form.teachers.length === 0" class="tag-input" v-model="teacherInput"
+                           :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'"
+                           @keydown.enter.prevent="addTeacher" />
                   </div>
                   <p v-if="isCommission && form.teachers.length > 0 && !teacherCountOk" class="hint-warn">Для пересдачи с комиссией необходимо минимум 3 преподавателя</p>
                 </div>
@@ -408,15 +390,15 @@ function closeDetail()  { detailModal.value = null }
 
               <div class="form-row">
                 <div class="field field--full">
-                  <label>Описание</label>
-                  <textarea class="input textarea" v-model="form.description" placeholder="Причина или дополнительные сведения..." rows="3" />
+                  <label>Описание / причина</label>
+                  <textarea class="input textarea" v-model="form.description" placeholder="Причина или дополнительные сведения…" rows="3" />
                 </div>
               </div>
 
               <p v-if="formError"   class="form-msg form-error">{{ formError }}</p>
               <p v-if="formSuccess" class="form-msg form-success">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
-                Заявка успешно отправлена
+                Заявка успешно подана
               </p>
 
               <button class="btn-submit" type="submit">Отправить заявку</button>
@@ -750,6 +732,15 @@ function closeDetail()  { detailModal.value = null }
 .td-nowrap  { white-space: nowrap; }
 .td-soft    { color: var(--ink-soft); }
 .empty-row  { text-align: center; color: var(--ink-soft); padding: 36px !important; }
+.empty-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.btn-link   { background: none; border: none; cursor: pointer; color: var(--brand); font: 500 13px/1 'Inter', sans-serif; text-decoration: underline; padding: 0; }
+
+.table-header-actions { display: flex; align-items: center; gap: 10px; }
+.btn-sm-primary {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px !important; padding: 0 16px !important; font-size: 13px !important;
+}
+.btn-sm-primary svg { width: 14px; height: 14px; }
 
 /* ── Action buttons ── */
 .action-btns { display: flex; gap: 6px; }
@@ -856,6 +847,25 @@ function closeDetail()  { detailModal.value = null }
 .form-msg { font: 13px/1.4 'Inter', sans-serif; margin: 0; display: flex; align-items: center; gap: 6px; }
 .form-error   { color: #dc2626; }
 .form-success { color: #059669; }
+
+/* ── Real API submit form extras ── */
+.loading-hint { font: 13px/1.5 'Inter', sans-serif; color: var(--ink-soft); padding: 10px 0; }
+
+.current-values {
+  background: var(--bg); border-radius: 10px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cv-label { font: 600 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
+.cv-grid  { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.cv-item  { display: flex; flex-direction: column; gap: 3px; }
+.cv-key   { font: 500 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.cv-val   { font: 600 13px/1 'Inter', sans-serif; color: var(--ink); }
+
+.changes-header {
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding-bottom: 4px; border-bottom: 1px solid var(--line);
+}
 .form-success svg { width: 15px; height: 15px; }
 
 .btn-submit {
@@ -896,6 +906,18 @@ function closeDetail()  { detailModal.value = null }
   backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
   padding: 20px;
+  /* CSS-переменные для teleport-контента (выходит за пределы .teacher-req-root) */
+  --bg:        #f3f4f7;
+  --card:      #ffffff;
+  --ink:       #1a1d24;
+  --ink-soft:  #6b7280;
+  --line:      #d7d9e0;
+  --brand:     #3b3fe0;
+  --brand-ink: #2a2e9e;
+  --radius:    10px;
+  --shadow:    0 2px 8px rgba(20,22,60,.07);
+  --ease:      cubic-bezier(.2,.7,.2,1);
+  font-family: 'Inter', system-ui, sans-serif;
 }
 
 /* ── Modal base ── */
