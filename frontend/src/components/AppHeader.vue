@@ -1,8 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { useNotificationsStore } from '../stores/notifications'
-import { kindLabel } from '../stores/notifications'
+import { useNotificationsStore, kindLabel } from '../stores/notifications'
 import ProfilePanel from './ProfilePanel.vue'
 
 defineEmits(['open-sidebar'])

@@ -20,7 +20,7 @@ const to   = ref(isoDate(today))
 
 /* ─── Фильтры (клиентская сторона) ─────────────────────────────── */
 const searchQuery   = ref('')
-const discFilter    = ref('')   // discipline_id
+const discFilter    = ref('')   // discipline_name (API не возвращает discipline_id)
 const teacherFilter = ref('')   // user_id
 
 /* ─── Справочники для select'ов ─────────────────────────────────── */
@@ -44,9 +44,12 @@ const loading    = ref(false)
 const loadError  = ref(null)
 
 async function loadRetakes() {
-  if (!from.value || !to.value || from.value >= to.value) return
-  loading.value  = true
   loadError.value = null
+  if (!from.value || !to.value || from.value >= to.value) {
+    rawRetakes.value = []
+    return
+  }
+  loading.value = true
   try {
     const data = await reportsApi.retakes({ from: from.value, to: to.value })
     rawRetakes.value = Array.isArray(data) ? data : (data.items ?? [])
@@ -67,7 +70,6 @@ function normalizeRetake(r) {
   const timeStr = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
   return {
     id:       r.retake_id,
-    _discId:  r.discipline_id,  // для фильтра по дисциплине (если придёт)
     subject:  r.discipline_name || '—',
     date:     isoDate(dt),
     time:     timeStr,
@@ -95,7 +97,7 @@ const filteredRetakes = computed(() => {
   const q = searchQuery.value.toLowerCase()
   return allRetakes.value.filter((r) => {
     if (q && !r.subject.toLowerCase().includes(q)) return false
-    if (discFilter.value && r._discId !== discFilter.value) return false
+    if (discFilter.value && r.subject !== discFilter.value) return false
     if (teacherFilter.value) {
       // у нас teachers — массив full_name-строк; ищем по user_id через rawRetakes
       const raw = rawRetakes.value.find((x) => x.retake_id === r.id)
@@ -388,7 +390,7 @@ function downloadBlob(blob, filename) {
             <div class="filter-row" v-if="disciplines.length">
               <select class="filter-select" v-model="discFilter">
                 <option value="">Все дисциплины</option>
-                <option v-for="d in disciplines" :key="d.id" :value="d.id">{{ d.name }}</option>
+                <option v-for="d in disciplines" :key="d.id" :value="d.name">{{ d.name }}</option>
               </select>
             </div>
 
