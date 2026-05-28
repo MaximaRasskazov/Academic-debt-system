@@ -53,11 +53,39 @@ services:
       # Если true, entrypoint после миграций накатит sql/seeds/* с
       # демо-аккаунтами. В prod держать false.
       SEED_DEV_ACCOUNTS: ${SEED_DEV_ACCOUNTS:-false}
+      EMULATOR_URL: ${EMULATOR_URL:-}
+      EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-5m}
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Фронт в dev-режиме: Vite dev-сервер с hot-reload. Сорсы монтируются
+  # с хоста, node_modules остаются в контейнере (анонимный том, чтобы
+  # хостовские node_modules для другой ОС не перетёрли образ).
+  #
+  # VITE_BACKEND_URL=http://backend:8080 — потому что внутри docker-сети
+  # фронт видит backend по имени сервиса, а не по localhost.
+  # CHOKIDAR_USEPOLLING=true — на Windows/macOS bind-mount не отдаёт
+  # inotify-события, без polling hot-reload не работает.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      VITE_BACKEND_URL: http://backend:8080
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/src
+      - /src/node_modules
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

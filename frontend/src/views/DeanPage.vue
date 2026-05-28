@@ -10,6 +10,7 @@ import UpcomingRetakes from '../components/UpcomingRetakes.vue'
 import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
 
 const sidebarOpen = ref(false)
 
@@ -97,45 +98,58 @@ const upcomingRetakes = computed(() =>
 )
 
 // --- Форма назначения пересдачи ---
+// disciplineId/teachers хранят UUID, чтобы при submit не нужно было
+// дополнительно искать по имени и не было риска отправить несуществующее.
 const retakeForm = reactive({
-  subject:  '',
-  type:     'normal',
-  date:     null,
-  time:     '',
-  duration: 90,
-  building: '',
-  room:     '',
-  teachers: [],
+  disciplineId: '',
+  type:         'normal',
+  date:         null,
+  time:         '',
+  duration:     90,
+  building:     '',
+  room:         '',
+  teachers:     [], // массив объектов { id, fullName }
 })
 
 const submitting = ref(false)
 const submitError = ref('')
 const submitSuccess = ref('')
 
-// Реальное создание пересдачи через backend.
-//
-// Backend ждёт UUID дисциплины, kind=regular|commission, scheduled_at в
-// ISO8601 (RFC3339). retakeForm.subject здесь приходит строкой имени
-// дисциплины — для прода нужен select по списку, но пока ищем по
-// точному совпадению в загруженном disciplines[].
-//
-// TODO: заменить input на select с вариантами disciplines.value и
-// привязать teachers тоже к UUID пользователей (через teacher_id).
+// Список преподавателей подтягиваем один раз при загрузке страницы —
+// тогда multiselect работает без задержек на каждый клик.
+const allTeachers = ref([])
+async function loadTeachers() {
+  try {
+    const resp = await usersApi.list({ role: 'teacher', limit: 200 })
+    allTeachers.value = (resp.items || []).map((u) => ({
+      id: u.id,
+      fullName: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '),
+      email: u.email,
+    }))
+  } catch (e) {
+    // Не критично для рендера страницы — поле "преподаватели" просто
+    // покажет пустой dropdown. В консоль уйдёт причина для отладки.
+    console.warn('Не удалось загрузить список преподавателей', e)
+  }
+}
+
+// Создание пересдачи: сначала POST /retakes, затем по одному запросу
+// POST /retakes/:id/teachers для каждого выбранного. Студенты на этом
+// шаге не добавляются — декан делает это отдельно из карточки пересдачи.
 async function submitRetake() {
   submitError.value = ''
   submitSuccess.value = ''
 
-  const disc = disciplines.value.find(
-    (d) =>
-      d.name.toLowerCase() === retakeForm.subject.toLowerCase() ||
-      d.code.toLowerCase() === retakeForm.subject.toLowerCase(),
-  )
-  if (!disc) {
-    submitError.value = `Дисциплина "${retakeForm.subject}" не найдена в справочнике`
+  if (!retakeForm.disciplineId) {
+    submitError.value = 'Выберите дисциплину'
     return
   }
   if (!retakeForm.date) {
     submitError.value = 'Укажите дату пересдачи'
+    return
+  }
+  if (!retakeForm.building.trim() || !retakeForm.room.trim()) {
+    submitError.value = 'Заполните корпус и аудиторию'
     return
   }
   if (!teacherCountOk.value) {
@@ -151,16 +165,33 @@ async function submitRetake() {
   submitting.value = true
   try {
     const r = await retakesApi.create({
-      discipline_id: disc.id,
+      discipline_id: retakeForm.disciplineId,
       kind: retakeForm.type === 'commission' ? 'commission' : 'regular',
-      building: retakeForm.building,
-      room: retakeForm.room,
+      building: retakeForm.building.trim(),
+      room: retakeForm.room.trim(),
       scheduled_at: dt.toISOString(),
       duration_minutes: retakeForm.duration,
     })
-    submitSuccess.value = `Пересдача создана. ID: ${r.id?.slice(0, 8) || ''}…`
-    // Очищаем форму, перезагружаем список
-    retakeForm.subject = ''
+
+    // Привязываем выбранных преподавателей. Если один сбоит — продолжаем,
+    // декан увидит итоговое предупреждение, но пересдача уже создана.
+    const failed = []
+    for (const t of retakeForm.teachers) {
+      try {
+        await retakesApi.addTeacher(r.id, t.id)
+      } catch (err) {
+        failed.push(t.fullName)
+      }
+    }
+
+    if (failed.length > 0) {
+      submitSuccess.value = `Пересдача создана, но не удалось добавить: ${failed.join(', ')}`
+    } else {
+      submitSuccess.value = 'Пересдача создана'
+    }
+
+    // Очищаем форму, перезагружаем список.
+    retakeForm.disciplineId = ''
     retakeForm.building = ''
     retakeForm.room = ''
     retakeForm.teachers = []
@@ -186,10 +217,65 @@ function selectType(val) {
 }
 function handleOutsideClick(e) {
   if (!e.target.closest('.custom-select')) typeDropdownOpen.value = false
+  if (!e.target.closest('.discipline-select')) disciplineDropdownOpen.value = false
+  if (!e.target.closest('.teacher-select')) teacherDropdownOpen.value = false
+}
+
+// --- Дисциплина: searchable select ---
+const disciplineDropdownOpen = ref(false)
+const disciplineSearch = ref('')
+const selectedDiscipline = computed(() =>
+  disciplines.value.find((d) => d.id === retakeForm.disciplineId),
+)
+const filteredDisciplines = computed(() => {
+  const q = disciplineSearch.value.trim().toLowerCase()
+  if (!q) return disciplines.value
+  return disciplines.value.filter(
+    (d) =>
+      d.name.toLowerCase().includes(q) ||
+      (d.code || '').toLowerCase().includes(q),
+  )
+})
+function selectDiscipline(d) {
+  retakeForm.disciplineId = d.id
+  disciplineSearch.value = ''
+  disciplineDropdownOpen.value = false
+}
+
+// --- Преподаватели: multiselect из загруженного списка ---
+const teacherDropdownOpen = ref(false)
+const teacherSearch = ref('')
+const filteredTeachers = computed(() => {
+  const q = teacherSearch.value.trim().toLowerCase()
+  const selectedIds = new Set(retakeForm.teachers.map((t) => t.id))
+  return allTeachers.value
+    .filter((t) => !selectedIds.has(t.id))
+    .filter((t) =>
+      !q
+        ? true
+        : t.fullName.toLowerCase().includes(q) ||
+          (t.email || '').toLowerCase().includes(q),
+    )
+})
+function selectTeacher(t) {
+  if (!isCommission.value && retakeForm.teachers.length >= 1) {
+    // Для обычной пересдачи — заменяем единственного преподавателя.
+    retakeForm.teachers = [t]
+  } else {
+    retakeForm.teachers.push(t)
+  }
+  teacherSearch.value = ''
+  // Для commission удобно оставлять dropdown открытым, чтобы добавить
+  // следующего без повторного клика.
+  if (!isCommission.value) teacherDropdownOpen.value = false
+}
+function removeTeacherById(id) {
+  retakeForm.teachers = retakeForm.teachers.filter((t) => t.id !== id)
 }
 onMounted(() => {
   document.addEventListener('mousedown', handleOutsideClick)
   loadDashboard()
+  loadTeachers()
 })
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
@@ -226,22 +312,16 @@ function increaseDuration()  { if (retakeForm.duration < DURATION_MAX) retakeFor
 function clampDuration() { retakeForm.duration = Math.max(DURATION_MIN, Math.min(DURATION_MAX, retakeForm.duration || DURATION_MIN)) }
 
 // --- Преподаватели ---
-const teacherInput   = ref('')
 const isCommission   = computed(() => retakeForm.type === 'commission')
 const minTeachers    = computed(() => isCommission.value ? 3 : 1)
 const teacherCountOk = computed(() => retakeForm.teachers.length >= minTeachers.value)
 
-function addTeacher() {
-  const name = teacherInput.value.trim()
-  if (!name) return
-  if (!isCommission.value && retakeForm.teachers.length >= 1) return
-  retakeForm.teachers.push(name)
-  teacherInput.value = ''
-}
-function removeTeacher(i) { retakeForm.teachers.splice(i, 1) }
-
+// При смене типа пересдачи на "обычную" обрезаем список до одного — для
+// regular достаточно одного преподавателя, остальные смутят бэк.
 watch(() => retakeForm.type, (type) => {
-  if (type === 'normal' && retakeForm.teachers.length > 1) retakeForm.teachers.splice(1)
+  if (type === 'normal' && retakeForm.teachers.length > 1) {
+    retakeForm.teachers = retakeForm.teachers.slice(0, 1)
+  }
 })
 </script>
 
@@ -276,7 +356,39 @@ watch(() => retakeForm.type, (type) => {
               <div class="form-row">
                 <div class="field">
                   <label>Дисциплина</label>
-                  <input class="input" v-model="retakeForm.subject" placeholder="Название дисциплины" />
+                  <div class="custom-select discipline-select" :class="{ open: disciplineDropdownOpen }">
+                    <button type="button" class="custom-select-trigger" @click="disciplineDropdownOpen = !disciplineDropdownOpen">
+                      <span v-if="selectedDiscipline">{{ selectedDiscipline.name }}</span>
+                      <span v-else class="placeholder">Выберите дисциплину</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M6 9l6 6 6-6"/>
+                      </svg>
+                    </button>
+                    <div class="custom-select-dropdown dropdown-scroll">
+                      <div class="dropdown-search">
+                        <input
+                          v-model="disciplineSearch"
+                          class="dropdown-search-input"
+                          placeholder="Поиск по названию или коду"
+                          @click.stop
+                        />
+                      </div>
+                      <button
+                        v-for="d in filteredDisciplines"
+                        :key="d.id"
+                        type="button"
+                        class="custom-select-option"
+                        :class="{ selected: retakeForm.disciplineId === d.id }"
+                        @click="selectDiscipline(d)"
+                      >
+                        <span class="opt-main">{{ d.name }}</span>
+                        <span class="opt-sub">{{ d.code }}</span>
+                      </button>
+                      <div v-if="filteredDisciplines.length === 0" class="dropdown-empty">
+                        Ничего не найдено
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="field">
                   <label>Тип пересдачи</label>
@@ -356,18 +468,35 @@ watch(() => retakeForm.type, (type) => {
               <div class="form-row">
                 <div class="field field--full">
                   <label>{{ isCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
-                  <div class="teacher-wrap">
-                    <span v-for="(t, i) in retakeForm.teachers" :key="i" class="teacher-tag">
-                      {{ t }}
-                      <button type="button" class="teacher-tag-remove" @click="removeTeacher(i)">×</button>
-                    </span>
-                    <input
-                      v-if="isCommission || retakeForm.teachers.length === 0"
-                      class="teacher-input"
-                      v-model="teacherInput"
-                      :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'"
-                      @keydown.enter.prevent="addTeacher"
-                    />
+                  <div class="custom-select teacher-select" :class="{ open: teacherDropdownOpen }">
+                    <div class="teacher-wrap" @click="teacherDropdownOpen = true">
+                      <span v-for="t in retakeForm.teachers" :key="t.id" class="teacher-tag">
+                        {{ t.fullName }}
+                        <button type="button" class="teacher-tag-remove" @click.stop="removeTeacherById(t.id)">×</button>
+                      </span>
+                      <input
+                        v-if="isCommission || retakeForm.teachers.length === 0"
+                        class="teacher-input"
+                        v-model="teacherSearch"
+                        :placeholder="retakeForm.teachers.length === 0 ? 'Выберите преподавателя…' : 'Добавить ещё…'"
+                        @focus="teacherDropdownOpen = true"
+                      />
+                    </div>
+                    <div v-if="teacherDropdownOpen" class="custom-select-dropdown dropdown-scroll">
+                      <button
+                        v-for="t in filteredTeachers"
+                        :key="t.id"
+                        type="button"
+                        class="custom-select-option"
+                        @click="selectTeacher(t)"
+                      >
+                        <span class="opt-main">{{ t.fullName }}</span>
+                        <span class="opt-sub">{{ t.email }}</span>
+                      </button>
+                      <div v-if="filteredTeachers.length === 0" class="dropdown-empty">
+                        {{ allTeachers.length === 0 ? 'Список преподавателей не загружен' : 'Все подходящие уже выбраны' }}
+                      </div>
+                    </div>
                   </div>
                   <p v-if="isCommission && retakeForm.teachers.length > 0 && !teacherCountOk" class="field-hint-warn">
                     Для пересдачи с комиссией необходимо минимум 3 преподавателя
@@ -599,6 +728,33 @@ watch(() => retakeForm.type, (type) => {
 }
 .custom-select-option:hover { background: rgba(59,63,224,.06); }
 .custom-select-option.selected { color: var(--brand); font-weight: 500; background: rgba(59,63,224,.05); }
+
+/* ── Двухстрочный вариант option (name + code/email) ── */
+.opt-main { display: block; font: 500 13px/1.3 'Inter', sans-serif; color: var(--ink); }
+.opt-sub  { display: block; font: 12px/1.3 'Inter', sans-serif; color: var(--ink-soft); margin-top: 2px; }
+
+/* ── Прокручиваемый dropdown (для длинного списка) ── */
+.dropdown-scroll { max-height: 260px; overflow-y: auto; }
+.dropdown-search { padding: 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #fff; z-index: 1; }
+.dropdown-search-input {
+  width: 100%; height: 32px; padding: 0 10px;
+  border: 1.5px solid var(--line); border-radius: 6px;
+  font: 12px/1 'Inter', sans-serif; color: var(--ink); outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.dropdown-search-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.dropdown-empty { padding: 14px; color: var(--ink-soft); text-align: center; font: 12px/1.4 'Inter', sans-serif; }
+.placeholder { color: #b7b9c2; }
+
+/* ── teacher-select: dropdown относительно теги-инпута ── */
+.teacher-select { position: relative; }
+.teacher-select .teacher-wrap { width: 100%; }
+.teacher-select .custom-select-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.12);
+  z-index: 50;
+}
 
 .btn-primary {
   align-self: center; padding: 0 32px; height: 40px; border: none;
