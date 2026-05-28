@@ -8,8 +8,10 @@ package teacher_request
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -129,7 +131,7 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 			Action:     "teacher_request.approve",
 			TargetType: "teacher_role_request",
 			TargetID:   &reqIDStr,
-			Details:    []byte(`{"role":"teacher"}`),
+			Details:    auditDetails(map[string]any{"role": teacherRoleSlug}),
 		})
 		return txErr
 	}); err != nil {
@@ -173,11 +175,24 @@ func (s *Service) Reject(ctx context.Context, actorID, requestID uuid.UUID, reas
 			Action:     "teacher_request.reject",
 			TargetType: "teacher_role_request",
 			TargetID:   &reqIDStr,
-			Details:    []byte(`{"reason":"` + reason + `"}`),
+			Details:    auditDetails(map[string]any{"reason": reason}),
 		})
 		return txErr
 	}); err != nil {
 		return queries.TeacherRoleRequest{}, err
 	}
 	return rejected, nil
+}
+
+// auditDetails сериализует payload в JSON для audit_log.details.
+// При ошибке маршалинга возвращает "{}" и логирует — лучше потерять
+// детали записи, чем получить невалидный JSON в БД (или повредить
+// аудит-журнал инъекцией кавычек из user input в reason).
+func auditDetails(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("teacher_request: marshal audit details", "err", err)
+		return []byte("{}")
+	}
+	return b
 }

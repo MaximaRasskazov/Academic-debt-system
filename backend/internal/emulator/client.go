@@ -168,33 +168,72 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 	return &resp.Data, nil
 }
 
-// get выполняет GET-запрос, декодирует JSON в dest.
+// get выполняет GET-запрос с экспоненциальным backoff на 429-ответы.
+// При 429 ждём 1с, 2с между попытками (max 3 попытки), потом
+// возвращаем ErrRateLimited. Это даёт sync-сервису шанс понять, что
+// эмулятор throttle-ит, и не двигать last_synced_at.
 func (c *Client) get(ctx context.Context, path string, dest any) error {
+	const maxAttempts = 3
+	backoff := time.Second
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		done, err := c.doRequest(ctx, path, dest)
+		if done {
+			return err
+		}
+		// 429 — ждём backoff и пробуем снова. На последней попытке
+		// уже не ждём, сразу выходим с ErrRateLimited.
+		if attempt == maxAttempts {
+			return ErrRateLimited
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return ErrRateLimited
+}
+
+// doRequest выполняет один HTTP-запрос. Возвращает done=true, если
+// результат финальный (успех или ошибка кроме 429); done=false если
+// получили 429 и стоит повторить.
+func (c *Client) doRequest(ctx context.Context, path string, dest any) (done bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return true, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("X-API-Key", c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("do request: %w", err)
+		return true, fmt.Errorf("do request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
+		return true, ErrNotFound
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// 429 → caller сделает backoff и повторит.
+		return false, nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("emulator responded %d", resp.StatusCode)
+		return true, fmt.Errorf("emulator responded %d", resp.StatusCode)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return true, fmt.Errorf("decode response: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // ErrNotFound возвращается когда эмулятор ответил 404.
 var ErrNotFound = fmt.Errorf("emulator: не найдено")
+
+// ErrRateLimited возвращается, когда эмулятор ответил 429 на все попытки
+// retry. Sync-сервис должен ловить эту ошибку и НЕ сдвигать
+// last_synced_at, чтобы при следующем тике эти change'ы пришли снова.
+var ErrRateLimited = fmt.Errorf("emulator: rate limited (429)")

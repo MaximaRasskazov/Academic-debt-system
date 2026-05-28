@@ -174,51 +174,83 @@ func (s *Service) Validate(ctx context.Context, accessJWT string) (userID, token
 // Rotate обменивает refresh-токен на новую пару. При обнаружении
 // повторного использования (is_used=TRUE) отзывает все access-токены
 // пользователя — это защита от кражи refresh.
+//
+// Чтение и проверки выполняются внутри транзакции с FOR UPDATE
+// блокировкой строки refresh_tokens — иначе два параллельных запроса
+// с одним refresh могли бы оба пройти проверку is_used=FALSE и оба
+// получить новые пары токенов.
 func (s *Service) Rotate(ctx context.Context, refreshPlain, ip string) (*Pair, error) {
-	row, err := s.store.GetRefreshTokenByHash(ctx, hashToken(refreshPlain))
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, ErrRefreshNotFound
-		}
-		return nil, fmt.Errorf("lookup refresh: %w", err)
-	}
+	hash := hashToken(refreshPlain)
 
-	now := s.now().UTC()
-	if row.ExpiresAt.Time.Before(now) {
-		return nil, ErrRefreshExhausted
-	}
-	if row.IsRevoked {
-		return nil, ErrRefreshExhausted
-	}
-	if row.IsUsed {
-		// Replay: ревокуем все access-токены пользователя, чтобы
-		// разорвать сессию атакующего. Узнаём userID через
-		// access_token, к которому привязан этот refresh.
-		access, lookupErr := s.store.GetAccessTokenByID(ctx, row.AccessTokenID)
-		if lookupErr == nil {
-			_ = s.store.RevokeAllAccessTokensForUser(ctx, access.UserID)
+	var (
+		userID    uuid.UUID
+		rotateErr error
+		replay    bool
+	)
+
+	err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		row, err := q.GetRefreshTokenByHashForUpdate(ctx, hash)
+		if err != nil {
+			if repo.IsNotFound(err) {
+				rotateErr = ErrRefreshNotFound
+				return rotateErr
+			}
+			return fmt.Errorf("lookup refresh: %w", err)
 		}
+
+		now := s.now().UTC()
+		if row.ExpiresAt.Time.Before(now) {
+			rotateErr = ErrRefreshExhausted
+			return rotateErr
+		}
+		if row.IsRevoked {
+			rotateErr = ErrRefreshExhausted
+			return rotateErr
+		}
+
+		access, err := q.GetAccessTokenByID(ctx, row.AccessTokenID)
+		if err != nil {
+			return fmt.Errorf("lookup access for refresh: %w", err)
+		}
+
+		if row.IsUsed {
+			// Replay: запоминаем userID, чтобы после rollback'а
+			// транзакции отозвать все access-токены пользователя.
+			// Сам Rotate откатывается — никакой пары не выдаём.
+			userID = pgutil.UUID(access.UserID)
+			replay = true
+			rotateErr = ErrRefreshReplay
+			return rotateErr
+		}
+
+		// Помечаем старый refresh использованным и ревокуем старый
+		// access — атомарный rollover внутри той же транзакции,
+		// которая держит FOR UPDATE-блокировку на строке refresh.
+		if err := q.MarkRefreshTokenUsed(ctx, row.ID); err != nil {
+			return fmt.Errorf("mark used: %w", err)
+		}
+		if err := q.RevokeAccessToken(ctx, access.ID); err != nil {
+			return fmt.Errorf("revoke access: %w", err)
+		}
+
+		userID = pgutil.UUID(access.UserID)
+		return nil
+	})
+
+	if replay {
+		// Транзакция откатилась, но мы знаем userID — ревокуем все
+		// access-токены отдельной операцией, разрывая сессию атакующего.
+		_ = s.store.RevokeAllAccessTokensForUser(ctx, pgutil.PgUUID(userID))
 		return nil, ErrRefreshReplay
 	}
-
-	access, err := s.store.GetAccessTokenByID(ctx, row.AccessTokenID)
-	if err != nil {
-		return nil, fmt.Errorf("lookup access for refresh: %w", err)
+	if rotateErr != nil {
+		return nil, rotateErr
 	}
-
-	// Помечаем старый refresh использованным и ревокуем старый access
-	// в одной транзакции — это атомарный rollover.
-	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		if err := q.MarkRefreshTokenUsed(ctx, row.ID); err != nil {
-			return err
-		}
-		return q.RevokeAccessToken(ctx, access.ID)
-	})
 	if err != nil {
 		return nil, fmt.Errorf("rotate tx: %w", err)
 	}
 
-	return s.Issue(ctx, pgutil.UUID(access.UserID), ip)
+	return s.Issue(ctx, userID, ip)
 }
 
 // Revoke отзывает конкретный access-токен (logout текущей сессии).

@@ -75,6 +75,32 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 	return i, err
 }
 
+const getRefreshTokenByHashForUpdate = `-- name: GetRefreshTokenByHashForUpdate :one
+SELECT id, access_token_id, token_hash, expires_at, is_used, is_revoked, created_at
+FROM refresh_tokens
+WHERE token_hash = $1
+FOR UPDATE
+`
+
+// То же, что GetRefreshTokenByHash, но с блокировкой строки FOR UPDATE.
+// Используется внутри RunInTx в token.Rotate, чтобы две параллельные
+// попытки обмена одного refresh не прошли проверку is_used=FALSE
+// одновременно — второй вызов будет ждать коммита первого.
+func (q *Queries) GetRefreshTokenByHashForUpdate(ctx context.Context, tokenHash string) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, getRefreshTokenByHashForUpdate, tokenHash)
+	var i RefreshToken
+	err := row.Scan(
+		&i.ID,
+		&i.AccessTokenID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.IsUsed,
+		&i.IsRevoked,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const markRefreshTokenUsed = `-- name: MarkRefreshTokenUsed :exec
 UPDATE refresh_tokens
 SET is_used = TRUE

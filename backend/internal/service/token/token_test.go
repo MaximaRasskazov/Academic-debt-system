@@ -189,3 +189,64 @@ func TestService_RevokeAll_ClosesAllSessions(t *testing.T) {
 	_, _, err = svc.Validate(ctx, b.AccessToken)
 	require.ErrorIs(t, err, token.ErrTokenRevoked)
 }
+
+// TestService_Rotate_ParallelCallsExactlyOneSucceeds: два параллельных
+// Rotate с одним refresh-токеном. Раньше оба могли пройти проверку
+// is_used=FALSE и оба получить новые пары (race). После фикса с
+// SELECT FOR UPDATE второй вызов должен дождаться коммита первого,
+// увидеть is_used=TRUE и вернуть ErrRefreshReplay.
+func TestService_Rotate_ParallelCallsExactlyOneSucceeds(t *testing.T) {
+	s := testStore(t)
+	svc := token.New(s, secret, 15*time.Minute, 7*24*time.Hour)
+	userID := seedUser(t, s, "race")
+	ctx := context.Background()
+
+	pair, err := svc.Issue(ctx, userID, "")
+	require.NoError(t, err)
+
+	type result struct {
+		pair *token.Pair
+		err  error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+
+	for range 2 {
+		go func() {
+			<-start // дать обоим стартовать одновременно
+			p, err := svc.Rotate(ctx, pair.RefreshToken, "")
+			results <- result{pair: p, err: err}
+		}()
+	}
+	close(start)
+
+	r1 := <-results
+	r2 := <-results
+
+	// Ровно один успешный (новая пара), ровно один replay-failure.
+	successes := 0
+	replays := 0
+	for _, r := range []result{r1, r2} {
+		switch {
+		case r.err == nil && r.pair != nil:
+			successes++
+		case errors.Is(r.err, token.ErrRefreshReplay):
+			replays++
+		default:
+			t.Fatalf("неожиданный результат: pair=%v err=%v", r.pair, r.err)
+		}
+	}
+	require.Equal(t, 1, successes, "ровно один параллельный Rotate должен преуспеть")
+	require.Equal(t, 1, replays, "второй Rotate должен получить ErrRefreshReplay")
+
+	// Побочный эффект replay-detection: все access-токены пользователя
+	// должны быть ревокированы (это защита от кражи refresh).
+	// Даже свежевыданная пара из successful Rotate уже ревокнута.
+	for _, r := range []result{r1, r2} {
+		if r.err == nil {
+			_, _, validateErr := svc.Validate(ctx, r.pair.AccessToken)
+			require.ErrorIs(t, validateErr, token.ErrTokenRevoked,
+				"replay-detection должен ревокнуть все токены пользователя")
+		}
+	}
+}

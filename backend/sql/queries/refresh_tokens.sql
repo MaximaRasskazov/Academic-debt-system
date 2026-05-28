@@ -11,6 +11,16 @@ SELECT *
 FROM refresh_tokens
 WHERE token_hash = $1;
 
+-- name: GetRefreshTokenByHashForUpdate :one
+-- То же, что GetRefreshTokenByHash, но с блокировкой строки FOR UPDATE.
+-- Используется внутри RunInTx в token.Rotate, чтобы две параллельные
+-- попытки обмена одного refresh не прошли проверку is_used=FALSE
+-- одновременно — второй вызов будет ждать коммита первого.
+SELECT *
+FROM refresh_tokens
+WHERE token_hash = $1
+FOR UPDATE;
+
 -- name: MarkRefreshTokenUsed :exec
 UPDATE refresh_tokens
 SET is_used = TRUE
