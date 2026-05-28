@@ -70,11 +70,11 @@ func (s *Service) ListPending(ctx context.Context, limit, offset int32) ([]WithU
 			return nil, fmt.Errorf("get user %s: %w", pgutil.UUID(r.RequestedBy), err)
 		}
 		out = append(out, WithUser{
-			RetakeChangeRequest:  r,
-			RequesterEmail:       user.Email,
-			RequesterFirstName:   user.FirstName,
-			RequesterLastName:    user.LastName,
-			RequesterMiddleName:  user.MiddleName,
+			RetakeChangeRequest: r,
+			RequesterEmail:      user.Email,
+			RequesterFirstName:  user.FirstName,
+			RequesterLastName:   user.LastName,
+			RequesterMiddleName: user.MiddleName,
 		})
 	}
 	return out, nil

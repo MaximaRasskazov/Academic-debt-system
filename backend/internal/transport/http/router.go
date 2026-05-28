@@ -32,19 +32,19 @@ import (
 // Сделано отдельной структурой, чтобы main.go не разрастался
 // сигнатурой NewRouter(a, b, c, d, ...).
 type Deps struct {
-	Cfg            *config.Config
-	Pool           *pgxpool.Pool
-	Auth           *auth.Service
-	Tokens         *token.Service
-	RBAC           *rbac.Service
-	Disciplines    *discipline.Service
-	Debts          *debt.Service
-	Retakes        *retake.Service
-	Reports        *report.Service
-	Notify         *notify.Service
-	NotifyHub      *notify.Hub
-	TeacherReqs    *teacherrequest.Service
-	ChangeReqs     *changerequest.Service
+	Cfg         *config.Config
+	Pool        *pgxpool.Pool
+	Auth        *auth.Service
+	Tokens      *token.Service
+	RBAC        *rbac.Service
+	Disciplines *discipline.Service
+	Debts       *debt.Service
+	Retakes     *retake.Service
+	Reports     *report.Service
+	Notify      *notify.Service
+	NotifyHub   *notify.Hub
+	TeacherReqs *teacherrequest.Service
+	ChangeReqs  *changerequest.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/*.
