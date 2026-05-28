@@ -454,7 +454,7 @@ func mapRetakeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, retake.ErrParticipantNotFound):
 		writeError(w, http.StatusNotFound, "participant_not_found", "участник не найден")
 	case errors.Is(err, retake.ErrInvalidStatus):
-		writeError(w, http.StatusConflict, "invalid_status", err.Error())
+		writeError(w, http.StatusUnprocessableEntity, "invalid_status", err.Error())
 	case errors.Is(err, retake.ErrInvalidKind):
 		writeError(w, http.StatusBadRequest, "invalid_kind", "kind должен быть regular или commission")
 	case errors.Is(err, retake.ErrNotEnoughTeachers):

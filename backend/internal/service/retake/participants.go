@@ -234,13 +234,18 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 	}
 
 	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		// 1. Оценка участнику.
+		// 1. Оценка участнику. SQL содержит AND grade IS NULL — при гонке
+		// второй UPDATE вернёт ErrNoRows: возвращаем ErrAlreadyHasGrade,
+		// а не пробрасываем raw-ошибку как 500.
 		_, err := q.GradeStudentParticipant(ctx, queries.GradeStudentParticipantParams{
 			ID:       participant.ID,
 			Grade:    &grade,
 			GradedBy: pgutil.PgUUID(gradedBy),
 		})
 		if err != nil {
+			if repo.IsNotFound(err) {
+				return ErrAlreadyHasGrade
+			}
 			return fmt.Errorf("grade participant: %w", err)
 		}
 
