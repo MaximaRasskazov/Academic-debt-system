@@ -243,30 +243,25 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 	return &resp.Data, nil
 }
 
-// get выполняет GET-запрос с экспоненциальным backoff на 429-ответы.
-// При 429 ждём 1с, 2с между попытками (max 3 попытки), потом
-// возвращаем ErrRateLimited. Это даёт sync-сервису шанс понять, что
-// эмулятор throttle-ит, и не двигать last_synced_at.
+// get выполняет GET-запрос с backoff на 429-ответы.
+// Эмулятор при 429 сообщает retry_after_seconds=30, поэтому ждём 35с.
 func (c *Client) get(ctx context.Context, path string, dest any) error {
-	const maxAttempts = 3
-	backoff := time.Second
+	const maxAttempts = 5
+	const retryAfter = 35 * time.Second
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		done, err := c.doRequest(ctx, path, dest)
 		if done {
 			return err
 		}
-		// 429 — ждём backoff и пробуем снова. На последней попытке
-		// уже не ждём, сразу выходим с ErrRateLimited.
 		if attempt == maxAttempts {
 			return ErrRateLimited
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(retryAfter):
 		}
-		backoff *= 2
 	}
 	return ErrRateLimited
 }

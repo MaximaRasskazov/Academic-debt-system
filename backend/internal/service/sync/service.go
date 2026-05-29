@@ -58,19 +58,33 @@ func (s *Service) Sync(ctx context.Context) error {
 	}
 
 	// При первом запуске делаем полный импорт справочников.
+	// Каждый этап проверяет наличие данных в БД — если они уже есть,
+	// пропускаем чтобы не тратить rate-limit эмулятора впустую.
 	if since.Year() == 1970 {
 		slog.Info("sync: первый запуск, полный импорт")
-		if err := s.importAllDisciplines(ctx); err != nil {
-			slog.Warn("sync: ошибка импорта дисциплин", "err", err)
+		if n, _ := s.store.CountDisciplines(ctx); n == 0 {
+			if err := s.importAllDisciplines(ctx); err != nil {
+				slog.Warn("sync: ошибка импорта дисциплин", "err", err)
+			}
+		} else {
+			slog.Info("sync: дисциплины уже загружены, пропускаем", "count", n)
 		}
-		if err := s.importAllAccounts(ctx, "student"); err != nil {
-			slog.Warn("sync: ошибка импорта студентов", "err", err)
+		if n, _ := s.store.CountUsers(ctx); n == 0 {
+			if err := s.importAllAccounts(ctx, "student"); err != nil {
+				slog.Warn("sync: ошибка импорта студентов", "err", err)
+			}
+			if err := s.importAllAccounts(ctx, "teacher"); err != nil {
+				slog.Warn("sync: ошибка импорта преподавателей", "err", err)
+			}
+		} else {
+			slog.Info("sync: пользователи уже загружены, пропускаем", "count", n)
 		}
-		if err := s.importAllAccounts(ctx, "teacher"); err != nil {
-			slog.Warn("sync: ошибка импорта преподавателей", "err", err)
-		}
-		if err := s.importAllDebts(ctx); err != nil {
-			slog.Warn("sync: ошибка импорта долгов", "err", err)
+		if n, _ := s.store.CountDebts(ctx); n == 0 {
+			if err := s.importAllDebts(ctx); err != nil {
+				slog.Warn("sync: ошибка импорта долгов", "err", err)
+			}
+		} else {
+			slog.Info("sync: долги уже загружены, пропускаем", "count", n)
 		}
 	}
 

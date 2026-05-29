@@ -299,6 +299,27 @@ func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgt
 	return nil
 }
 
+// CountDisciplines возвращает количество активных дисциплин в БД.
+func (s *Store) CountDisciplines(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM disciplines WHERE deleted_at IS NULL`).Scan(&n)
+	return n, err
+}
+
+// CountUsers возвращает количество не-системных пользователей в БД.
+func (s *Store) CountUsers(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE password_hash != '' AND email NOT LIKE '%localhost%'`).Scan(&n)
+	return n, err
+}
+
+// CountDebts возвращает количество активных долгов в БД.
+func (s *Store) CountDebts(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM debts WHERE deleted_at IS NULL`).Scan(&n)
+	return n, err
+}
+
 // IsUniqueViolation сообщает, является ли err нарушением UNIQUE-ограничения
 // (SQLSTATE 23505). Если constraintName непустой, дополнительно проверяется
 // имя конкретного constraint/partial-индекса.
