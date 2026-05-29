@@ -1,96 +1,50 @@
 <script setup>
 import { ref, computed, reactive } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { authApi } from '../api/auth'
 
 defineProps({ open: Boolean })
-const emit = defineEmits(['close'])
+defineEmits(['close'])
 
 const auth = useAuthStore()
-const router = useRouter()
 
-async function handleLogout() {
-  await auth.logout()
-  emit('close')
-  router.push('/login')
-}
-
-// Роли с backend приходят в lowercase (student/teacher/dean/admin).
-const ROLE_LABEL = {
-  student: 'Студент',
-  teacher: 'Преподаватель',
-  dean: 'Деканат',
-  admin: 'Администратор',
-}
-
-// ── Avatar ────────────────────────────────────────────────
-const avatarInput = ref(null)
-const avatarPreview = ref(auth.user?.avatar || null)
-
-function pickAvatar() { avatarInput.value?.click() }
-
-function onAvatarFile(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = ev => { avatarPreview.value = ev.target.result }
-  reader.readAsDataURL(file)
-}
-
-// ── Email ─────────────────────────────────────────────────
-const emailEditing = ref(false)
-const emailDraft = ref(auth.user?.email || '')
-
-function startEmailEdit() {
-  emailDraft.value = auth.user?.email || ''
-  emailEditing.value = true
-}
-function cancelEmailEdit() { emailEditing.value = false }
+const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
 
 // ── Password ──────────────────────────────────────────────
 const pw = reactive({ current: '', next: '', confirm: '' })
 const pwError = ref('')
 const pwSuccess = ref(false)
+const pwLoading = ref(false)
 
-function changePassword() {
+async function changePassword() {
   pwError.value = ''
-  if (!pw.current) { pwError.value = 'Введите текущий пароль'; return }
-  if (!pw.next)    { pwError.value = 'Введите новый пароль'; return }
-  if (pw.next !== pw.confirm) { pwError.value = 'Пароли не совпадают'; return }
-  // TODO: API
-  pw.current = ''; pw.next = ''; pw.confirm = ''
-  pwSuccess.value = true
-  setTimeout(() => { pwSuccess.value = false }, 2500)
-}
-
-// ── Save ──────────────────────────────────────────────────
-const saved = ref(false)
-
-function save() {
-  if (emailEditing.value && auth.user) {
-    auth.user.email = emailDraft.value
-    emailEditing.value = false
+  pwSuccess.value = false
+  if (!pw.current)             { pwError.value = 'Введите текущий пароль'; return }
+  if (pw.next.length < 8)      { pwError.value = 'Минимум 8 символов'; return }
+  if (pw.next !== pw.confirm)  { pwError.value = 'Пароли не совпадают'; return }
+  pwLoading.value = true
+  try {
+    await authApi.changePassword(pw.current, pw.next)
+    pw.current = ''; pw.next = ''; pw.confirm = ''
+    pwSuccess.value = true
+    setTimeout(() => { pwSuccess.value = false }, 3000)
+  } catch (e) {
+    const msg = e.response?.data?.message || e.response?.data?.error
+    pwError.value = msg || 'Неверный текущий пароль'
+  } finally {
+    pwLoading.value = false
   }
-  if (avatarPreview.value !== (auth.user?.avatar || null) && auth.user) {
-    auth.user.avatar = avatarPreview.value
-  }
-  if (auth.user) localStorage.setItem('user', JSON.stringify(auth.user))
-  // TODO: API
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2500)
 }
 
 // ── Computed ──────────────────────────────────────────────
 const initials = computed(() => {
-  const f = auth.user?.first_name?.[0] ?? ''
-  const l = auth.user?.last_name?.[0] ?? ''
+  const f = auth.user?.firstName?.[0] ?? ''
+  const l = auth.user?.lastName?.[0] ?? ''
   return (f + l).toUpperCase()
 })
 
 const fullName = computed(() =>
-  [auth.user?.last_name, auth.user?.first_name, auth.user?.middle_name]
-    .filter(Boolean)
-    .join(' '),
+  [auth.user?.lastName, auth.user?.firstName, auth.user?.middleName].filter(Boolean).join(' ')
 )
 </script>
 
@@ -120,20 +74,11 @@ const fullName = computed(() =>
 
             <!-- Hero -->
             <div class="hero">
-              <button class="avatar-btn" @click="pickAvatar" title="Изменить фото">
-                <img v-if="avatarPreview" :src="avatarPreview" class="avatar-img" alt="Фото" />
-                <span v-else class="avatar-initials">{{ initials }}</span>
-                <div class="avatar-overlay">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                    <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-                    <circle cx="12" cy="13" r="4"/>
-                  </svg>
-                </div>
-              </button>
-              <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarFile" />
+              <div class="avatar-display">
+                <span class="avatar-initials">{{ initials }}</span>
+              </div>
               <div class="hero-name">{{ fullName }}</div>
-              <span class="role-chip">{{ ROLE_LABEL[auth.primaryRole] }}</span>
-              <button class="link-btn" @click="pickAvatar">Изменить фото</button>
+              <span class="role-chip">{{ ROLE_LABEL[auth.role] }}</span>
             </div>
 
             <div class="divider" />
@@ -142,14 +87,7 @@ const fullName = computed(() =>
             <div class="section-label">Почта</div>
 
             <div class="email-row">
-              <template v-if="!emailEditing">
-                <span class="email-text">{{ auth.user?.email }}</span>
-                <button class="link-btn" @click="startEmailEdit">Изменить</button>
-              </template>
-              <template v-else>
-                <input class="field-input email-input" v-model="emailDraft" type="email" placeholder="Новый email" autofocus />
-                <button class="link-btn link-cancel" @click="cancelEmailEdit">Отмена</button>
-              </template>
+              <span class="email-text">{{ auth.user?.email }}</span>
             </div>
 
             <div class="divider" />
@@ -173,26 +111,9 @@ const fullName = computed(() =>
             <p v-if="pwError" class="pw-error">{{ pwError }}</p>
             <p v-if="pwSuccess" class="pw-success">Пароль успешно изменён</p>
 
-            <button class="btn-outline btn-full" @click="changePassword">Изменить пароль</button>
-
-            <div class="divider" />
-
-            <!-- Save -->
-            <button class="btn-primary btn-full" @click="save">
-              <template v-if="saved">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-                Сохранено
-              </template>
-              <template v-else>Сохранить изменения</template>
+            <button class="btn-outline btn-full" :disabled="pwLoading" @click="changePassword">
+              {{ pwLoading ? 'Сохранение…' : 'Изменить пароль' }}
             </button>
-
-            <RouterLink to="/profile" class="link-btn" @click="$emit('close')">
-              Полная страница профиля
-            </RouterLink>
-
-            <button class="btn-logout" @click="handleLogout">Выйти из системы</button>
 
           </div>
         </div>
@@ -275,25 +196,14 @@ const fullName = computed(() =>
   gap: 8px; padding-bottom: 4px;
 }
 
-.avatar-btn {
-  position: relative;
+.avatar-display {
   width: 88px; height: 88px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, #2b5cff, #8b3df0);
-  border: none; cursor: pointer; overflow: hidden; padding: 0;
   display: grid; place-items: center;
 }
-.avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar-initials {
   font: 700 28px/1 'Inter', sans-serif; color: #fff; pointer-events: none;
 }
-.avatar-overlay {
-  position: absolute; inset: 0;
-  background: rgba(10,12,30,.45);
-  display: grid; place-items: center;
-  opacity: 0; transition: opacity .2s var(--ease);
-}
-.avatar-btn:hover .avatar-overlay { opacity: 1; }
-.avatar-overlay svg { width: 22px; height: 22px; stroke: #fff; }
 
 .hero-name {
   font: 700 16px/1.3 'Inter', sans-serif;
@@ -306,13 +216,6 @@ const fullName = computed(() =>
   font: 600 12px/1.4 'Inter', sans-serif;
 }
 
-.link-btn {
-  background: none; border: none; padding: 0;
-  font: 500 12px/1 'Inter', sans-serif; color: var(--ink-soft);
-  cursor: pointer; transition: color .15s;
-}
-.link-btn:hover { color: var(--brand); }
-.link-cancel:hover { color: #dc2626; }
 
 /* ── Divider ── */
 .divider { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
@@ -348,7 +251,6 @@ const fullName = computed(() =>
   flex: 1; font: 13px/1 'Inter', sans-serif; color: var(--ink);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.email-input { flex: 1; min-width: 0; height: 40px; }
 
 /* ── Password ── */
 .pw-error  { font: 12px/1.4 'Inter', sans-serif; color: #dc2626; margin: 0; }
@@ -372,19 +274,6 @@ const fullName = computed(() =>
   box-shadow: 0 2px 10px rgba(59,63,224,.14);
 }
 
-.btn-primary {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  height: 44px; padding: 0 20px; border: none; border-radius: var(--radius);
-  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
-  color: #fff; font: 600 14px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 6px 20px -4px rgba(91,59,217,.55);
-  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
-}
-.btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 24px -4px rgba(91,59,217,.7);
-}
-.btn-primary svg { width: 16px; height: 16px; }
 
 /* ── Transition ── */
 .panel-enter-active .panel-overlay,
@@ -400,28 +289,4 @@ const fullName = computed(() =>
 }
 .panel-enter-from .panel,
 .panel-leave-to .panel { transform: translateX(100%); }
-
-.btn-logout {
-  display: block;
-  width: 100%;
-  margin-top: 12px;
-  padding: 10px 16px;
-  background: #fff;
-  color: #d63a51;
-  border: 1.5px solid #fecaca;
-  border-radius: 10px;
-  font: 500 13px/1 'Inter', sans-serif;
-  cursor: pointer;
-  transition: background .15s, border-color .15s;
-}
-.btn-logout:hover { background: #fef2f2; border-color: #fca5a5; }
-.link-btn {
-  display: block;
-  text-align: center;
-  margin-top: 12px;
-  color: #3b6df0;
-  font-size: 13px;
-  text-decoration: none;
-}
-.link-btn:hover { text-decoration: underline; }
 </style>

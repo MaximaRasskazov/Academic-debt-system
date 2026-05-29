@@ -1,11 +1,14 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 
+const route = useRoute()
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────
@@ -22,118 +25,51 @@ const TYPE_LABELS   = { normal: 'Обычная', commission: 'С комисси
 
 function clamp(val, min, max) { return Math.max(min, Math.min(max, val || min)) }
 
-// ── API state ─────────────────────────────────────────────
-const disciplines        = ref([])
-const disciplinesLoading = ref(false)
-const availableTeachers  = ref([])
-const teachersLoading    = ref(false)
-const availableStudents  = ref([])
-const studentsLoading    = ref(false)
-
-const disciplineSearch  = ref('')
-const disciplineDropOpen = ref(false)
-const teacherSearch     = ref('')
-const teacherDropOpen   = ref(false)
-const studentSearch     = ref('')
-const studentDropOpen   = ref(false)
-
-const filteredDisciplines = computed(() =>
-  disciplines.value.filter(d =>
-    d.name.toLowerCase().includes(disciplineSearch.value.toLowerCase()) ||
-    d.code.toLowerCase().includes(disciplineSearch.value.toLowerCase())
-  )
-)
-const filteredTeachers = computed(() =>
-  availableTeachers.value.filter(t => {
-    const full = `${t.first_name} ${t.last_name}`.toLowerCase()
-    return full.includes(teacherSearch.value.toLowerCase()) &&
-      !form.teachers.some(s => s.id === t.id)
-  })
-)
-const filteredStudents = computed(() =>
-  availableStudents.value.filter(s => {
-    const full = `${s.first_name} ${s.last_name}`.toLowerCase()
-    return full.includes(studentSearch.value.toLowerCase()) &&
-      !form.students.some(sel => sel.id === s.id)
-  })
-)
-
-async function loadDisciplinesForTeacher() {
-  disciplinesLoading.value = true
-  try {
-    const data = await disciplinesApi.myAsTeacher()
-    disciplines.value = Array.isArray(data) ? data : []
-  } catch { /* покажем пустой список */ }
-  finally { disciplinesLoading.value = false }
-}
-
-async function selectDiscipline(disc) {
-  form.disciplineId   = disc.id
-  form.subject        = disc.name
-  disciplineSearch.value  = disc.name
-  disciplineDropOpen.value = false
-  form.teachers = []
-  form.students = []
-  availableTeachers.value = []
-  availableStudents.value = []
-
-  teachersLoading.value = true
-  studentsLoading.value = true
-  try {
-    const [tData, sData] = await Promise.all([
-      disciplinesApi.listTeachers(disc.id),
-      disciplinesApi.listStudents(disc.id),
-    ])
-    availableTeachers.value = Array.isArray(tData) ? tData : []
-    availableStudents.value = Array.isArray(sData) ? sData : []
-  } catch { /* списки остаются пустыми */ }
-  finally { teachersLoading.value = false; studentsLoading.value = false }
-}
-
-function userName(u) { return `${u.first_name} ${u.last_name}` }
-
 // ── Outside click (close dropdowns) ──────────────────────
 function handleOutsideClick(e) {
-  if (!e.target.closest('.custom-select'))    { typeDropdownOpen.value = false; editTypeOpen.value = false }
-  if (!e.target.closest('.disc-picker'))      { disciplineDropOpen.value = false }
-  if (!e.target.closest('.teacher-picker'))   { teacherDropOpen.value   = false }
-  if (!e.target.closest('.student-picker'))   { studentDropOpen.value   = false }
+  if (!e.target.closest('.custom-select')) {
+    typeDropdownOpen.value = false
+    editTypeOpen.value     = false
+  }
 }
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('mousedown', handleOutsideClick)
-  loadDisciplinesForTeacher()
+
+  // Пре-заполнение при переходе с RetakesPage → кнопка "Изменить"
+  const retakeId = route.query.retakeId
+  if (retakeId) {
+    activeTab.value = 'submit'
+    try {
+      const [retakeRes, discsRes] = await Promise.allSettled([
+        retakesApi.getById(retakeId),
+        disciplinesApi.getAll({ limit: 500 }),
+      ])
+      const discMap = {}
+      if (discsRes.status === 'fulfilled')
+        (discsRes.value.data.items ?? discsRes.value.data ?? [])
+          .forEach(d => { discMap[d.id] = d.name || d.code })
+
+      if (retakeRes.status === 'fulfilled') {
+        const r = retakeRes.value.data
+        const s = r.scheduled_at ? new Date(r.scheduled_at) : null
+        form.subject  = discMap[r.discipline_id] || ''
+        form.type     = r.kind === 'commission' ? 'commission' : 'normal'
+        form.date     = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
+        form.duration = r.duration_minutes || 90
+        form.building = r.building || ''
+        form.room     = r.room     || ''
+        if (s) {
+          hourDisplay.value   = String(s.getHours()).padStart(2, '0')
+          minuteDisplay.value = String(s.getMinutes()).padStart(2, '0')
+        }
+      }
+    } catch { /* ignore prefill errors */ }
+  }
 })
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 // ── My Requests data ──────────────────────────────────────
-const myRequests = ref([
-  {
-    id: 1, subject: 'Математический анализ', type: 'normal',
-    date: '15.05.2026', time: '10:00', duration: 90,
-    teachers: ['Иванов И.И.'], students: ['Петров А.А.', 'Сидоров Б.Б.'],
-    group: 'ИВТ-21', building: '1', room: '204',
-    description: 'Студенты пропустили экзамен по уважительной причине',
-    status: 'pending', submittedAt: '01.05.2026', rejectReason: '',
-  },
-  {
-    id: 2, subject: 'Физика', type: 'commission',
-    date: '20.05.2026', time: '14:00', duration: 120,
-    teachers: ['Иванов И.И.', 'Козлов В.В.', 'Морозов С.С.'],
-    students: ['Алексеев Д.Д.'],
-    group: 'ФИЗ-22', building: '2', room: '308',
-    description: 'Пересдача с комиссией для студента с тремя попытками',
-    status: 'approved', submittedAt: '28.04.2026', rejectReason: '',
-  },
-  {
-    id: 3, subject: 'Линейная алгебра', type: 'normal',
-    date: '25.05.2026', time: '09:00', duration: 60,
-    teachers: ['Иванов И.И.'],
-    students: ['Новиков Е.Е.', 'Попов Ж.Ж.', 'Лебедев З.З.'],
-    group: 'МАТ-21', building: '3', room: '112', description: '',
-    status: 'rejected', submittedAt: '25.04.2026',
-    rejectReason: 'Указанная аудитория недоступна в это время',
-  },
-])
+const myRequests = ref([])
 
 const statusFilter = ref('all')
 const filteredRequests = computed(() =>
@@ -145,16 +81,14 @@ const pendingCount = computed(() => myRequests.value.filter(r => r.status === 'p
 
 // ── Submit form ───────────────────────────────────────────
 const form = reactive({
-  disciplineId: null,
   subject: '', type: 'normal', date: null, duration: 90,
-  group: '', building: '', room: '',
-  teachers: [],  // { id, name }
-  students: [],  // { id, name }
-  description: '',
+  group: '', building: '', room: '', teachers: [], students: [], description: '',
 })
 const typeDropdownOpen = ref(false)
 const hourDisplay      = ref('09')
 const minuteDisplay    = ref('00')
+const teacherInput     = ref('')
+const studentInput     = ref('')
 const formError        = ref('')
 const formSuccess      = ref(false)
 
@@ -172,27 +106,16 @@ function decreaseDuration() { if (form.duration > DURATION_MIN) form.duration -=
 function increaseDuration()  { if (form.duration < DURATION_MAX) form.duration += DURATION_STEP }
 function clampDuration()     { form.duration = clamp(form.duration, DURATION_MIN, DURATION_MAX) }
 
-function addTeacher(teacher) {
-  if (!isCommission.value && form.teachers.length >= 1) return
-  if (form.teachers.some(t => t.id === teacher.id)) return
-  form.teachers.push({ id: teacher.id, name: userName(teacher) })
-  teacherDropOpen.value = false
-  teacherSearch.value   = ''
-}
+function addTeacher()     { const n = teacherInput.value.trim(); if (!n || (!isCommission.value && form.teachers.length >= 1)) return; form.teachers.push(n); teacherInput.value = '' }
 function removeTeacher(i) { form.teachers.splice(i, 1) }
 watch(() => form.type, t => { if (t === 'normal' && form.teachers.length > 1) form.teachers.splice(1) })
 
-function addStudent(student) {
-  if (form.students.some(s => s.id === student.id)) return
-  form.students.push({ id: student.id, name: userName(student) })
-  studentSearch.value = ''
-}
+function addStudent()     { const n = studentInput.value.trim(); if (!n) return; form.students.push(n); studentInput.value = '' }
 function removeStudent(i) { form.students.splice(i, 1) }
 
 function resetForm() {
-  Object.assign(form, { disciplineId: null, subject: '', type: 'normal', date: null, duration: 90, group: '', building: '', room: '', teachers: [], students: [], description: '' })
+  Object.assign(form, { subject: '', type: 'normal', date: null, duration: 90, group: '', building: '', room: '', teachers: [], students: [], description: '' })
   hourDisplay.value = '09'; minuteDisplay.value = '00'; formError.value = ''
-  disciplineSearch.value = ''; availableTeachers.value = []; availableStudents.value = []
 }
 
 function submitForm() {
@@ -206,7 +129,7 @@ function submitForm() {
     id: Date.now(), subject: form.subject, type: form.type, date: form.date,
     time: `${hourDisplay.value}:${minuteDisplay.value}`,
     duration: form.duration, group: form.group, building: form.building, room: form.room,
-    teachers: form.teachers.map(t => t.name), students: form.students.map(s => s.name), description: form.description,
+    teachers: [...form.teachers], students: [...form.students], description: form.description,
     status: 'pending', submittedAt: today, rejectReason: '',
   })
   resetForm()
@@ -314,12 +237,20 @@ function closeDetail()  { detailModal.value = null }
           <div v-if="activeTab === 'my-requests'" class="section-card">
             <div class="table-header">
               <h2 class="section-title" style="margin:0">Мои заявки</h2>
-              <select class="filter-select" v-model="statusFilter">
-                <option value="all">Все статусы</option>
-                <option value="pending">Ожидает</option>
-                <option value="approved">Одобрена</option>
-                <option value="rejected">Отклонена</option>
-              </select>
+              <div class="table-header-actions">
+                <select class="filter-select" v-model="statusFilter">
+                  <option value="all">Все статусы</option>
+                  <option value="pending">Ожидает</option>
+                  <option value="approved">Одобрена</option>
+                  <option value="rejected">Отклонена</option>
+                </select>
+                <button class="btn-primary btn-sm-primary" @click="activeTab = 'submit'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                  Подать заявку
+                </button>
+              </div>
             </div>
 
             <div class="table-wrap">
@@ -357,7 +288,12 @@ function closeDetail()  { detailModal.value = null }
                     </td>
                   </tr>
                   <tr v-if="filteredRequests.length === 0">
-                    <td colspan="8" class="empty-row">Заявок не найдено</td>
+                    <td colspan="8" class="empty-row">
+                      <div class="empty-cell">
+                        <span>Заявок пока нет</span>
+                        <button class="btn-link" @click="activeTab = 'submit'">Подать первую заявку →</button>
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -373,29 +309,7 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field" style="flex:2">
                   <label>Дисциплина</label>
-                  <div class="disc-picker" :class="{ open: disciplineDropOpen }">
-                    <div class="picker-trigger" @click="disciplineDropOpen = !disciplineDropOpen">
-                      <input
-                        class="picker-search"
-                        v-model="disciplineSearch"
-                        :placeholder="disciplinesLoading ? 'Загрузка…' : 'Поиск дисциплины'"
-                        @focus="disciplineDropOpen = true"
-                        @input="disciplineDropOpen = true"
-                      />
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                    </div>
-                    <div class="picker-dropdown">
-                      <div v-if="filteredDisciplines.length === 0" class="picker-empty">
-                        {{ disciplinesLoading ? 'Загрузка…' : 'Дисциплин не найдено' }}
-                      </div>
-                      <button v-for="d in filteredDisciplines" :key="d.id" type="button"
-                        class="picker-option" :class="{ selected: form.disciplineId === d.id }"
-                        @click="selectDiscipline(d)">
-                        <span class="picker-opt-name">{{ d.name }}</span>
-                        <span class="picker-opt-code">{{ d.code }}</span>
-                      </button>
-                    </div>
-                  </div>
+                  <input class="input" v-model="form.subject" placeholder="Название дисциплины" />
                 </div>
                 <div class="field">
                   <label>Тип пересдачи</label>
@@ -421,7 +335,7 @@ function closeDetail()  { detailModal.value = null }
                 <div class="field field--shrink">
                   <label>Время</label>
                   <div class="time-picker">
-                    <input class="time-input" type="text" inputmode="numeric" v-model="hourDisplay"   maxlength="2" placeholder="00" @input="onTimeInput" @blur="onHourBlur" />
+                    <input class="time-input" type="text" inputmode="numeric" v-model="hourDisplay"   maxlength="2" placeholder="09" @input="onTimeInput" @blur="onHourBlur" />
                     <span class="time-colon">:</span>
                     <input class="time-input" type="text" inputmode="numeric" v-model="minuteDisplay" maxlength="2" placeholder="00" @input="onTimeInput" @blur="onMinuteBlur" />
                   </div>
@@ -438,30 +352,12 @@ function closeDetail()  { detailModal.value = null }
 
               <div class="form-row">
                 <div class="field field--full">
-                  <label>{{ isCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
-                  <div class="teacher-picker user-picker">
-                    <div class="tags-wrap" @click="form.disciplineId && (teacherDropOpen = true)">
-                      <span v-for="(t, i) in form.teachers" :key="t.id" class="tag">
-                        {{ t.name }}<button type="button" class="tag-remove" @click.stop="removeTeacher(i)">×</button>
-                      </span>
-                      <input
-                        v-if="form.disciplineId && (isCommission || form.teachers.length === 0)"
-                        class="tag-input"
-                        v-model="teacherSearch"
-                        :placeholder="teachersLoading ? 'Загрузка…' : 'Поиск преподавателя'"
-                        @focus="teacherDropOpen = true"
-                      />
-                      <span v-if="!form.disciplineId" class="tag-input tag-placeholder">Сначала выберите дисциплину</span>
-                    </div>
-                    <div v-if="teacherDropOpen && form.disciplineId" class="user-dropdown">
-                      <div v-if="teachersLoading" class="picker-empty">Загрузка…</div>
-                      <div v-else-if="filteredTeachers.length === 0" class="picker-empty">Преподаватели не найдены</div>
-                      <button v-for="t in filteredTeachers" :key="t.id" type="button"
-                        class="user-option" @click.stop="addTeacher(t)">
-                        {{ userName(t) }}
-                        <span v-if="t.email" class="user-option-email">{{ t.email }}</span>
-                      </button>
-                    </div>
+                  <label>{{ isCommission ? 'Преподаватели комиссии' : 'Преподаватель' }}</label>
+                  <div class="tags-wrap">
+                    <span v-for="(t, i) in form.teachers" :key="'t'+i" class="tag">{{ t }}<button type="button" class="tag-remove" @click="removeTeacher(i)">×</button></span>
+                    <input v-if="isCommission || form.teachers.length === 0" class="tag-input" v-model="teacherInput"
+                           :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'"
+                           @keydown.enter.prevent="addTeacher" />
                   </div>
                   <p v-if="isCommission && form.teachers.length > 0 && !teacherCountOk" class="hint-warn">Для пересдачи с комиссией необходимо минимум 3 преподавателя</p>
                 </div>
@@ -470,29 +366,9 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field field--full">
                   <label>Студенты</label>
-                  <div class="student-picker user-picker">
-                    <div class="tags-wrap" @click="form.disciplineId && (studentDropOpen = true)">
-                      <span v-for="(s, i) in form.students" :key="s.id" class="tag tag--student">
-                        {{ s.name }}<button type="button" class="tag-remove" @click.stop="removeStudent(i)">×</button>
-                      </span>
-                      <input
-                        v-if="form.disciplineId"
-                        class="tag-input"
-                        v-model="studentSearch"
-                        :placeholder="studentsLoading ? 'Загрузка…' : 'Поиск студента'"
-                        @focus="studentDropOpen = true"
-                      />
-                      <span v-if="!form.disciplineId" class="tag-input tag-placeholder">Сначала выберите дисциплину</span>
-                    </div>
-                    <div v-if="studentDropOpen && form.disciplineId" class="user-dropdown">
-                      <div v-if="studentsLoading" class="picker-empty">Загрузка…</div>
-                      <div v-else-if="filteredStudents.length === 0" class="picker-empty">Студенты не найдены</div>
-                      <button v-for="s in filteredStudents" :key="s.id" type="button"
-                        class="user-option" @click.stop="addStudent(s)">
-                        {{ userName(s) }}
-                        <span v-if="s.group_name" class="user-option-email">{{ s.group_name }}</span>
-                      </button>
-                    </div>
+                  <div class="tags-wrap">
+                    <span v-for="(s, i) in form.students" :key="'s'+i" class="tag tag--student">{{ s }}<button type="button" class="tag-remove" @click="removeStudent(i)">×</button></span>
+                    <input class="tag-input" v-model="studentInput" placeholder="ФИО студента, затем Enter" @keydown.enter.prevent="addStudent" />
                   </div>
                 </div>
               </div>
@@ -514,15 +390,15 @@ function closeDetail()  { detailModal.value = null }
 
               <div class="form-row">
                 <div class="field field--full">
-                  <label>Описание</label>
-                  <textarea class="input textarea" v-model="form.description" placeholder="Причина или дополнительные сведения..." rows="3" />
+                  <label>Описание / причина</label>
+                  <textarea class="input textarea" v-model="form.description" placeholder="Причина или дополнительные сведения…" rows="3" />
                 </div>
               </div>
 
               <p v-if="formError"   class="form-msg form-error">{{ formError }}</p>
               <p v-if="formSuccess" class="form-msg form-success">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
-                Заявка успешно отправлена
+                Заявка успешно подана
               </p>
 
               <button class="btn-submit" type="submit">Отправить заявку</button>
@@ -856,6 +732,15 @@ function closeDetail()  { detailModal.value = null }
 .td-nowrap  { white-space: nowrap; }
 .td-soft    { color: var(--ink-soft); }
 .empty-row  { text-align: center; color: var(--ink-soft); padding: 36px !important; }
+.empty-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.btn-link   { background: none; border: none; cursor: pointer; color: var(--brand); font: 500 13px/1 'Inter', sans-serif; text-decoration: underline; padding: 0; }
+
+.table-header-actions { display: flex; align-items: center; gap: 10px; }
+.btn-sm-primary {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px !important; padding: 0 16px !important; font-size: 13px !important;
+}
+.btn-sm-primary svg { width: 14px; height: 14px; }
 
 /* ── Action buttons ── */
 .action-btns { display: flex; gap: 6px; }
@@ -932,65 +817,6 @@ function closeDetail()  { detailModal.value = null }
 .tag-input::placeholder { color: #b7b9c2; }
 .hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
 
-/* ── Discipline / User pickers ── */
-.disc-picker, .user-picker { position: relative; }
-
-.picker-trigger {
-  display: flex; align-items: center;
-  border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: #fff; height: 38px; padding: 0 10px;
-  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
-  cursor: pointer;
-}
-.picker-trigger:focus-within { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
-.disc-picker.open .picker-trigger { border-color: var(--brand); }
-.picker-search {
-  flex: 1; border: none; outline: none; background: transparent;
-  font: 13px/1 'Inter', sans-serif; color: var(--ink);
-}
-.picker-search::placeholder { color: #b7b9c2; }
-.picker-trigger svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--ink-soft); transition: transform .2s; }
-.disc-picker.open .picker-trigger svg { transform: rotate(180deg); }
-
-.picker-dropdown {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
-  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
-  box-shadow: 0 8px 24px -4px rgba(20,22,60,.12);
-  max-height: 220px; overflow-y: auto;
-  opacity: 0; pointer-events: none; transform: translateY(-4px);
-  transition: opacity .15s var(--ease), transform .15s var(--ease);
-}
-.disc-picker.open .picker-dropdown { opacity: 1; pointer-events: all; transform: translateY(0); }
-
-.picker-option {
-  display: flex; align-items: center; justify-content: space-between;
-  width: 100%; text-align: left; background: none; border: none;
-  padding: 10px 14px; cursor: pointer; gap: 8px;
-  transition: background .12s;
-}
-.picker-option:hover { background: rgba(59,63,224,.06); }
-.picker-option.selected { background: rgba(59,63,224,.05); color: var(--brand); }
-.picker-opt-name { font: 13px/1.4 'Inter', sans-serif; color: var(--ink); }
-.picker-opt-code { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
-.picker-empty { padding: 10px 14px; font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); }
-
-/* User dropdown (teachers / students) */
-.user-dropdown {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
-  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
-  box-shadow: 0 8px 24px -4px rgba(20,22,60,.12);
-  max-height: 200px; overflow-y: auto;
-}
-.user-option {
-  display: flex; flex-direction: column; align-items: flex-start;
-  width: 100%; text-align: left; background: none; border: none;
-  padding: 9px 14px; cursor: pointer; gap: 2px;
-  transition: background .12s;
-}
-.user-option:hover { background: rgba(59,63,224,.06); }
-.user-option-email { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
-.tag-placeholder { color: #b7b9c2; font: 13px/1 'Inter', sans-serif; pointer-events: none; }
-
 /* ── Custom select ── */
 .custom-select { position: relative; }
 .custom-select-trigger {
@@ -1021,6 +847,25 @@ function closeDetail()  { detailModal.value = null }
 .form-msg { font: 13px/1.4 'Inter', sans-serif; margin: 0; display: flex; align-items: center; gap: 6px; }
 .form-error   { color: #dc2626; }
 .form-success { color: #059669; }
+
+/* ── Real API submit form extras ── */
+.loading-hint { font: 13px/1.5 'Inter', sans-serif; color: var(--ink-soft); padding: 10px 0; }
+
+.current-values {
+  background: var(--bg); border-radius: 10px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cv-label { font: 600 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
+.cv-grid  { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.cv-item  { display: flex; flex-direction: column; gap: 3px; }
+.cv-key   { font: 500 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.cv-val   { font: 600 13px/1 'Inter', sans-serif; color: var(--ink); }
+
+.changes-header {
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding-bottom: 4px; border-bottom: 1px solid var(--line);
+}
 .form-success svg { width: 15px; height: 15px; }
 
 .btn-submit {
@@ -1061,6 +906,18 @@ function closeDetail()  { detailModal.value = null }
   backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
   padding: 20px;
+  /* CSS-переменные для teleport-контента (выходит за пределы .teacher-req-root) */
+  --bg:        #f3f4f7;
+  --card:      #ffffff;
+  --ink:       #1a1d24;
+  --ink-soft:  #6b7280;
+  --line:      #d7d9e0;
+  --brand:     #3b3fe0;
+  --brand-ink: #2a2e9e;
+  --radius:    10px;
+  --shadow:    0 2px 8px rgba(20,22,60,.07);
+  --ease:      cubic-bezier(.2,.7,.2,1);
+  font-family: 'Inter', system-ui, sans-serif;
 }
 
 /* ── Modal base ── */

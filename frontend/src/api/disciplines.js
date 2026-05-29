@@ -1,37 +1,55 @@
-import api from './client'
+import http from './http'
 
 export const disciplinesApi = {
-  // Справочник — доступно любому авторизованному.
-  list: (params = {}) =>
-    api.get('/disciplines', { params }).then((r) => r.data),
-  get: (id) => api.get(`/disciplines/${id}`).then((r) => r.data),
-  listTeachers: (id) =>
-    api.get(`/disciplines/${id}/teachers`).then((r) => r.data),
-  listStudents: (id) =>
-    api.get(`/disciplines/${id}/students`).then((r) => r.data),
+  getAll: (params) =>
+    http.get('/api/disciplines', { params }),
 
-  // Управление — admin/dean.
-  create: (payload) => api.post('/disciplines', payload).then((r) => r.data),
-  update: (id, payload) =>
-    api.patch(`/disciplines/${id}`, payload).then((r) => r.data),
-  delete: (id) => api.delete(`/disciplines/${id}`),
-  restore: (id) => api.post(`/disciplines/${id}/restore`),
+  getById: (id) =>
+    http.get(`/api/disciplines/${id}`),
+
+  create: (data) =>
+    http.post('/api/disciplines', data),
+
+  update: (id, data) =>
+    http.patch(`/api/disciplines/${id}`, data),
+
+  remove: (id) =>
+    http.delete(`/api/disciplines/${id}`),
+
+  restore: (id) =>
+    http.post(`/api/disciplines/${id}/restore`),
+
+  // Студенты дисциплины
+  getStudents: (id) =>
+    http.get(`/api/disciplines/${id}/students`),
+
+  attachStudent: (id, data) =>
+    http.post(`/api/disciplines/${id}/students`, data),
+
+  detachStudent: (id, userId) =>
+    http.delete(`/api/disciplines/${id}/students/${userId}`),
+
+  // Преподаватели дисциплины
+  getTeachers: (id) =>
+    http.get(`/api/disciplines/${id}/teachers`),
 
   attachTeacher: (id, teacherId) =>
-    api.post(`/disciplines/${id}/teachers`, { teacher_id: teacherId }),
+    http.post(`/api/disciplines/${id}/teachers`, { teacher_id: teacherId }),
+
   detachTeacher: (id, userId) =>
-    api.delete(`/disciplines/${id}/teachers/${userId}`),
+    http.delete(`/api/disciplines/${id}/teachers/${userId}`),
 
-  attachStudent: (id, studentId, academicYear, semester) =>
-    api.post(`/disciplines/${id}/students`, {
-      student_id: studentId,
-      academic_year: academicYear, // строка "2025-2026"
-      semester,
-    }),
-  detachStudent: (id, userId) =>
-    api.delete(`/disciplines/${id}/students/${userId}`),
+  // Мои дисциплины
+  myAsStudent: () =>
+    http.get('/api/me/disciplines/student'),
 
-  // Дисциплины пользователя.
-  myAsStudent: () => api.get('/me/disciplines/student').then((r) => r.data),
-  myAsTeacher: () => api.get('/me/disciplines/teacher').then((r) => r.data),
+  myAsTeacher: () =>
+    http.get('/api/me/disciplines/teacher'),
+
+  // Дисциплины конкретного пользователя (декан)
+  userAsStudent: (userId) =>
+    http.get(`/api/users/${userId}/disciplines/student`),
+
+  userAsTeacher: (userId) =>
+    http.get(`/api/users/${userId}/disciplines/teacher`),
 }

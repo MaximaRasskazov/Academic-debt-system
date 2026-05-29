@@ -81,6 +81,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: runtime
+      args:
+        VITE_API_URL: ''
     ports:
       - '${APP_PORT:-80}:80'
     depends_on:

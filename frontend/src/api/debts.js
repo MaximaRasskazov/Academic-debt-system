@@ -1,29 +1,32 @@
-import api from './client'
+import http from './http'
 
 export const debtsApi = {
-  // Для роли student. Бэкенд возвращает массив объектов debt.
-  listMy: () => api.get('/debts/my').then((r) => r.data),
+  // Декан — все долги
+  getAll: (params) =>
+    http.get('/api/debts', { params }),
 
-  // Для роли teacher. Долги по дисциплинам, которые он ведёт.
-  listByDiscipline: (params = {}) =>
-    api.get('/debts/by-discipline', { params }).then((r) => r.data),
+  // Студент — свои долги
+  getMy: () =>
+    http.get('/api/debts/my'),
 
-  // Для dean/admin. Возвращает { items, total, limit, offset }.
-  listAll: (params = {}) => api.get('/debts', { params }).then((r) => r.data),
+  // Преподаватель — долги по своим дисциплинам
+  getByDiscipline: (params) =>
+    http.get('/api/debts/by-discipline', { params }),
 
-  // Сводка open/graded по дисциплинам — для dean.
-  summary: () => api.get('/debts/summary').then((r) => r.data),
+  // Сводка по дисциплинам
+  getSummary: () =>
+    http.get('/api/debts/summary'),
 
-  get: (id) => api.get(`/debts/${id}`).then((r) => r.data),
+  getById: (id) =>
+    http.get(`/api/debts/${id}`),
 
-  // Создание долга (teacher). Бэкенд проверяет teacher_disciplines +
-  // student_disciplines, может вернуть 403/422/409.
-  create: (payload) => api.post('/debts', payload).then((r) => r.data),
+  // Преподаватель — поставить долг
+  create: (data) =>
+    http.post('/api/debts', data),
 
-  // Выставить оценку 2..5. Возвращает обновлённый debt со status=graded.
   grade: (id, grade) =>
-    api.patch(`/debts/${id}/grade`, { grade }).then((r) => r.data),
+    http.patch(`/api/debts/${id}/grade`, { grade }),
 
-  // Отменить долг (dean). 204 No Content.
-  cancel: (id) => api.patch(`/debts/${id}/cancel`),
+  cancel: (id) =>
+    http.patch(`/api/debts/${id}/cancel`),
 }

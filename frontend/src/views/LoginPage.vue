@@ -1,19 +1,16 @@
 <script setup>
 import { reactive, ref, computed, onUnmounted, nextTick } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { getHomeForRole } from '../router'
+import { authApi } from '../api/auth'
 
 const router = useRouter()
-const route = useRoute()
 const auth = useAuthStore()
 
 const view = ref('login')
 const loading = ref(false)
 const triedSubmit = ref(false)
-// Серверная ошибка логина — показывается под кнопкой при неверных
-// учётных данных, rate-limit, 5xx и т.д.
-const loginError = ref('')
+const serverError = ref('')
 
 const titles = {
   'login':            'Авторизация',
@@ -33,25 +30,29 @@ const canSubmit = computed(() =>
 
 async function onSubmit() {
   triedSubmit.value = true
-  loginError.value = ''
   if (!canSubmit.value) return
   loading.value = true
+  serverError.value = ''
   try {
-    await auth.login(form.email.trim(), form.password)
-    // После успешного login отправляем на "домашнюю" страницу роли:
-    // student → /debts, teacher → /teacher, dean → /dean. Если в query
-    // лежит ?next=... (роутер кладёт туда исходный путь, когда гость
-    // тыкается в защищённый маршрут) — возвращаемся туда.
-    const next = route.query.next
-    router.push(next || getHomeForRole(auth.primaryRole))
-  } catch (e) {
-    const status = e.response?.status
-    const msg = e.response?.data?.message
-    if (status === 401) loginError.value = 'Неверный email или пароль'
-    else if (status === 429)
-      loginError.value =
-        'Слишком много попыток входа. Подождите ~15 секунд и попробуйте снова'
-    else loginError.value = msg || 'Не удалось войти. Попробуйте позже'
+    const { data: loginData } = await authApi.login(form.email, form.password)
+
+    // Временно кладём токен в localStorage чтобы http-интерсептор подхватил его при вызове me()
+    localStorage.setItem('token', loginData.access_token)
+
+    const { data: meData } = await authApi.me()
+
+    // Берём роль с наибольшим уровнем доступа
+    const topRole = [...(meData.roles ?? [])].sort((a, b) => b.level - a.level)[0]
+    const role = topRole?.slug?.toUpperCase() ?? 'STUDENT'
+
+    auth.login({ token: loginData.access_token, role, user: meData.user })
+
+    if (role === 'DEAN') router.push('/dean')
+    else if (role === 'TEACHER') router.push('/teacher')
+    else router.push('/student')
+  } catch (err) {
+    const msg = err.response?.data?.message || err.response?.data?.error
+    serverError.value = msg || 'Неверный email или пароль.'
   } finally {
     loading.value = false
   }
@@ -256,7 +257,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
             </label>
 
             <p v-if="!form.consent && triedSubmit" class="form-error">Необходимо согласие на использование cookie.</p>
-            <p v-if="loginError" class="form-error">{{ loginError }}</p>
+            <p v-if="serverError" class="form-error">{{ serverError }}</p>
 
             <button class="submit" type="submit" :disabled="!canSubmit || loading">
               {{ loading ? 'Входим…' : 'Войти' }}

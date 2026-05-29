@@ -1,9 +1,12 @@
-import api from './client'
+import http from './http'
 
 export const notificationsApi = {
-  list: (params = {}) =>
-    api.get('/notifications', { params }).then((r) => r.data),
-  unreadCount: () =>
-    api.get('/notifications/unread-count').then((r) => r.data),
-  markRead: (id) => api.post(`/notifications/${id}/read`),
+  getAll: (params) =>
+    http.get('/api/notifications', { params }),
+
+  getUnreadCount: () =>
+    http.get('/api/notifications/unread-count'),
+
+  markRead: (id) =>
+    http.post(`/api/notifications/${id}/read`),
 }

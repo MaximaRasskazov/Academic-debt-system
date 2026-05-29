@@ -14,315 +14,315 @@ import { usersApi } from '../api/users'
 
 const sidebarOpen = ref(false)
 
-// Реальные данные с бэка вместо моков.
-const allDebts = ref([])
-const allRetakes = ref([])
+// ── Stats ─────────────────────────────────────────────────────
+const upcomingRetakes = ref([])
+const stats = ref([
+  { label: 'Академических долгов', value: '—', accent: '#e63c5a' },
+  { label: 'Назначено пересдач',   value: '—', accent: '#3b3fe0' },
+  { label: 'Проводится сейчас',    value: '—', accent: '#f59e0b' },
+  { label: 'Завершено в месяце',   value: '—', accent: '#10b981' },
+])
+
+// ── Disciplines ───────────────────────────────────────────────
 const disciplines = ref([])
-const disciplineMap = ref({})
-const dashLoading = ref(true)
-const dashError = ref('')
+const discMap = ref({})
+const disciplineId = ref('')
+const discSearch = ref('')
+const discDropdownOpen = ref(false)
 
-async function loadDashboard() {
-  dashLoading.value = true
-  dashError.value = ''
+const selectedDiscipline = computed(() => disciplines.value.find(d => d.id === disciplineId.value))
+
+const filteredDisciplines = computed(() => {
+  const q = discSearch.value.toLowerCase()
+  return q
+    ? disciplines.value.filter(d => d.name.toLowerCase().includes(q) || d.code.toLowerCase().includes(q))
+    : disciplines.value
+})
+
+function selectDiscipline(id) {
+  disciplineId.value = id
+  discDropdownOpen.value = false
+  discSearch.value = ''
+}
+
+// ── Participants ──────────────────────────────────────────────
+const availableStudents = ref([])
+const availableTeachers = ref([])
+const loadingParticipants = ref(false)
+
+const selectedStudents = ref([])
+const selectedTeachers = ref([])
+const studentSearch = ref('')
+const teacherSearch = ref('')
+const teacherOpen = ref(false)
+const studentOpen = ref(false)
+const groupSelect = ref('')
+
+const selectedStudentIds = computed(() => new Set(selectedStudents.value.map(s => s.id)))
+const selectedTeacherIds = computed(() => new Set(selectedTeachers.value.map(t => t.id)))
+const availableGroups = computed(() => [...new Set(availableStudents.value.map(s => s.group).filter(Boolean))])
+
+const filteredStudents = computed(() => {
+  const q = studentSearch.value.toLowerCase()
+  return availableStudents.value
+    .filter(s => !selectedStudentIds.value.has(s.id) && (s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q)))
+    .slice(0, 8)
+})
+
+const filteredTeachers = computed(() => {
+  const q = teacherSearch.value.toLowerCase()
+  return availableTeachers.value
+    .filter(t => !selectedTeacherIds.value.has(t.id) && t.name.toLowerCase().includes(q))
+    .slice(0, 8)
+})
+
+let teacherBlurTimer = null
+let studentBlurTimer = null
+function onTeacherBlur() { teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200) }
+function onStudentBlur() { studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200) }
+function onTeacherFocus() { clearTimeout(teacherBlurTimer); teacherOpen.value = true }
+function onStudentFocus() { clearTimeout(studentBlurTimer); studentOpen.value = true }
+
+watch(disciplineId, async (id) => {
+  availableStudents.value = []
+  availableTeachers.value = []
+  selectedStudents.value = []
+  selectedTeachers.value = []
+  groupSelect.value = ''
+  if (!id) return
+
+  loadingParticipants.value = true
   try {
-    const [debtsResp, retakesResp, discsResp] = await Promise.all([
-      debtsApi.listAll({ limit: 500 }),
-      retakesApi.listAll({ limit: 200 }),
-      disciplinesApi.list({ limit: 200 }),
+    const [studRes, teachRes, debtsRes] = await Promise.allSettled([
+      disciplinesApi.getStudents(id),
+      usersApi.getAll({ role: 'teacher', limit: 100 }),
+      debtsApi.getAll({ limit: 500 }),
     ])
-    allDebts.value = debtsResp.items || debtsResp || []
-    allRetakes.value = retakesResp.items || retakesResp || []
-    disciplines.value = discsResp.items || discsResp || []
-    disciplineMap.value = Object.fromEntries(
-      disciplines.value.map((d) => [d.id, d.name]),
-    )
-  } catch (e) {
-    dashError.value =
-      e.response?.data?.message || 'Не удалось загрузить данные'
-  } finally {
-    dashLoading.value = false
-  }
-}
 
-const stats = computed(() => {
-  const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  return [
-    {
-      label: 'Академических долгов',
-      value: allDebts.value.filter((d) => d.status === 'open').length,
-      accent: '#e63c5a',
-    },
-    {
-      label: 'Назначено пересдач',
-      value: allRetakes.value.filter((r) => r.status === 'scheduled').length,
-      accent: '#3b3fe0',
-    },
-    {
-      label: 'Проводится сейчас',
-      value: allRetakes.value.filter((r) => r.status === 'in_progress').length,
-      accent: '#f59e0b',
-    },
-    {
-      label: 'Завершено в месяце',
-      value: allRetakes.value.filter(
-        (r) =>
-          r.status === 'completed' &&
-          new Date(r.completed_at || r.scheduled_at) >= monthStart,
-      ).length,
-      accent: '#10b981',
-    },
-  ]
-})
-
-// Адаптируем retake → формат для UpcomingRetakes.
-const upcomingRetakes = computed(() =>
-  allRetakes.value
-    .filter((r) => r.status === 'scheduled')
-    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
-    .slice(0, 5)
-    .map((r) => {
-      const dt = new Date(r.scheduled_at)
-      return {
-        id: r.id,
-        subject: disciplineMap.value[r.discipline_id] || 'Дисциплина',
-        day: dt.getDate(),
-        month: dt.getMonth() + 1,
-        year: dt.getFullYear(),
-        time: dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        building: r.building,
-        room: r.room,
-      }
-    }),
-)
-
-// --- Форма назначения пересдачи ---
-// disciplineId/teachers хранят UUID, чтобы при submit не нужно было
-// дополнительно искать по имени и не было риска отправить несуществующее.
-const retakeForm = reactive({
-  disciplineId: '',
-  type:         'normal',
-  date:         null,
-  time:         '',
-  duration:     90,
-  building:     '',
-  room:         '',
-  teachers:     [], // массив объектов { id, fullName }
-})
-
-const submitting = ref(false)
-const submitError = ref('')
-const submitSuccess = ref('')
-
-// Список преподавателей подтягиваем один раз при загрузке страницы —
-// тогда multiselect работает без задержек на каждый клик.
-const allTeachers = ref([])
-async function loadTeachers() {
-  try {
-    const resp = await usersApi.list({ role: 'teacher', limit: 200 })
-    allTeachers.value = (resp.items || []).map((u) => ({
-      id: u.id,
-      fullName: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '),
-      email: u.email,
-    }))
-  } catch (e) {
-    // Не критично для рендера страницы — поле "преподаватели" просто
-    // покажет пустой dropdown. В консоль уйдёт причина для отладки.
-    console.warn('Не удалось загрузить список преподавателей', e)
-  }
-}
-
-// Создание пересдачи: сначала POST /retakes, затем по одному запросу
-// POST /retakes/:id/teachers для каждого выбранного. Студенты на этом
-// шаге не добавляются — декан делает это отдельно из карточки пересдачи.
-async function submitRetake() {
-  submitError.value = ''
-  submitSuccess.value = ''
-
-  if (!retakeForm.disciplineId) {
-    submitError.value = 'Выберите дисциплину'
-    return
-  }
-  if (!retakeForm.date) {
-    submitError.value = 'Укажите дату пересдачи'
-    return
-  }
-  if (!retakeForm.building.trim() || !retakeForm.room.trim()) {
-    submitError.value = 'Заполните корпус и аудиторию'
-    return
-  }
-  if (!teacherCountOk.value) {
-    submitError.value = `Нужно минимум ${minTeachers.value} преподаватель(ей)`
-    return
-  }
-
-  // Собираем datetime: retakeForm.date + retakeForm.time
-  const [hh, mm] = (retakeForm.time || '00:00').split(':').map(Number)
-  const dt = new Date(retakeForm.date)
-  dt.setHours(hh, mm, 0, 0)
-
-  submitting.value = true
-  try {
-    const r = await retakesApi.create({
-      discipline_id: retakeForm.disciplineId,
-      kind: retakeForm.type === 'commission' ? 'commission' : 'regular',
-      building: retakeForm.building.trim(),
-      room: retakeForm.room.trim(),
-      scheduled_at: dt.toISOString(),
-      duration_minutes: retakeForm.duration,
-    })
-
-    // Привязываем выбранных преподавателей. Если один сбоит — продолжаем,
-    // декан увидит итоговое предупреждение, но пересдача уже создана.
-    const failed = []
-    for (const t of retakeForm.teachers) {
-      try {
-        await retakesApi.addTeacher(r.id, t.id)
-      } catch (err) {
-        failed.push(t.fullName)
+    const debtMap = {}
+    if (debtsRes.status === 'fulfilled') {
+      for (const d of debtsRes.value.data.items ?? []) {
+        if (d.discipline_id === id && d.status === 'open') debtMap[d.student_id] = d.id
       }
     }
 
-    if (failed.length > 0) {
-      submitSuccess.value = `Пересдача создана, но не удалось добавить: ${failed.join(', ')}`
-    } else {
-      submitSuccess.value = 'Пересдача создана'
+    if (studRes.status === 'fulfilled') {
+      availableStudents.value = (studRes.value.data ?? [])
+        .filter(u => debtMap[u.id])
+        .map(u => ({
+          id: u.id,
+          name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '),
+          group: u.group_name ?? '',
+          debtId: debtMap[u.id],
+        }))
     }
 
-    // Очищаем форму, перезагружаем список.
-    retakeForm.disciplineId = ''
-    retakeForm.building = ''
-    retakeForm.room = ''
-    retakeForm.teachers = []
-    await loadDashboard()
-  } catch (e) {
-    submitError.value =
-      e.response?.data?.message ||
-      'Не удалось создать пересдачу. Проверьте поля'
+    if (teachRes.status === 'fulfilled') {
+      const teacherItems = teachRes.value.data.items ?? teachRes.value.data ?? []
+      availableTeachers.value = teacherItems.map(u => ({
+        id: u.id,
+        name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '),
+      }))
+    }
   } finally {
-    submitting.value = false
+    loadingParticipants.value = false
+  }
+})
+
+function addStudent(s) {
+  clearTimeout(studentBlurTimer)
+  if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
+  studentSearch.value = ''
+  studentOpen.value = true
+}
+
+function addGroup(group) {
+  for (const s of availableStudents.value) {
+    if (s.group === group && !selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
   }
 }
 
-// --- Кастомный дропдаун типа пересдачи ---
+function removeStudent(id) { selectedStudents.value = selectedStudents.value.filter(s => s.id !== id) }
+
+function addTeacher(t) {
+  clearTimeout(teacherBlurTimer)
+  if (selectedTeacherIds.value.has(t.id)) return
+  if (!isCommission.value && selectedTeachers.value.length >= 1) return
+  selectedTeachers.value.push(t)
+  teacherSearch.value = ''
+  teacherOpen.value = isCommission.value
+}
+
+function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
+
+// ── Type ──────────────────────────────────────────────────────
 const typeDropdownOpen = ref(false)
 const typeOptions = [
   { value: 'normal',     label: 'Обычная' },
   { value: 'commission', label: 'С комиссией (мин. 3 преподавателя)' },
 ]
-function selectType(val) {
-  retakeForm.type = val
-  typeDropdownOpen.value = false
-}
-function handleOutsideClick(e) {
-  if (!e.target.closest('.custom-select')) typeDropdownOpen.value = false
-  if (!e.target.closest('.discipline-select')) disciplineDropdownOpen.value = false
-  if (!e.target.closest('.teacher-select')) teacherDropdownOpen.value = false
-}
+const retakeType = ref('normal')
+function selectType(val) { retakeType.value = val; typeDropdownOpen.value = false }
 
-// --- Дисциплина: searchable select ---
-const disciplineDropdownOpen = ref(false)
-const disciplineSearch = ref('')
-const selectedDiscipline = computed(() =>
-  disciplines.value.find((d) => d.id === retakeForm.disciplineId),
-)
-const filteredDisciplines = computed(() => {
-  const q = disciplineSearch.value.trim().toLowerCase()
-  if (!q) return disciplines.value
-  return disciplines.value.filter(
-    (d) =>
-      d.name.toLowerCase().includes(q) ||
-      (d.code || '').toLowerCase().includes(q),
-  )
-})
-function selectDiscipline(d) {
-  retakeForm.disciplineId = d.id
-  disciplineSearch.value = ''
-  disciplineDropdownOpen.value = false
-}
+const isCommission   = computed(() => retakeType.value === 'commission')
+const minTeachers    = computed(() => isCommission.value ? 3 : 1)
+const teacherCountOk = computed(() => selectedTeachers.value.length >= minTeachers.value)
 
-// --- Преподаватели: multiselect из загруженного списка ---
-const teacherDropdownOpen = ref(false)
-const teacherSearch = ref('')
-const filteredTeachers = computed(() => {
-  const q = teacherSearch.value.trim().toLowerCase()
-  const selectedIds = new Set(retakeForm.teachers.map((t) => t.id))
-  return allTeachers.value
-    .filter((t) => !selectedIds.has(t.id))
-    .filter((t) =>
-      !q
-        ? true
-        : t.fullName.toLowerCase().includes(q) ||
-          (t.email || '').toLowerCase().includes(q),
-    )
+watch(isCommission, (val) => {
+  if (!val && selectedTeachers.value.length > 1) selectedTeachers.value.splice(1)
 })
-function selectTeacher(t) {
-  if (!isCommission.value && retakeForm.teachers.length >= 1) {
-    // Для обычной пересдачи — заменяем единственного преподавателя.
-    retakeForm.teachers = [t]
-  } else {
-    retakeForm.teachers.push(t)
-  }
-  teacherSearch.value = ''
-  // Для commission удобно оставлять dropdown открытым, чтобы добавить
-  // следующего без повторного клика.
-  if (!isCommission.value) teacherDropdownOpen.value = false
-}
-function removeTeacherById(id) {
-  retakeForm.teachers = retakeForm.teachers.filter((t) => t.id !== id)
-}
-onMounted(() => {
-  document.addEventListener('mousedown', handleOutsideClick)
-  loadDashboard()
-  loadTeachers()
-})
-onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
-// --- Время ---
-const timeHour   = ref(9)
-const timeMinute = ref(0)
+// ── Date / Time ───────────────────────────────────────────────
+const retakeDate = ref(null)
+const timeHour     = ref(9)
+const timeMinute   = ref(0)
 const hourDisplay   = ref('09')
 const minuteDisplay = ref('00')
+const timeString = computed(() =>
+  `${String(timeHour.value).padStart(2, '0')}:${String(timeMinute.value).padStart(2, '0')}`
+)
 
 watch([timeHour, timeMinute], ([h, m]) => {
-  retakeForm.time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  hourDisplay.value = String(h).padStart(2, '0')
+  minuteDisplay.value = String(m).padStart(2, '0')
 }, { immediate: true })
 
-function onTimeInput(e) {
-  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2)
-}
+function onTimeInput(e) { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
 function onHourBlur() {
   const n = Math.max(0, Math.min(23, parseInt(hourDisplay.value, 10) || 0))
-  timeHour.value = n
-  hourDisplay.value = String(n).padStart(2, '0')
+  timeHour.value = n; hourDisplay.value = String(n).padStart(2, '0')
 }
 function onMinuteBlur() {
   const n = Math.max(0, Math.min(59, parseInt(minuteDisplay.value, 10) || 0))
-  timeMinute.value = n
-  minuteDisplay.value = String(n).padStart(2, '0')
+  timeMinute.value = n; minuteDisplay.value = String(n).padStart(2, '0')
 }
 
-// --- Длительность ---
-const DURATION_STEP = 5
-const DURATION_MIN  = 15
-const DURATION_MAX  = 480
-function decreaseDuration() { if (retakeForm.duration > DURATION_MIN) retakeForm.duration -= DURATION_STEP }
-function increaseDuration()  { if (retakeForm.duration < DURATION_MAX) retakeForm.duration += DURATION_STEP }
-function clampDuration() { retakeForm.duration = Math.max(DURATION_MIN, Math.min(DURATION_MAX, retakeForm.duration || DURATION_MIN)) }
+// ── Duration ──────────────────────────────────────────────────
+const duration = ref(90)
+const DURATION_STEP = 5, DURATION_MIN = 15, DURATION_MAX = 480
+function decreaseDuration() { if (duration.value > DURATION_MIN) duration.value -= DURATION_STEP }
+function increaseDuration()  { if (duration.value < DURATION_MAX) duration.value += DURATION_STEP }
+function clampDuration() { duration.value = Math.max(DURATION_MIN, Math.min(DURATION_MAX, duration.value || DURATION_MIN)) }
 
-// --- Преподаватели ---
-const isCommission   = computed(() => retakeForm.type === 'commission')
-const minTeachers    = computed(() => isCommission.value ? 3 : 1)
-const teacherCountOk = computed(() => retakeForm.teachers.length >= minTeachers.value)
+// ── Building / Room ───────────────────────────────────────────
+const building = ref('')
+const room = ref('')
 
-// При смене типа пересдачи на "обычную" обрезаем список до одного — для
-// regular достаточно одного преподавателя, остальные смутят бэк.
-watch(() => retakeForm.type, (type) => {
-  if (type === 'normal' && retakeForm.teachers.length > 1) {
-    retakeForm.teachers = retakeForm.teachers.slice(0, 1)
+// ── Submit ────────────────────────────────────────────────────
+const submitting  = ref(false)
+const submitError   = ref('')
+const submitSuccess = ref(false)
+
+async function submitRetake() {
+  submitError.value = ''
+  if (!disciplineId.value)   { submitError.value = 'Выберите дисциплину'; return }
+  if (!retakeDate.value)      { submitError.value = 'Укажите дату'; return }
+  if (!building.value.trim()) { submitError.value = 'Укажите корпус'; return }
+  if (!room.value.trim())     { submitError.value = 'Укажите аудиторию'; return }
+  if (!teacherCountOk.value)  {
+    submitError.value = isCommission.value
+      ? 'Для комиссии нужно минимум 3 преподавателя'
+      : 'Добавьте хотя бы одного преподавателя'
+    return
+  }
+
+  const [day, month, year] = retakeDate.value.split('.')
+  const scheduledAt = new Date(`${year}-${month}-${day}T${timeString.value}:00`).toISOString()
+
+  submitting.value = true
+  try {
+    const { data: retake } = await retakesApi.create({
+      discipline_id: disciplineId.value,
+      kind: isCommission.value ? 'commission' : 'regular',
+      building: building.value,
+      room: room.value,
+      scheduled_at: scheduledAt,
+      duration_minutes: duration.value,
+    })
+
+    await Promise.all([
+      ...selectedTeachers.value.map(t => retakesApi.addTeacher(retake.id, t.id)),
+      ...selectedStudents.value.map(s => retakesApi.addStudent(retake.id, { student_id: s.id, debt_id: s.debtId })),
+    ])
+
+    disciplineId.value = ''
+    retakeType.value = 'normal'
+    retakeDate.value = null
+    timeHour.value = 9; timeMinute.value = 0
+    duration.value = 90
+    building.value = ''; room.value = ''
+    selectedStudents.value = []; selectedTeachers.value = []
+    submitSuccess.value = true
+    setTimeout(() => { submitSuccess.value = false }, 3000)
+  } catch (e) {
+    submitError.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка при создании пересдачи'
+  } finally {
+    submitting.value = false
+  }
+}
+
+// ── Outside click ─────────────────────────────────────────────
+function handleOutsideClick(e) {
+  if (!e.target.closest('.custom-select')) {
+    typeDropdownOpen.value = false
+    discDropdownOpen.value = false
+  }
+}
+
+onMounted(async () => {
+  document.addEventListener('mousedown', handleOutsideClick)
+
+  const [summaryRes, retakesRes, scheduledRes, disciplinesRes] = await Promise.allSettled([
+    debtsApi.getSummary(),
+    retakesApi.getAll({ limit: 200 }),
+    retakesApi.getAll({ status: 'scheduled', limit: 10 }),
+    disciplinesApi.getAll({ limit: 200 }),
+  ])
+
+  if (disciplinesRes.status === 'fulfilled') {
+    disciplines.value = disciplinesRes.value.data.items ?? []
+    for (const d of disciplines.value) discMap.value[d.id] = d.name || d.code
+  }
+
+  let totalDebts = 0
+  if (summaryRes.status === 'fulfilled')
+    totalDebts = (summaryRes.value.data ?? []).reduce((s, r) => s + (r.open_count ?? 0), 0)
+
+  let totalRetakes = 0, inProgress = 0, completedMonth = 0
+  if (retakesRes.status === 'fulfilled') {
+    const items = retakesRes.value.data.items ?? []
+    totalRetakes = retakesRes.value.data.total ?? items.length
+    inProgress = items.filter(r => r.status === 'in_progress').length
+    const now = new Date()
+    completedMonth = items.filter(r => {
+      if (r.status !== 'completed') return false
+      const d = new Date(r.completed_at ?? r.updated_at ?? r.created_at)
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+    }).length
+  }
+
+  stats.value = [
+    { label: 'Академических долгов', value: totalDebts,     accent: '#e63c5a' },
+    { label: 'Назначено пересдач',   value: totalRetakes,   accent: '#3b3fe0' },
+    { label: 'Проводится сейчас',    value: inProgress,     accent: '#f59e0b' },
+    { label: 'Завершено в месяце',   value: completedMonth, accent: '#10b981' },
+  ]
+
+  if (scheduledRes.status === 'fulfilled') {
+    upcomingRetakes.value = (scheduledRes.value.data.items ?? []).map(r => {
+      const d = new Date(r.scheduled_at)
+      return {
+        id: r.id,
+        subject: discMap.value[r.discipline_id] || 'Дисциплина',
+        day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
+        time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        building: r.building, room: r.room,
+      }
+    })
   }
 })
+
+onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 </script>
 
 <template>
@@ -339,9 +339,7 @@ watch(() => retakeForm.type, (type) => {
         <!-- Левая колонка 70% -->
         <section class="col-left">
 
-          <div v-if="dashLoading" class="dash-state">Загрузка…</div>
-          <div v-else-if="dashError" class="dash-state dash-error">{{ dashError }}</div>
-          <div v-else class="stats-grid">
+          <div class="stats-grid">
             <div v-for="s in stats" :key="s.label" class="stat-card">
               <div class="stat-accent" :style="{ background: s.accent }" />
               <div class="stat-value">{{ s.value }}</div>
@@ -353,172 +351,208 @@ watch(() => retakeForm.type, (type) => {
             <h2 class="section-title">Назначить пересдачу</h2>
             <form class="retake-form" @submit.prevent="submitRetake" novalidate>
 
+              <!-- Дисциплина + Тип -->
               <div class="form-row">
                 <div class="field">
                   <label>Дисциплина</label>
-                  <div class="custom-select discipline-select" :class="{ open: disciplineDropdownOpen }">
-                    <button type="button" class="custom-select-trigger" @click="disciplineDropdownOpen = !disciplineDropdownOpen">
-                      <span v-if="selectedDiscipline">{{ selectedDiscipline.name }}</span>
-                      <span v-else class="placeholder">Выберите дисциплину</span>
+                  <div class="custom-select" :class="{ open: discDropdownOpen }">
+                    <button type="button" class="custom-select-trigger" @click="discDropdownOpen = !discDropdownOpen">
+                      <span :class="{ placeholder: !selectedDiscipline }">
+                        {{ selectedDiscipline ? selectedDiscipline.name : 'Выберите дисциплину' }}
+                      </span>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                         <path d="M6 9l6 6 6-6"/>
                       </svg>
                     </button>
-                    <div class="custom-select-dropdown dropdown-scroll">
-                      <div class="dropdown-search">
-                        <input
-                          v-model="disciplineSearch"
-                          class="dropdown-search-input"
-                          placeholder="Поиск по названию или коду"
-                          @click.stop
-                        />
+                    <div class="custom-select-dropdown">
+                      <div class="dropdown-search-wrap">
+                        <input class="dropdown-search" v-model="discSearch" placeholder="Поиск..." @click.stop />
                       </div>
-                      <button
-                        v-for="d in filteredDisciplines"
-                        :key="d.id"
-                        type="button"
-                        class="custom-select-option"
-                        :class="{ selected: retakeForm.disciplineId === d.id }"
-                        @click="selectDiscipline(d)"
-                      >
-                        <span class="opt-main">{{ d.name }}</span>
-                        <span class="opt-sub">{{ d.code }}</span>
-                      </button>
-                      <div v-if="filteredDisciplines.length === 0" class="dropdown-empty">
-                        Ничего не найдено
+                      <div class="dropdown-scroll">
+                        <button
+                          v-for="d in filteredDisciplines" :key="d.id"
+                          type="button" class="custom-select-option"
+                          :class="{ selected: disciplineId === d.id }"
+                          @click="selectDiscipline(d.id)"
+                        >
+                          <span class="disc-name">{{ d.name }}</span>
+                          <span class="disc-code">{{ d.code }}</span>
+                        </button>
+                        <div v-if="!filteredDisciplines.length" class="dropdown-empty">Ничего не найдено</div>
                       </div>
                     </div>
                   </div>
                 </div>
+
                 <div class="field">
                   <label>Тип пересдачи</label>
                   <div class="custom-select" :class="{ open: typeDropdownOpen }">
                     <button type="button" class="custom-select-trigger" @click="typeDropdownOpen = !typeDropdownOpen">
-                      <span>{{ typeOptions.find(o => o.value === retakeForm.type)?.label }}</span>
+                      <span>{{ typeOptions.find(o => o.value === retakeType)?.label }}</span>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                         <path d="M6 9l6 6 6-6"/>
                       </svg>
                     </button>
                     <div class="custom-select-dropdown">
                       <button
-                        v-for="opt in typeOptions"
-                        :key="opt.value"
-                        type="button"
-                        class="custom-select-option"
-                        :class="{ selected: retakeForm.type === opt.value }"
+                        v-for="opt in typeOptions" :key="opt.value"
+                        type="button" class="custom-select-option"
+                        :class="{ selected: retakeType === opt.value }"
                         @click="selectType(opt.value)"
-                      >
-                        {{ opt.label }}
-                      </button>
+                      >{{ opt.label }}</button>
                     </div>
                   </div>
                 </div>
               </div>
 
+              <!-- Дата + Время + Длительность -->
               <div class="form-row">
                 <div class="field">
                   <label>Дата</label>
                   <VueDatePicker
-                    v-model="retakeForm.date"
-                    locale="ru"
-                    format="dd.MM.yyyy"
-                    model-type="format"
-                    :enable-time-picker="false"
-                    auto-apply
-                    placeholder="дд.мм.гггг"
+                    v-model="retakeDate"
+                    locale="ru" format="dd.MM.yyyy" model-type="format"
+                    :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг"
                   />
                 </div>
                 <div class="field field--shrink">
                   <label>Время</label>
                   <div class="time-picker">
-                    <input
-                      class="time-input"
-                      type="text" inputmode="numeric"
-                      v-model="hourDisplay"
-                      maxlength="2" placeholder="00"
-                      @input="onTimeInput"
-                      @blur="onHourBlur"
-                    />
+                    <input class="time-input" type="text" inputmode="numeric"
+                      v-model="hourDisplay" maxlength="2" placeholder="00"
+                      @input="onTimeInput" @blur="onHourBlur" />
                     <span class="time-colon">:</span>
-                    <input
-                      class="time-input"
-                      type="text" inputmode="numeric"
-                      v-model="minuteDisplay"
-                      maxlength="2" placeholder="00"
-                      @input="onTimeInput"
-                      @blur="onMinuteBlur"
-                    />
+                    <input class="time-input" type="text" inputmode="numeric"
+                      v-model="minuteDisplay" maxlength="2" placeholder="00"
+                      @input="onTimeInput" @blur="onMinuteBlur" />
                   </div>
                 </div>
                 <div class="field">
-                  <label>Длительность</label>
+                  <label>Длительность (мин)</label>
                   <div class="stepper">
-                    <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="retakeForm.duration <= DURATION_MIN">−</button>
-                    <input
-                      class="stepper-input" type="number"
-                      v-model.number="retakeForm.duration"
-                      min="15" max="480"
-                      @blur="clampDuration"
-                    />
-                    <button type="button" class="stepper-btn" @click="increaseDuration" :disabled="retakeForm.duration >= DURATION_MAX">+</button>
+                    <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="duration <= DURATION_MIN">−</button>
+                    <input class="stepper-input" type="number" v-model.number="duration" min="15" max="480" @blur="clampDuration" />
+                    <button type="button" class="stepper-btn" @click="increaseDuration" :disabled="duration >= DURATION_MAX">+</button>
                   </div>
                 </div>
               </div>
 
+              <!-- Преподаватели -->
               <div class="form-row">
-                <div class="field field--full">
-                  <label>{{ isCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
-                  <div class="custom-select teacher-select" :class="{ open: teacherDropdownOpen }">
-                    <div class="teacher-wrap" @click="teacherDropdownOpen = true">
-                      <span v-for="t in retakeForm.teachers" :key="t.id" class="teacher-tag">
-                        {{ t.fullName }}
-                        <button type="button" class="teacher-tag-remove" @click.stop="removeTeacherById(t.id)">×</button>
-                      </span>
+                <div class="field field--full picker-wrap">
+                  <label>{{ isCommission ? 'Преподаватели (мин. 3)' : 'Преподаватель' }}</label>
+                  <div class="tags-row" v-if="selectedTeachers.length">
+                    <span v-for="t in selectedTeachers" :key="t.id" class="teacher-tag">
+                      {{ t.name }}
+                      <button type="button" class="teacher-tag-remove" @click="removeTeacher(t.id)">×</button>
+                    </span>
+                  </div>
+                  <div v-if="isCommission || selectedTeachers.length === 0">
+                    <div class="picker-input-wrap">
                       <input
-                        v-if="isCommission || retakeForm.teachers.length === 0"
-                        class="teacher-input"
+                        class="input"
                         v-model="teacherSearch"
-                        :placeholder="retakeForm.teachers.length === 0 ? 'Выберите преподавателя…' : 'Добавить ещё…'"
-                        @focus="teacherDropdownOpen = true"
+                        :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск преподавателя...' : 'Сначала выберите дисциплину')"
+                        :disabled="!disciplineId || loadingParticipants"
+                        @focus="onTeacherFocus"
+                        @blur="onTeacherBlur"
                       />
                     </div>
-                    <div v-if="teacherDropdownOpen" class="custom-select-dropdown dropdown-scroll">
-                      <button
-                        v-for="t in filteredTeachers"
-                        :key="t.id"
-                        type="button"
-                        class="custom-select-option"
-                        @click="selectTeacher(t)"
-                      >
-                        <span class="opt-main">{{ t.fullName }}</span>
-                        <span class="opt-sub">{{ t.email }}</span>
-                      </button>
-                      <div v-if="filteredTeachers.length === 0" class="dropdown-empty">
-                        {{ allTeachers.length === 0 ? 'Список преподавателей не загружен' : 'Все подходящие уже выбраны' }}
+                    <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
+                      <div v-if="filteredTeachers.length">
+                        <button
+                          v-for="t in filteredTeachers" :key="t.id"
+                          type="button" class="picker-option"
+                          @mousedown.prevent="addTeacher(t)"
+                        >{{ t.name }}</button>
+                      </div>
+                      <div v-else class="picker-empty">
+                        {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
                       </div>
                     </div>
                   </div>
-                  <p v-if="isCommission && retakeForm.teachers.length > 0 && !teacherCountOk" class="field-hint-warn">
+                  <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="field-hint-warn">
                     Для пересдачи с комиссией необходимо минимум 3 преподавателя
                   </p>
                 </div>
               </div>
 
+              <!-- Студенты + Группа -->
               <div class="form-row">
-                <div class="field">
-                  <label>Корпус</label>
-                  <input class="input" v-model="retakeForm.building" placeholder="№ корпуса" />
+                <div class="field picker-wrap">
+                  <label>Студент</label>
+                  <div class="tags-row" v-if="selectedStudents.length">
+                    <span v-for="s in selectedStudents" :key="s.id" class="teacher-tag teacher-tag--student">
+                      {{ s.name }}<span v-if="s.group" class="tag-group"> · {{ s.group }}</span>
+                      <button type="button" class="teacher-tag-remove" @click="removeStudent(s.id)">×</button>
+                    </span>
+                  </div>
+                  <div class="picker-input-wrap">
+                    <input
+                      class="input"
+                      v-model="studentSearch"
+                      :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск по имени...' : 'Сначала выберите дисциплину')"
+                      :disabled="!disciplineId || loadingParticipants"
+                      @focus="onStudentFocus"
+                      @blur="onStudentBlur"
+                    />
+                  </div>
+                  <div v-show="studentOpen && disciplineId" class="picker-dropdown">
+                    <div v-if="filteredStudents.length">
+                      <button
+                        v-for="s in filteredStudents" :key="s.id"
+                        type="button" class="picker-option"
+                        @mousedown.prevent="addStudent(s)"
+                      >
+                        <span>{{ s.name }}</span>
+                        <span v-if="s.group" class="suggest-group">{{ s.group }}</span>
+                      </button>
+                    </div>
+                    <div v-else class="picker-empty">
+                      {{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}
+                    </div>
+<<<<<<< Updated upstream
+=======
+                    <div v-if="disciplineId && !loadingParticipants && !availableStudents.length" class="picker-hint">
+                      Студенты появятся после синхронизации долгов с эмулятором
+                    </div>
+>>>>>>> Stashed changes
+                  </div>
                 </div>
+
                 <div class="field">
-                  <label>Аудитория</label>
-                  <input class="input" v-model="retakeForm.room" placeholder="№ аудитории" />
+                  <label>Группа</label>
+                  <div class="group-select-row">
+                    <select class="input" v-model="groupSelect" :disabled="!availableGroups.length">
+                      <option value="">{{ disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину' }}</option>
+                      <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
+                    </select>
+                    <button
+                      type="button" class="btn-add-group"
+                      :disabled="!groupSelect"
+                      @click="addGroup(groupSelect); groupSelect = ''"
+                    >+ Добавить</button>
+                  </div>
                 </div>
               </div>
 
-              <p v-if="submitError" class="form-error">{{ submitError }}</p>
-              <p v-if="submitSuccess" class="form-success">{{ submitSuccess }}</p>
+              <!-- Корпус + Аудитория -->
+              <div class="form-row">
+                <div class="field">
+                  <label>Корпус</label>
+                  <input class="input" v-model="building" placeholder="№ корпуса" />
+                </div>
+                <div class="field">
+                  <label>Аудитория</label>
+                  <input class="input" v-model="room" placeholder="№ аудитории" />
+                </div>
+              </div>
+
+              <p v-if="submitError"   class="submit-error">{{ submitError }}</p>
+              <p v-if="submitSuccess" class="submit-success">Пересдача успешно создана</p>
+
               <button class="btn-primary" type="submit" :disabled="submitting">
-                {{ submitting ? 'Создаём…' : 'Назначить пересдачу' }}
+                {{ submitting ? 'Создание…' : 'Назначить пересдачу' }}
               </button>
             </form>
           </div>
@@ -553,45 +587,29 @@ watch(() => retakeForm.type, (type) => {
   --radius:    10px;
   --shadow:    0 2px 8px rgba(20,22,60,.07);
   --ease:      cubic-bezier(.2,.7,.2,1);
-
   min-height: 100dvh;
   font-family: 'Inter', system-ui, sans-serif;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
 
-.page-dean {
-  min-height: 100dvh;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-}
+.page-dean { min-height: 100dvh; background: var(--bg); display: flex; flex-direction: column; }
 
-/* ── Main grid ── */
 .main {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 7fr 3fr;
-  gap: 24px;
-  padding: 24px;
-  align-items: start;
+  flex: 1; display: grid; grid-template-columns: 7fr 3fr;
+  gap: 24px; padding: 24px; align-items: start;
 }
 
 /* ── Stats ── */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 24px;
-}
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
 .stat-card {
   background: var(--card); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 20px 20px 20px 24px;
   position: relative; overflow: hidden;
 }
 .stat-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.stat-value { font-size: 34px; font-weight: 700; line-height: 1; margin-bottom: 8px; }
-.stat-label { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
+.stat-value  { font-size: 34px; font-weight: 700; line-height: 1; margin-bottom: 8px; }
+.stat-label  { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
 
 /* ── Section card ── */
 .section-card {
@@ -604,13 +622,14 @@ watch(() => retakeForm.type, (type) => {
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0 0 20px;
 }
 
-/* ── Retake form ── */
+/* ── Form ── */
 .retake-form { display: flex; flex-direction: column; gap: 16px; }
-.form-row { display: flex; gap: 16px; }
-.field { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.form-row    { display: flex; gap: 16px; }
+.field       { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .field--shrink { flex: none; }
-.field--full { width: 100%; }
-.field label { font-size: 13px; font-weight: 500; color: var(--ink); text-align: left; }
+.field--full   { width: 100%; }
+.field label   { font-size: 13px; font-weight: 500; color: var(--ink); }
+
 .input {
   appearance: none; height: 38px; width: 100%;
   border: 1.5px solid var(--line); border-radius: var(--radius);
@@ -621,75 +640,7 @@ watch(() => retakeForm.type, (type) => {
 .input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
 .input::placeholder { color: #b7b9c2; }
 
-/* ── Пикер времени ── */
-.time-picker { display: flex; align-items: center; gap: 6px; }
-.time-input {
-  height: 38px; width: 64px;
-  border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: #fff; padding: 0 8px;
-  font: 14px/1 'Inter', sans-serif; color: var(--ink);
-  text-align: center; outline: none; -moz-appearance: textfield;
-  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
-}
-.time-input::-webkit-outer-spin-button,
-.time-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.time-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
-.time-colon { font-size: 18px; font-weight: 700; color: var(--ink-soft); user-select: none; line-height: 1; }
-
-/* ── Степпер длительности ── */
-.stepper {
-  display: flex; align-items: stretch; height: 38px;
-  border: 1.5px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; background: #fff;
-}
-.stepper-btn {
-  width: 38px; flex-shrink: 0; background: none; border: none;
-  font-size: 20px; line-height: 1; color: var(--ink-soft); cursor: pointer;
-  display: grid; place-items: center; transition: background .15s, color .15s;
-}
-.stepper-btn:hover:not(:disabled) { background: rgba(59,63,224,.07); color: var(--brand); }
-.stepper-btn:disabled { opacity: .35; cursor: not-allowed; }
-.stepper-input {
-  flex: 1; border: none;
-  border-left: 1px solid var(--line); border-right: 1px solid var(--line);
-  background: transparent; outline: none;
-  font: 13px/1 'Inter', sans-serif; font-weight: 500; color: var(--ink);
-  text-align: center; -moz-appearance: textfield;
-}
-.stepper-input::-webkit-outer-spin-button,
-.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-
-/* ── Поле преподавателей ── */
-.teacher-wrap {
-  min-height: 40px;
-  border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: #fff; padding: 4px 8px;
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  cursor: text; transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
-}
-.teacher-wrap:focus-within {
-  border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12);
-}
-.teacher-tag {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 6px 4px 10px;
-  background: rgba(59,63,224,.1); color: var(--brand-ink);
-  border-radius: 20px; font-size: 12px; font-weight: 500;
-}
-.teacher-tag-remove {
-  background: none; border: none; cursor: pointer;
-  color: var(--brand-ink); font-size: 15px; line-height: 1;
-  padding: 0 2px; opacity: .6; transition: opacity .15s;
-}
-.teacher-tag-remove:hover { opacity: 1; }
-.teacher-input {
-  border: none; outline: none; flex: 1; min-width: 180px;
-  font: 13px/1 'Inter', sans-serif; color: var(--ink); background: transparent; padding: 4px 0;
-}
-.teacher-input::placeholder { color: #b7b9c2; }
-.field-hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
-
-/* ── Кастомный select ── */
+/* ── Custom select ── */
 .custom-select { position: relative; }
 .custom-select-trigger {
   appearance: none; width: 100%; height: 38px;
@@ -709,6 +660,8 @@ watch(() => retakeForm.type, (type) => {
   transition: transform .2s var(--ease); position: absolute; right: 10px;
 }
 .custom-select.open .custom-select-trigger svg { transform: rotate(180deg); }
+.custom-select-trigger .placeholder { color: #b7b9c2; }
+
 .custom-select-dropdown {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0;
   background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
@@ -717,45 +670,122 @@ watch(() => retakeForm.type, (type) => {
   opacity: 0; pointer-events: none; transform: translateY(-4px);
   transition: opacity .15s var(--ease), transform .15s var(--ease);
 }
-.custom-select.open .custom-select-dropdown {
-  opacity: 1; pointer-events: all; transform: translateY(0);
+.custom-select.open .custom-select-dropdown { opacity: 1; pointer-events: all; transform: translateY(0); }
+
+.dropdown-search-wrap { padding: 8px 8px 4px; border-bottom: 1px solid var(--line); }
+.dropdown-search {
+  width: 100%; height: 30px; border: 1.5px solid var(--line); border-radius: 6px;
+  padding: 0 10px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  outline: none; background: #fff;
 }
+.dropdown-search:focus { border-color: var(--brand); }
+.dropdown-scroll { max-height: 200px; overflow-y: auto; }
+.dropdown-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+
 .custom-select-option {
-  display: block; width: 100%; text-align: left;
-  background: none; border: none; padding: 10px 14px;
-  font: 13px/1.4 'Inter', sans-serif; color: var(--ink);
-  cursor: pointer; transition: background .12s;
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 9px 14px; font: 13px/1.4 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; gap: 8px;
 }
-.custom-select-option:hover { background: rgba(59,63,224,.06); }
+.custom-select-option:hover   { background: rgba(59,63,224,.06); }
 .custom-select-option.selected { color: var(--brand); font-weight: 500; background: rgba(59,63,224,.05); }
+.disc-name { flex: 1; }
+.disc-code { font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
 
-/* ── Двухстрочный вариант option (name + code/email) ── */
-.opt-main { display: block; font: 500 13px/1.3 'Inter', sans-serif; color: var(--ink); }
-.opt-sub  { display: block; font: 12px/1.3 'Inter', sans-serif; color: var(--ink-soft); margin-top: 2px; }
-
-/* ── Прокручиваемый dropdown (для длинного списка) ── */
-.dropdown-scroll { max-height: 260px; overflow-y: auto; }
-.dropdown-search { padding: 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #fff; z-index: 1; }
-.dropdown-search-input {
-  width: 100%; height: 32px; padding: 0 10px;
-  border: 1.5px solid var(--line); border-radius: 6px;
-  font: 12px/1 'Inter', sans-serif; color: var(--ink); outline: none;
-  transition: border-color .15s, box-shadow .15s;
+/* ── Time picker ── */
+.time-picker { display: flex; align-items: center; gap: 6px; }
+.time-input {
+  height: 38px; width: 64px; border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 0 8px; font: 14px/1 'Inter', sans-serif; color: var(--ink);
+  text-align: center; outline: none; -moz-appearance: textfield;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.dropdown-search-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
-.dropdown-empty { padding: 14px; color: var(--ink-soft); text-align: center; font: 12px/1.4 'Inter', sans-serif; }
-.placeholder { color: #b7b9c2; }
+.time-input::-webkit-outer-spin-button,
+.time-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.time-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59,63,224,.12); }
+.time-colon { font-size: 18px; font-weight: 700; color: var(--ink-soft); user-select: none; }
 
-/* ── teacher-select: dropdown относительно теги-инпута ── */
-.teacher-select { position: relative; }
-.teacher-select .teacher-wrap { width: 100%; }
-.teacher-select .custom-select-dropdown {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+/* ── Stepper ── */
+.stepper {
+  display: flex; align-items: stretch; height: 38px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; background: #fff;
+}
+.stepper-btn {
+  width: 38px; flex-shrink: 0; background: none; border: none;
+  font-size: 20px; color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center; transition: background .15s, color .15s;
+}
+.stepper-btn:hover:not(:disabled) { background: rgba(59,63,224,.07); color: var(--brand); }
+.stepper-btn:disabled { opacity: .35; cursor: not-allowed; }
+.stepper-input {
+  flex: 1; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  background: transparent; outline: none; font: 13px/1 'Inter', sans-serif; font-weight: 500;
+  color: var(--ink); text-align: center; -moz-appearance: textfield;
+}
+.stepper-input::-webkit-outer-spin-button,
+.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── Picker (teacher / student) ── */
+.picker-wrap { position: relative; }
+.picker-input-wrap { position: relative; }
+.tags-row {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px;
+}
+.teacher-tag {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px;
+  background: rgba(59,63,224,.1); color: var(--brand-ink); border-radius: 20px;
+  font-size: 12px; font-weight: 500;
+}
+.teacher-tag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.tag-group { opacity: .7; }
+.teacher-tag-remove {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 15px; line-height: 1; padding: 0 2px; opacity: .6; transition: opacity .15s;
+}
+.teacher-tag-remove:hover { opacity: 1; }
+
+.picker-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0;
   background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
-  box-shadow: 0 8px 24px -4px rgba(20,22,60,.12);
-  z-index: 50;
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
+  z-index: 100; max-height: 220px; overflow-y: auto;
+}
+.picker-option {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 9px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; gap: 8px;
+}
+.picker-option:hover { background: rgba(59,63,224,.07); }
+.picker-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.picker-hint  { padding: 6px 14px 10px; font: 11px/1.4 'Inter', sans-serif; color: #9ca3af; border-top: 1px solid var(--line); }
+
+.suggest-group {
+  font-size: 11px; color: var(--ink-soft);
+  background: rgba(59,63,224,.08); border-radius: 10px; padding: 2px 8px; white-space: nowrap;
 }
 
+/* ── Group select row ── */
+.group-select-row { display: flex; gap: 8px; }
+.group-select-row .input { flex: 1; }
+.btn-add-group {
+  height: 38px; padding: 0 14px; flex-shrink: 0;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 600 13px/1 'Inter', sans-serif; color: var(--ink-soft);
+  cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.btn-add-group:hover:not(:disabled) { border-color: #10b981; color: #065f46; background: rgba(16,185,129,.07); }
+.btn-add-group:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Hints ── */
+.field-hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
+.submit-error    { font-size: 12px; color: #dc2626; margin: 0; }
+.submit-success  { font-size: 12px; color: #059669; margin: 0; }
+
+/* ── Submit button ── */
 .btn-primary {
   align-self: center; padding: 0 32px; height: 40px; border: none;
   border-radius: var(--radius);
@@ -764,14 +794,14 @@ watch(() => retakeForm.type, (type) => {
   box-shadow: 0 8px 20px -8px rgba(91,59,217,.55);
   transition: transform .2s var(--ease), box-shadow .2s var(--ease);
 }
-.btn-primary:hover { transform: scale(1.03); box-shadow: 0 4px 10px -5px rgba(91,59,217,.7); }
+.btn-primary:hover:not(:disabled) { transform: scale(1.03); box-shadow: 0 4px 10px -5px rgba(91,59,217,.7); }
+.btn-primary:disabled { opacity: .6; cursor: not-allowed; }
 
 /* ── Responsive ── */
 @media (max-width: 1280px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 960px) {
   .main { grid-template-columns: 1fr; }
   .col-right { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  .col-right .section-card { margin-bottom: 0; }
 }
 @media (max-width: 600px) {
   .main { padding: 16px; gap: 16px; }
@@ -779,12 +809,4 @@ watch(() => retakeForm.type, (type) => {
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .col-right { grid-template-columns: 1fr; }
 }
-.dash-state {
-  background: #fff; border-radius: 10px; padding: 24px;
-  text-align: center; color: #6b7280; font-size: 14px;
-  box-shadow: 0 2px 8px rgba(20,22,60,.07);
-}
-.dash-error { color: #d63a51; }
-.form-error { color: #d63a51; font-size: 13px; margin: 8px 0 0; }
-.form-success { color: #059669; font-size: 13px; margin: 8px 0 0; }
 </style>

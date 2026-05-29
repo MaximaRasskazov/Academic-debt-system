@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
-import http from '../api/client'
+import http from '../api/http'
 
 const sidebarOpen = ref(false)
 
