@@ -67,7 +67,11 @@ func (h *SyncHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "sync_not_configured", "синхронизация с эмулятором не настроена")
 		return
 	}
-	if err := h.svc.Sync(r.Context()); err != nil {
+	// Используем отдельный контекст: HTTP-группа имеет таймаут 30s,
+	// а полный импорт дисциплин + аккаунтов + долгов занимает намного дольше.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := h.svc.Sync(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "sync_failed", "синхронизация завершилась с ошибкой")
 		return
 	}
