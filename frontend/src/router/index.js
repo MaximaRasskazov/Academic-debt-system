@@ -17,17 +17,17 @@ const HOME = { STUDENT: '/student', TEACHER: '/teacher', DEAN: '/dean' }
 const homeFor = (role) => HOME[role] ?? '/login'
 
 const routes = [
-  { path: '/', redirect: () => homeFor(useAuthStore().primaryRole) },
+  { path: '/', redirect: () => homeFor(useAuthStore().role) },
   { path: '/login', component: LoginPage, meta: { guest: true } },
   { path: '/register', component: RegisterPage, meta: { guest: true } },
-  { path: '/student', component: StudentPage, meta: { auth: true, roles: ['student'] } },
+  { path: '/student', component: StudentPage, meta: { auth: true, roles: ['STUDENT'] } },
   { path: '/retakes', component: RetakesPage, meta: { auth: true } },
-  { path: '/retakes/create', component: RetakeCreatePage, meta: { auth: true, roles: ['dean'] } },
-  { path: '/requests', component: RequestsPage, meta: { auth: true, roles: ['dean'] } },
-  { path: '/dean', component: DeanPage, meta: { auth: true, roles: ['dean'] } },
-  { path: '/teacher', component: TeacherPage, meta: { auth: true, roles: ['teacher'] } },
-  { path: '/teacher-requests', component: TeacherRequestsPage, meta: { auth: true, roles: ['teacher'] } },
-  { path: '/statements', component: StatementsPage, meta: { auth: true, roles: ['teacher', 'dean'] } },
+  { path: '/retakes/create', component: RetakeCreatePage, meta: { auth: true, roles: ['DEAN'] } },
+  { path: '/requests', component: RequestsPage, meta: { auth: true, roles: ['DEAN'] } },
+  { path: '/dean', component: DeanPage, meta: { auth: true, roles: ['DEAN'] } },
+  { path: '/teacher', component: TeacherPage, meta: { auth: true, roles: ['TEACHER'] } },
+  { path: '/teacher-requests', component: TeacherRequestsPage, meta: { auth: true, roles: ['TEACHER'] } },
+  { path: '/statements', component: StatementsPage, meta: { auth: true, roles: ['TEACHER', 'DEAN'] } },
   { path: '/users', component: UsersPage, meta: { auth: true } },
 ]
 
@@ -44,11 +44,11 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.guest && auth.isLoggedIn) {
-    return homeFor(auth.primaryRole)
+    return homeFor(auth.role)
   }
 
-  if (to.meta.roles && !to.meta.roles.includes(auth.primaryRole)) {
-    return homeFor(auth.primaryRole)
+  if (to.meta.roles && !to.meta.roles.includes(auth.role)) {
+    return homeFor(auth.role)
   }
 })
 
