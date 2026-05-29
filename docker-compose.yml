@@ -7,8 +7,6 @@ services:
       POSTGRES_DB: ${DB_NAME:-academic_debts}
     ports:
       # Снаружи 15432, чтобы не конфликтовать с локально установленным postgres
-      # на стандартном порту (у разных членов команды может быть свой
-      # postgres). Внутри docker-сети по-прежнему 5432.
       - "15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,13 +15,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    restart: unless-stopped
-
-  mailpit:
-    image: axllent/mailpit:latest
-    ports:
-      - "1025:1025"  # SMTP
-      - "8025:8025"  # Web UI
     restart: unless-stopped
 
   backend:
@@ -39,9 +30,6 @@ services:
       DB_NAME: ${DB_NAME:-academic_debts}
       DB_USER: ${DB_USER:-academic}
       DB_PASSWORD: ${DB_PASSWORD:-academic}
-      # JWT_SECRET обязателен — обязательно задать в .env на хосте.
-      # Для запуска через compose положите .env рядом с этим файлом
-      # с содержимым: JWT_SECRET=...openssl rand -hex 32...
       JWT_SECRET: ${JWT_SECRET}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
@@ -50,8 +38,6 @@ services:
       COOKIE_PATH: ${COOKIE_PATH:-/}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
-      # Если true, entrypoint после миграций накатит sql/seeds/* с
-      # демо-аккаунтами. В prod держать false.
       SEED_DEV_ACCOUNTS: ${SEED_DEV_ACCOUNTS:-false}
       EMULATOR_URL: ${EMULATOR_URL:-}
       EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
