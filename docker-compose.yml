@@ -56,11 +56,28 @@ services:
       EMULATOR_URL: ${EMULATOR_URL:-}
       EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-5m}
+      # Email — mailpit ловит письма в dev, смотри на localhost:8025
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM: ${SMTP_FROM:-noreply@academic.local}
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

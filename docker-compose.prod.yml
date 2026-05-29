@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: ${DB_USER:?DB_USER is required}
+      POSTGRES_USER:     ${DB_USER:?DB_USER is required}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+      POSTGRES_DB:       ${DB_NAME:?DB_NAME is required}
     expose:
       - '5432'
     volumes:
@@ -21,31 +21,44 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      APP_ENV: production
+      APP_ENV:  production
       APP_PORT: '8080'
-      LOG_LEVEL: warn
-      DB_HOST: postgres
-      DB_PORT: '5432'
-      DB_NAME: ${DB_NAME:?DB_NAME is required}
-      DB_USER: ${DB_USER:?DB_USER is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      DB_HOST:     postgres
+      DB_PORT:     '5432'
+      DB_NAME:     ${DB_NAME:?DB_NAME is required}
+      DB_USER:     ${DB_USER:?DB_USER is required}
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+
+      JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET is required}
+      ACCESS_TOKEN_TTL:  ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
-      COOKIE_SECURE: 'true'
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
-      COOKIE_PATH: ${COOKIE_PATH:-/}
+
+      COOKIE_SECURE:   'true'
+      COOKIE_DOMAIN:   ${COOKIE_DOMAIN:-}
+      COOKIE_PATH:     ${COOKIE_PATH:-/}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+
+      # Фронтенд и API живут на одном домене через nginx фронтенда.
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required}
-      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD is required}
-      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
-      SMTP_TLS: ${SMTP_TLS:-true}
+
+      # SMTP опционально — при пустом SMTP_HOST email отключён,
+      # WS-уведомления продолжают работать.
+      SMTP_HOST:     ${SMTP_HOST:-}
+      SMTP_PORT:     ${SMTP_PORT:-587}
+      SMTP_USER:     ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM:     ${SMTP_FROM:-noreply@localhost}
+
       SEED_DEV_ACCOUNTS: 'false'
-    ports:
-      - '8080:8080'
+
+      # Синхронизация с эмулятором деканата — опционально.
+      EMULATOR_URL:     ${EMULATOR_URL:-}
+      EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
+      SYNC_INTERVAL:    ${SYNC_INTERVAL:-5m}
+    expose:
+      - '8080'
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,7 +70,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     ports:
-      - '80:80'
+      - '${APP_PORT:-80}:80'
     depends_on:
       - backend
     restart: unless-stopped
