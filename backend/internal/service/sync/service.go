@@ -3,9 +3,12 @@
 //
 // Алгоритм одного прогона (Sync):
 //  1. Читаем last_synced_at из sync_state.
-//  2. GET /api/v1/changes?since=<last_synced_at> — получаем список изменений.
+//  2. Постранично читаем GET /api/v1/changes?since=<last_synced_at> пока has_more=false.
 //  3. Для каждого изменения вызываем соответствующий upsert в БД.
 //  4. Обновляем last_synced_at = now().
+//
+// При первом запуске (epoch) делаем полный импорт: дисциплины, затем
+// аккаунты (студенты и преподаватели), затем долги из delta.
 //
 // Повторный запуск с теми же данными идемпотентен: ON CONFLICT DO UPDATE
 // в upsert-запросах гарантирует, что дублей не возникнет.
@@ -19,79 +22,92 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 )
 
-// pgUUIDForce конвертирует uuid.UUID в pgtype.UUID с Valid=true даже для uuid.Nil,
-// потому что system-пользователь (00000000-...) реально существует в БД.
-func pgUUIDForce(u uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: u, Valid: true}
+// pgUUIDForce конвертирует pgtype.UUID в pgtype.UUID с Valid=true —
+// используется для system-пользователя (uuid.Nil), который реально есть в БД.
+func pgUUIDForce(id pgtype.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id.Bytes, Valid: true}
 }
 
 const changesPageSize = 500
 
 // Service синхронизирует данные из эмулятора.
 type Service struct {
-	store  *repo.Store
-	client *emulator.Client
-	// systemUserID — UUID пользователя-системы, от имени которого
-	// записываются upsert'ы (created_by/issued_by в БД).
-	systemUserID uuid.UUID
+	store        *repo.Store
+	client       *emulator.Client
+	systemUserID pgtype.UUID // UUID пользователя-системы (created_by в upsert'ах)
 }
 
-// New создаёт сервис. systemUserID — UUID существующего пользователя
-// в БД (например, сид-пользователь "system" или admin).
-func New(store *repo.Store, client *emulator.Client, systemUserID uuid.UUID) *Service {
+// New создаёт сервис.
+func New(store *repo.Store, client *emulator.Client, systemUserID pgtype.UUID) *Service {
 	return &Service{store: store, client: client, systemUserID: systemUserID}
 }
 
 // Sync выполняет один цикл синхронизации: читает изменения из эмулятора
 // и применяет их к локальной БД.
-//
-// Если хотя бы один запрос к эмулятору упал с rate-limit (429 после
-// retry), last_synced_at НЕ сдвигается — при следующем тике эти change'ы
-// придут снова, и мы успеем их применить. Обычные ошибки данных
-// (битый student_id и т.п.) не блокируют сдвиг времени, иначе sync
-// зависнет на грязной записи на стороне эмулятора.
 func (s *Service) Sync(ctx context.Context) error {
 	since, err := s.store.GetLastSyncedAt(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: get last_synced_at: %w", err)
 	}
 
-	// При первом запуске (epoch) делаем полный импорт справочников.
+	// При первом запуске делаем полный импорт справочников.
 	if since.Year() == 1970 {
-		slog.Info("sync: первый запуск, полный импорт дисциплин")
+		slog.Info("sync: первый запуск, полный импорт")
 		if err := s.importAllDisciplines(ctx); err != nil {
 			slog.Warn("sync: ошибка импорта дисциплин", "err", err)
 		}
-	}
-
-	changes, err := s.client.GetChanges(ctx, since, changesPageSize)
-	if err != nil {
-		return fmt.Errorf("sync: get changes: %w", err)
-	}
-
-	if len(changes) == 0 {
-		slog.Info("sync: нет новых изменений", "since", since)
-		if err := s.store.SetLastSyncedAt(ctx, time.Now().UTC()); err != nil {
-			return fmt.Errorf("sync: set last_synced_at: %w", err)
+		if err := s.importAllAccounts(ctx, "student"); err != nil {
+			slog.Warn("sync: ошибка импорта студентов", "err", err)
 		}
-		return nil
+		if err := s.importAllAccounts(ctx, "teacher"); err != nil {
+			slog.Warn("sync: ошибка импорта преподавателей", "err", err)
+		}
 	}
 
-	slog.Info("sync: получены изменения", "count", len(changes), "since", since)
-
+	// Читаем все страницы изменений.
 	var (
-		errs            []string
+		allChanges      []emulator.ChangeEntry
 		rateLimitedHits int
 	)
-	for _, ch := range changes {
+
+	currentSince := since
+	for {
+		page, err := s.client.GetChangesPage(ctx, currentSince, changesPageSize)
+		if err != nil {
+			if errors.Is(err, emulator.ErrRateLimited) {
+				return fmt.Errorf("sync: get changes rate limited, повтор на следующем тике")
+			}
+			return fmt.Errorf("sync: get changes: %w", err)
+		}
+		allChanges = append(allChanges, page.Entries...)
+		if !page.HasMore {
+			break
+		}
+		// next_since — строка RFC3339 от эмулятора; парсим как курсор следующей страницы.
+		nextT, parseErr := time.Parse(time.RFC3339, page.NextSince)
+		if parseErr != nil || nextT.Equal(currentSince) {
+			// Не смогли разобрать курсор — выходим чтобы не зациклиться.
+			break
+		}
+		currentSince = nextT
+	}
+
+	if len(allChanges) == 0 {
+		slog.Info("sync: нет новых изменений", "since", since)
+		return s.store.SetLastSyncedAt(ctx, time.Now().UTC())
+	}
+
+	slog.Info("sync: получены изменения", "count", len(allChanges), "since", since)
+
+	var errs []string
+	for _, ch := range allChanges {
 		if err := s.applyChange(ctx, ch); err != nil {
 			slog.Warn("sync: ошибка применения изменения",
 				"entity_type", ch.EntityType,
@@ -105,12 +121,10 @@ func (s *Service) Sync(ctx context.Context) error {
 		}
 	}
 
-	// Если эмулятор throttle-ил хотя бы один запрос, не двигаем
-	// last_synced_at — иначе потеряем те change'ы, которые не успели
-	// применить (при следующем тике since уже их перескочит).
+	// Если был rate limit — не двигаем last_synced_at, повторим при следующем тике.
 	if rateLimitedHits > 0 {
 		slog.Warn("sync: rate limited, last_synced_at не сдвигается",
-			"hits", rateLimitedHits, "since", since)
+			"hits", rateLimitedHits)
 		return fmt.Errorf("sync: rate limited (%d запросов 429), повтор на следующем тике", rateLimitedHits)
 	}
 
@@ -134,15 +148,18 @@ func (s *Service) applyChange(ctx context.Context, ch emulator.ChangeEntry) erro
 	switch ch.EntityType {
 	case "discipline":
 		return s.syncDiscipline(ctx, ch.EntityID)
+	case "account":
+		return s.syncAccount(ctx, ch.EntityID)
 	case "debt":
 		return s.syncDebt(ctx, ch.EntityID)
 	default:
-		// Неизвестный тип — пропускаем без ошибки.
+		// Неизвестный тип (group, etc.) — пропускаем без ошибки.
 		return nil
 	}
 }
 
-// importAllDisciplines постранично тянет все дисциплины из эмулятора и делает upsert.
+// ── Дисциплины ────────────────────────────────────────────────────────────────
+
 func (s *Service) importAllDisciplines(ctx context.Context) error {
 	const pageSize = 100
 	page := 1
@@ -162,7 +179,7 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 				Code:         code,
 				Description:  d.Description,
 				ExternalID:   d.ID,
-				SystemUserID: pgUUIDForce(s.systemUserID),
+				SystemUserID: s.systemUserID,
 			}); err != nil {
 				slog.Warn("sync: upsert discipline failed", "id", d.ID, "err", err)
 			}
@@ -177,7 +194,6 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 	return nil
 }
 
-// syncDiscipline тянет дисциплину из эмулятора и делает upsert в БД.
 func (s *Service) syncDiscipline(ctx context.Context, externalID string) error {
 	d, err := s.client.GetDiscipline(ctx, externalID)
 	if err != nil {
@@ -186,25 +202,104 @@ func (s *Service) syncDiscipline(ctx context.Context, externalID string) error {
 		}
 		return err
 	}
-
 	code := d.Code
 	if code == "" {
-		// Если код не задан — используем ID как fallback.
 		code = "EXT-" + externalID
 	}
-
 	return s.store.UpsertDisciplineFromSync(ctx, repo.UpsertDisciplineParams{
 		Name:         d.Name,
 		Code:         code,
 		Description:  d.Description,
 		ExternalID:   externalID,
-		SystemUserID: pgUUIDForce(s.systemUserID),
+		SystemUserID: s.systemUserID,
 	})
 }
 
+// ── Аккаунты (студенты / преподаватели) ──────────────────────────────────────
+
+// importAllAccounts постранично импортирует аккаунты нужной роли.
+// role: "student" | "teacher"
+func (s *Service) importAllAccounts(ctx context.Context, role string) error {
+	const pageSize = 100
+	page := 1
+	total := 0
+	for {
+		items, meta, err := s.client.ListAccounts(ctx, role, page, pageSize)
+		if err != nil {
+			return fmt.Errorf("page %d: %w", page, err)
+		}
+		for _, a := range items {
+			if err := s.upsertAccount(ctx, a); err != nil {
+				slog.Warn("sync: upsert account failed", "id", a.ID, "role", a.Role, "err", err)
+			}
+		}
+		total += len(items)
+		if page >= meta.TotalPages {
+			break
+		}
+		page++
+	}
+	slog.Info("sync: аккаунты импортированы", "role", role, "count", total)
+	return nil
+}
+
+// syncAccount тянет один аккаунт из эмулятора и делает upsert пользователя + роль.
+func (s *Service) syncAccount(ctx context.Context, externalID string) error {
+	a, err := s.client.GetAccount(ctx, externalID)
+	if err != nil {
+		if errors.Is(err, emulator.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return s.upsertAccount(ctx, *a)
+}
+
+// upsertAccount вставляет/обновляет пользователя и назначает ему роль.
+func (s *Service) upsertAccount(ctx context.Context, a emulator.AccountDTO) error {
+	// Пропускаем неактивных пользователей.
+	if a.Status == "inactive" || a.Status == "blocked" {
+		return nil
+	}
+	// Пропускаем роли, которые не относятся к student/teacher.
+	roleSlug := normalizeRole(a.Role)
+	if roleSlug == "" {
+		return nil
+	}
+
+	userID, err := s.store.UpsertUserFromSync(ctx, repo.UpsertUserParams{
+		Email:      a.Email,
+		FirstName:  a.FirstName,
+		LastName:   a.LastName,
+		MiddleName: a.MiddleName,
+		ExternalID: a.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert user %s: %w", a.ID, err)
+	}
+
+	if err := s.store.AssignRoleFromSync(ctx, userID, s.systemUserID, roleSlug); err != nil {
+		return fmt.Errorf("assign role %s to %s: %w", roleSlug, a.ID, err)
+	}
+	return nil
+}
+
+// normalizeRole приводит роль из эмулятора к slug нашей системы.
+func normalizeRole(emulatorRole string) string {
+	switch strings.ToLower(emulatorRole) {
+	case "student":
+		return "student"
+	case "teacher":
+		return "teacher"
+	default:
+		return ""
+	}
+}
+
+// ── Долги ─────────────────────────────────────────────────────────────────────
+
 // syncDebt тянет долг из эмулятора и делает upsert в БД.
-// Студент и дисциплина должны уже быть в нашей БД (приходят раньше
-// через соответствующие change-события).
+// Студент и дисциплина ищутся по external_id, а не по UUID напрямую.
 func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	d, err := s.client.GetDebt(ctx, externalID)
 	if err != nil {
@@ -214,18 +309,31 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		return err
 	}
 
-	studentID, err := uuid.Parse(d.StudentID)
+	// Ищем дисциплину по external_id.
+	disciplineID, err := s.store.GetDisciplineIDByExternalID(ctx, d.DisciplineID)
 	if err != nil {
-		return fmt.Errorf("parse student_id %q: %w", d.StudentID, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("дисциплина %s ещё не синхронизирована", d.DisciplineID)
+		}
+		return fmt.Errorf("get discipline: %w", err)
 	}
-	disciplineID, err := uuid.Parse(d.DisciplineID)
+
+	// Ищем студента по external_id.
+	studentID, err := s.store.GetUserIDByExternalID(ctx, d.StudentID)
 	if err != nil {
-		return fmt.Errorf("parse discipline_id %q: %w", d.DisciplineID, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("студент %s ещё не синхронизирован", d.StudentID)
+		}
+		return fmt.Errorf("get student: %w", err)
 	}
-	teacherID, err := uuid.Parse(d.TeacherID)
-	if err != nil {
-		// Преподаватель может быть не задан — используем системного пользователя.
-		teacherID = s.systemUserID
+
+	// Преподаватель опционален — используем системного пользователя как fallback.
+	issuedBy := s.systemUserID
+	if d.TeacherID != "" {
+		teacherID, err := s.store.GetUserIDByExternalID(ctx, d.TeacherID)
+		if err == nil {
+			issuedBy = teacherID
+		}
 	}
 
 	status := d.Status
@@ -238,8 +346,6 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	var gradedBy pgtype.UUID
 
 	if d.Grade != nil && status == "graded" {
-		// Эмулятор передаёт оценку в диапазоне 2..5 — переполнение невозможно,
-		// но gosec требует явного clamp'а для int→int32 conversion.
 		gradeVal := *d.Grade
 		if gradeVal < 2 || gradeVal > 5 {
 			gradeVal = 2
@@ -247,13 +353,13 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		g := int32(gradeVal) //nolint:gosec
 		finalGrade = &g
 		gradedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-		gradedBy = pgUUIDForce(teacherID)
+		gradedBy = pgUUIDForce(issuedBy)
 	}
 
 	return s.store.UpsertDebtFromSync(ctx, repo.UpsertDebtParams{
-		StudentID:    pgutil.PgUUID(studentID),
-		DisciplineID: pgutil.PgUUID(disciplineID),
-		IssuedBy:     pgUUIDForce(teacherID),
+		StudentID:    studentID,
+		DisciplineID: disciplineID,
+		IssuedBy:     pgUUIDForce(issuedBy),
 		ExternalID:   externalID,
 		Notes:        d.Notes,
 		Status:       status,

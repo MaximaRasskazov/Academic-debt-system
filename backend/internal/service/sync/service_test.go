@@ -14,12 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 )
 
 // systemUserUUID — UUID служебного пользователя из сид-миграции 00010_seed_rbac.
-var systemUserUUID = uuid.MustParse("00000000-0000-0000-0000-000000000000")
+var systemUserUUID = pgutil.PgUUID(uuid.MustParse("00000000-0000-0000-0000-000000000000"))
 
 // setupSync поднимает sync.Service против httptest-эмулятора.
 // Если TEST_DATABASE_URL не задан — тест пропускается, потому что
