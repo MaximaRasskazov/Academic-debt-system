@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	_ "github.com/MaximaRasskazov/Academic-debt-system/backend/docs"
@@ -119,7 +120,9 @@ func run() error {
 	// вернёт 503, что явно сообщает о том, что фича отключена.
 	var syncSvc *syncsvc.Service
 	if cfg.EmulatorURL != "" {
-		systemUserID := pgutil.PgUUID(uuid.MustParse("00000000-0000-0000-0000-000000000000"))
+		// pgutil.PgUUID превращает uuid.Nil в NULL — нельзя использовать
+		// для системного пользователя, чей UUID намеренно равен нулевому.
+		systemUserID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000000"), Valid: true}
 		emulatorClient := emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
 		syncSvc = syncsvc.New(store, emulatorClient, systemUserID)
 
