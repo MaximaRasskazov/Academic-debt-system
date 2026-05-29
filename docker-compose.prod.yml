@@ -16,6 +16,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+  mailpit:
+    image: axllent/mailpit:latest
+    expose:
+      - '1025'
+    ports:
+      - '8025:8025'  # Web UI для просмотра писем
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -47,6 +55,14 @@ services:
 
       SEED_DEV_ACCOUNTS: 'false'
 
+      # SMTP — по умолчанию mailpit (письма видны на :8025).
+      # Для реальной доставки задай SMTP_HOST в .env.
+      SMTP_HOST:     ${SMTP_HOST:-mailpit}
+      SMTP_PORT:     ${SMTP_PORT:-1025}
+      SMTP_USER:     ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM:     ${SMTP_FROM:-no-reply@academic.local}
+
       # Синхронизация с эмулятором деканата — опционально.
       EMULATOR_URL:     ${EMULATOR_URL:-}
       EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
@@ -56,6 +72,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     restart: unless-stopped
 
   frontend:
