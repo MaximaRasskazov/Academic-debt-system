@@ -112,9 +112,22 @@ type accountResponse struct {
 	Data AccountDTO `json:"data"`
 }
 
-// GetChanges возвращает список изменений в эмуляторе, произошедших после since.
-// Эмулятор принимает since в формате RFC3339.
-func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]ChangeEntry, error) {
+// accountsListResponse — обёртка ответа GET /api/v1/accounts (список).
+type accountsListResponse struct {
+	Data []AccountDTO   `json:"data"`
+	Meta paginationMeta `json:"meta"`
+}
+
+// ChangesPage — одна страница изменений из эмулятора.
+type ChangesPage struct {
+	Entries   []ChangeEntry
+	NextSince string // курсор для следующей страницы (пустой если HasMore=false)
+	HasMore   bool
+}
+
+// GetChangesPage возвращает одну страницу изменений. Используйте NextSince
+// для получения следующей страницы пока HasMore = true.
+func (c *Client) GetChangesPage(ctx context.Context, since time.Time, limit int) (ChangesPage, error) {
 	params := url.Values{}
 	params.Set("since", since.UTC().Format(time.RFC3339))
 	if limit > 0 {
@@ -123,9 +136,23 @@ func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]
 
 	var resp changesResponse
 	if err := c.get(ctx, "/api/v1/changes?"+params.Encode(), &resp); err != nil {
-		return nil, fmt.Errorf("get changes: %w", err)
+		return ChangesPage{}, fmt.Errorf("get changes: %w", err)
 	}
-	return resp.Data, nil
+	return ChangesPage{
+		Entries:   resp.Data,
+		NextSince: resp.Meta.NextSince,
+		HasMore:   resp.Meta.HasMore,
+	}, nil
+}
+
+// GetChanges возвращает список изменений в эмуляторе, произошедших после since.
+// Устарел: используйте GetChangesPage для корректной обработки has_more.
+func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]ChangeEntry, error) {
+	page, err := c.GetChangesPage(ctx, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	return page.Entries, nil
 }
 
 // ListDisciplines возвращает все дисциплины из эмулятора постранично.
@@ -157,6 +184,23 @@ func (c *Client) GetDebt(ctx context.Context, externalID string) (*DebtDTO, erro
 		return nil, fmt.Errorf("get debt %s: %w", externalID, err)
 	}
 	return &resp.Data, nil
+}
+
+// ListAccounts возвращает аккаунты из эмулятора постранично.
+// role: "student" | "teacher" | "" (все роли).
+func (c *Client) ListAccounts(ctx context.Context, role string, page, limit int) ([]AccountDTO, paginationMeta, error) {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", page))
+	params.Set("limit", fmt.Sprintf("%d", limit))
+	if role != "" {
+		params.Set("role", role)
+	}
+
+	var resp accountsListResponse
+	if err := c.get(ctx, "/api/v1/accounts?"+params.Encode(), &resp); err != nil {
+		return nil, paginationMeta{}, fmt.Errorf("list accounts: %w", err)
+	}
+	return resp.Data, resp.Meta, nil
 }
 
 // GetAccount возвращает аккаунт по внешнему ID.

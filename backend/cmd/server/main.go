@@ -23,6 +23,7 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
@@ -118,7 +119,7 @@ func run() error {
 	// вернёт 503, что явно сообщает о том, что фича отключена.
 	var syncSvc *syncsvc.Service
 	if cfg.EmulatorURL != "" {
-		systemUserID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+		systemUserID := pgutil.PgUUID(uuid.MustParse("00000000-0000-0000-0000-000000000000"))
 		emulatorClient := emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
 		syncSvc = syncsvc.New(store, emulatorClient, systemUserID)
 

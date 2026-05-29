@@ -198,6 +198,89 @@ type UpsertDebtParams struct {
 	GradedBy     pgtype.UUID
 }
 
+// UpsertUserFromSync вставляет или обновляет пользователя по email.
+// Если пользователь с таким email уже есть (создан вручную) — привязывает
+// external_id и обновляет имя. Возвращает внутренний UUID пользователя.
+func (s *Store) UpsertUserFromSync(ctx context.Context, p UpsertUserParams) (pgtype.UUID, error) {
+	var id pgtype.UUID
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, first_name, last_name, middle_name, external_id)
+		VALUES ($1, '', $2, $3, $4, $5)
+		ON CONFLICT (LOWER(email))
+		DO UPDATE SET
+			external_id = EXCLUDED.external_id,
+			first_name  = EXCLUDED.first_name,
+			last_name   = EXCLUDED.last_name,
+			middle_name = EXCLUDED.middle_name,
+			updated_at  = NOW()
+		RETURNING id
+	`, p.Email, p.FirstName, p.LastName, p.MiddleName, p.ExternalID).Scan(&id)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("upsert user from sync: %w", err)
+	}
+	return id, nil
+}
+
+// UpsertUserParams — параметры для UpsertUserFromSync.
+type UpsertUserParams struct {
+	Email      string
+	FirstName  string
+	LastName   string
+	MiddleName *string
+	ExternalID string
+}
+
+// GetUserIDByExternalID возвращает внутренний UUID пользователя по external_id.
+func (s *Store) GetUserIDByExternalID(ctx context.Context, externalID string) (pgtype.UUID, error) {
+	var id pgtype.UUID
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM users WHERE external_id = $1`,
+		externalID,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, pgx.ErrNoRows
+		}
+		return pgtype.UUID{}, fmt.Errorf("get user by external_id: %w", err)
+	}
+	return id, nil
+}
+
+// GetDisciplineIDByExternalID возвращает внутренний UUID дисциплины по external_id.
+func (s *Store) GetDisciplineIDByExternalID(ctx context.Context, externalID string) (pgtype.UUID, error) {
+	var id pgtype.UUID
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM disciplines WHERE external_id = $1 AND deleted_at IS NULL`,
+		externalID,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, pgx.ErrNoRows
+		}
+		return pgtype.UUID{}, fmt.Errorf("get discipline by external_id: %w", err)
+	}
+	return id, nil
+}
+
+// AssignRoleFromSync назначает роль пользователю по slug, если не назначена.
+// Идемпотентно: повторный вызов не меняет состояние.
+func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgtype.UUID, roleSlug string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO role_user (user_id, role_id, created_by)
+		SELECT $1, r.id, $2
+		FROM roles r
+		WHERE r.slug = $3 AND r.deleted_at IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM role_user ru
+		    WHERE ru.user_id = $1 AND ru.role_id = r.id AND ru.deleted_at IS NULL
+		  )
+	`, userID, systemUserID, roleSlug)
+	if err != nil {
+		return fmt.Errorf("assign role %s from sync: %w", roleSlug, err)
+	}
+	return nil
+}
+
 // IsUniqueViolation сообщает, является ли err нарушением UNIQUE-ограничения
 // (SQLSTATE 23505). Если constraintName непустой, дополнительно проверяется
 // имя конкретного constraint/partial-индекса.
