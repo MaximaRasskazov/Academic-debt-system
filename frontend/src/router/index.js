@@ -13,8 +13,15 @@ import TeacherRequestsPage from '../views/TeacherRequestsPage.vue'
 import StatementsPage from '../views/StatementsPage.vue'
 import UsersPage from '../views/UsersPage.vue'
 
-const HOME = { STUDENT: '/student', TEACHER: '/teacher', DEAN: '/dean' }
+// Поддерживаем оба регистра: primaryRole возвращает lowercase ('student'),
+// старые части кода могут передавать uppercase ('STUDENT').
+const HOME = {
+  student: '/student', STUDENT: '/student',
+  teacher: '/teacher', TEACHER: '/teacher',
+  dean:    '/dean',    DEAN:    '/dean',
+}
 const homeFor = (role) => HOME[role] ?? '/login'
+export const getHomeForRole = homeFor
 
 const routes = [
   { path: '/', redirect: () => homeFor(useAuthStore().role) },
