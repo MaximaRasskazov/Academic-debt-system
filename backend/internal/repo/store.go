@@ -205,16 +205,20 @@ func (s *Store) UpsertUserFromSync(ctx context.Context, p UpsertUserParams) (pgt
 	var id pgtype.UUID
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, first_name, last_name, middle_name, external_id)
-		VALUES ($1, '', $2, $3, $4, $5)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (LOWER(email))
 		DO UPDATE SET
-			external_id = EXCLUDED.external_id,
-			first_name  = EXCLUDED.first_name,
-			last_name   = EXCLUDED.last_name,
-			middle_name = EXCLUDED.middle_name,
-			updated_at  = NOW()
+			external_id   = EXCLUDED.external_id,
+			first_name    = EXCLUDED.first_name,
+			last_name     = EXCLUDED.last_name,
+			middle_name   = EXCLUDED.middle_name,
+			password_hash = CASE
+				WHEN users.password_hash = '' THEN EXCLUDED.password_hash
+				ELSE users.password_hash
+			END,
+			updated_at    = NOW()
 		RETURNING id
-	`, p.Email, p.FirstName, p.LastName, p.MiddleName, p.ExternalID).Scan(&id)
+	`, p.Email, p.PasswordHash, p.FirstName, p.LastName, p.MiddleName, p.ExternalID).Scan(&id)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("upsert user from sync: %w", err)
 	}
@@ -223,11 +227,12 @@ func (s *Store) UpsertUserFromSync(ctx context.Context, p UpsertUserParams) (pgt
 
 // UpsertUserParams — параметры для UpsertUserFromSync.
 type UpsertUserParams struct {
-	Email      string
-	FirstName  string
-	LastName   string
-	MiddleName *string
-	ExternalID string
+	Email        string
+	FirstName    string
+	LastName     string
+	MiddleName   *string
+	ExternalID   string
+	PasswordHash string // хеш из эмулятора; пустая строка — не менять существующий
 }
 
 // GetUserIDByExternalID возвращает внутренний UUID пользователя по external_id.

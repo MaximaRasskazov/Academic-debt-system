@@ -6,6 +6,7 @@ package emulator
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,7 +27,16 @@ func New(baseURL, apiKey string) *Client {
 	return &Client{
 		base:   baseURL,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
+		http: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				// Сервер эмулятора запрашивает TLS renegotiation;
+				// Go по умолчанию не поддерживает его — соединение зависает.
+				TLSClientConfig: &tls.Config{ //nolint:gosec
+					Renegotiation: tls.RenegotiateOnceAsClient,
+				},
+			},
+		},
 	}
 }
 
@@ -64,13 +74,14 @@ type DebtDTO struct {
 
 // AccountDTO — данные аккаунта из эмулятора.
 type AccountDTO struct {
-	ID         string  `json:"id"`
-	Email      string  `json:"email"`
-	FirstName  string  `json:"first_name"`
-	LastName   string  `json:"last_name"`
-	MiddleName *string `json:"middle_name"`
-	Role       string  `json:"role"`
-	Status     string  `json:"status"`
+	ID           string  `json:"id"`
+	Email        string  `json:"email"`
+	FirstName    string  `json:"first_name"`
+	LastName     string  `json:"last_name"`
+	MiddleName   *string `json:"middle_name"`
+	Role         string  `json:"role"`
+	Status       string  `json:"status"`
+	PasswordHash string  `json:"password_hash"`
 }
 
 // changesResponse — обёртка ответа GET /api/v1/changes.

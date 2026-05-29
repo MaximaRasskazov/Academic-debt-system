@@ -268,11 +268,12 @@ func (s *Service) upsertAccount(ctx context.Context, a emulator.AccountDTO) erro
 	}
 
 	userID, err := s.store.UpsertUserFromSync(ctx, repo.UpsertUserParams{
-		Email:      a.Email,
-		FirstName:  a.FirstName,
-		LastName:   a.LastName,
-		MiddleName: a.MiddleName,
-		ExternalID: a.ID,
+		Email:        a.Email,
+		FirstName:    a.FirstName,
+		LastName:     a.LastName,
+		MiddleName:   a.MiddleName,
+		ExternalID:   a.ID,
+		PasswordHash: a.PasswordHash,
 	})
 	if err != nil {
 		return fmt.Errorf("upsert user %s: %w", a.ID, err)
