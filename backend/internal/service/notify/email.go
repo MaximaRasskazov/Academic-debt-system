@@ -3,6 +3,7 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"fmt"
 	"html/template"
@@ -130,6 +131,11 @@ func (e *emailNotifier) send(ctx context.Context, ev Event) error {
 	m.SetBody("text/html", body.String())
 
 	d := gomail.NewDialer(e.cfg.Host, e.cfg.Port, e.cfg.Username, e.cfg.Password)
+	// Для локального SMTP (mailpit, порт 1025) сертификат самоподписанный.
+	// InsecureSkipVerify безопасен для dev/demo — в проде ставь реальный SMTP.
+	if e.cfg.Username == "" {
+		d.TLSConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	}
 	if err := d.DialAndSend(m); err != nil {
 		return fmt.Errorf("email: send to %s: %w", userEmail, err)
 	}
