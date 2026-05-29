@@ -310,7 +310,6 @@ func normalizeRole(emulatorRole string) string {
 // ── Долги ─────────────────────────────────────────────────────────────────────
 
 // syncDebt тянет долг из эмулятора и делает upsert в БД.
-// Студент и дисциплина ищутся по external_id, а не по UUID напрямую.
 func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	d, err := s.client.GetDebt(ctx, externalID)
 	if err != nil {
@@ -319,7 +318,13 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		}
 		return err
 	}
+	return s.applyDebt(ctx, *d, externalID)
+}
 
+// applyDebt выполняет upsert долга из DTO в БД.
+// Вынесено отдельно чтобы importAllDebts мог использовать данные из списка
+// напрямую, без повторного запроса к /api/v1/debts/{id}.
+func (s *Service) applyDebt(ctx context.Context, d emulator.DebtDTO, externalID string) error {
 	// Ищем дисциплину по external_id.
 	disciplineID, err := s.store.GetDisciplineIDByExternalID(ctx, d.DisciplineID)
 	if err != nil {
@@ -329,7 +334,7 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		return fmt.Errorf("get discipline: %w", err)
 	}
 
-	// Ищем студента по external_id.
+	// Ищем студента по external_id (= linked_entity_id аккаунта).
 	studentID, err := s.store.GetUserIDByExternalID(ctx, d.StudentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -341,8 +346,7 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	// Преподаватель опционален — используем системного пользователя как fallback.
 	issuedBy := s.systemUserID
 	if d.TeacherID != "" {
-		teacherID, err := s.store.GetUserIDByExternalID(ctx, d.TeacherID)
-		if err == nil {
+		if teacherID, err := s.store.GetUserIDByExternalID(ctx, d.TeacherID); err == nil {
 			issuedBy = teacherID
 		}
 	}
@@ -380,21 +384,22 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 	})
 }
 
-// importAllDebts постранично импортирует все долги из эмулятора.
+// importAllDebts постранично импортирует все долги из эмулятора напрямую
+// из списка, без повторных запросов по отдельным ID.
 func (s *Service) importAllDebts(ctx context.Context) error {
 	const pageSize = 100
 	page := 1
 	total := 0
-	errors := 0
+	errCount := 0
 	for {
 		items, meta, err := s.client.ListDebts(ctx, page, pageSize)
 		if err != nil {
 			return fmt.Errorf("page %d: %w", page, err)
 		}
 		for _, d := range items {
-			if err := s.syncDebt(ctx, d.ID); err != nil {
+			if err := s.applyDebt(ctx, d, d.ID); err != nil {
 				slog.Warn("sync: upsert debt failed", "id", d.ID, "err", err)
-				errors++
+				errCount++
 			}
 		}
 		total += len(items)
@@ -403,6 +408,6 @@ func (s *Service) importAllDebts(ctx context.Context) error {
 		}
 		page++
 	}
-	slog.Info("sync: долги импортированы", "total", total, "errors", errors)
+	slog.Info("sync: долги импортированы", "total", total, "errors", errCount)
 	return nil
 }
