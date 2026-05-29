@@ -69,7 +69,7 @@ func (s *Service) Sync(ctx context.Context) error {
 		} else {
 			slog.Info("sync: дисциплины уже загружены, пропускаем", "count", n)
 		}
-		if n, _ := s.store.CountUsers(ctx); n == 0 {
+		if n, _ := s.store.CountSyncedUsers(ctx); n == 0 {
 			if err := s.importAllAccounts(ctx, "student"); err != nil {
 				slog.Warn("sync: ошибка импорта студентов", "err", err)
 			}
@@ -77,7 +77,7 @@ func (s *Service) Sync(ctx context.Context) error {
 				slog.Warn("sync: ошибка импорта преподавателей", "err", err)
 			}
 		} else {
-			slog.Info("sync: пользователи уже загружены, пропускаем", "count", n)
+			slog.Info("sync: пользователи уже загружены, пропускаем", "synced_users", n)
 		}
 		if n, _ := s.store.CountDebts(ctx); n == 0 {
 			if err := s.importAllDebts(ctx); err != nil {

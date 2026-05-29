@@ -306,8 +306,8 @@ func (s *Store) CountDisciplines(ctx context.Context) (int64, error) {
 	return n, err
 }
 
-// CountUsers возвращает количество не-системных пользователей в БД.
-func (s *Store) CountUsers(ctx context.Context) (int64, error) {
+// CountSyncedUsers возвращает количество пользователей с паролем (из эмулятора или seed).
+func (s *Store) CountSyncedUsers(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE password_hash != '' AND email NOT LIKE '%localhost%'`).Scan(&n)
 	return n, err
