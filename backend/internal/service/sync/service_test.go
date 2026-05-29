@@ -58,24 +58,35 @@ func setLastSynced(t *testing.T, store *repo.Store, at time.Time) time.Time {
 	return at
 }
 
-// TestSync_RateLimited_DoesNotAdvanceLastSyncedAt: если все попытки
-// получения долга падают с 429, last_synced_at должен остаться
-// прежним — иначе при следующем тике мы потеряем эти change'ы.
+// TestSync_RateLimited_DoesNotAdvanceLastSyncedAt: если эмулятор отвечает
+// 429 на запрос /changes, last_synced_at не должен двигаться.
+// Иначе при следующем тике мы попросили бы more recent since и потеряли
+// бы change'ы которые упали по rate limit.
+//
+// Раньше тест ловил 429 на индивидуальном GET /debts/:id, который sync
+// делал для каждой записи в applyChange. Сейчас sync парсит
+// change.NewValue без дополнительных HTTP-запросов, поэтому 429 возможен
+// только на самом /changes — это поведение мы здесь и проверяем.
 func TestSync_RateLimited_DoesNotAdvanceLastSyncedAt(t *testing.T) {
-	// Эмулятор отдаёт change-список с одной записью типа debt,
-	// а на запрос самого debt'а — всегда 429.
+	// Сокращаем backoff чтобы не ждать 5×35=175 сек на каждый запуск.
+	// emulator.RetryAfter — экспортированная переменная пакета.
+	prevRetry := emulator.RetryAfter
+	prevMax := emulator.MaxAttempts
+	emulator.RetryAfter = 10 * time.Millisecond
+	emulator.MaxAttempts = 3
+	t.Cleanup(func() {
+		emulator.RetryAfter = prevRetry
+		emulator.MaxAttempts = prevMax
+	})
+
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/changes"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
-				"data": [{"id":"c1","entity_type":"debt","entity_id":"d-1","action":"created","occurred_at":"2026-01-01T00:00:00Z","new_value":{}}],
-				"meta": {"next_since":"","has_more":false}
-			}`))
-		case strings.HasPrefix(r.URL.Path, "/api/v1/debts/"):
-			// Всегда 429 — backoff после 3 попыток вернёт ErrRateLimited.
+			// Эмулятор перегружен — emulator/client.go после
+			// MaxAttempts вернёт ErrRateLimited.
 			w.WriteHeader(http.StatusTooManyRequests)
 		default:
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[],"meta":{"page":1,"limit":100,"total":0,"total_pages":0}}`))
 		}
@@ -83,8 +94,7 @@ func TestSync_RateLimited_DoesNotAdvanceLastSyncedAt(t *testing.T) {
 	svc, store, _ := setupSync(t, handler)
 	ctx := context.Background()
 
-	// Фиксируем "стартовое" время и просим следующий цикл синка.
-	// Берём не-epoch значение, чтобы пропустить полный импорт дисциплин.
+	// Не-epoch значение, чтобы пропустить логику полного импорта.
 	before := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	setLastSynced(t, store, before)
 
@@ -92,11 +102,11 @@ func TestSync_RateLimited_DoesNotAdvanceLastSyncedAt(t *testing.T) {
 	require.Error(t, err, "ожидали ошибку про rate limit")
 	require.Contains(t, err.Error(), "rate limited")
 
-	// Главная проверка: last_synced_at НЕ сдвинулся.
+	// Главное: last_synced_at НЕ сдвинулся.
 	after, err := store.GetLastSyncedAt(ctx)
 	require.NoError(t, err)
 	require.WithinDuration(t, before, after, time.Second,
-		"last_synced_at должен остаться прежним, иначе потеряем change'ы")
+		"last_synced_at должен остаться прежним при rate limit")
 }
 
 // TestSync_NoChanges_AdvancesLastSyncedAt: контр-кейс — если

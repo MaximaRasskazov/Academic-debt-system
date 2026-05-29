@@ -39,14 +39,27 @@ done
 echo "[entrypoint] running migrations..."
 goose -dir /app/sql/migrations postgres "${DB_URL}" up
 
-# Dev-сиды: 1 админ + 1 деканат + 2 преподавателя + 3 студента.
-# Запускаются отдельно от основной серии миграций, чтобы их легко было
-# не катить на проде (просто SEED_DEV_ACCOUNTS=false).
+# Dev-сиды: admin + dean (без них в свежей БД некому залогиниться,
+# а в эмуляторе деканата таких ролей нет). Студенты и преподаватели
+# приходят целиком из эмулятора через sync.Service.
+#
+# Сиды выполняются прямо через psql, без goose-чекпойнта: скрипт
+# идемпотентен (ON CONFLICT (id) DO NOTHING), и нам не нужна отдельная
+# таблица версий. Раньше пробовали `GOOSE_TABLE=goose_seed_version
+# goose ... up` — в goose v3.21+ эту env-переменную не уважают и
+# сиды молча не накатывались (goose проверял общую goose_db_version
+# и видел "current version: 22, no migrations to run").
+#
+# `+goose Up/StatementBegin/StatementEnd` для psql — обычные комментарии,
+# а вот секцию `+goose Down` нужно отрезать, иначе psql её тоже выполнит
+# и удалит то, что только что вставил.
 if [ "${SEED_DEV_ACCOUNTS:-false}" = "true" ]; then
     echo "[entrypoint] seeding dev accounts (SEED_DEV_ACCOUNTS=true)..."
-    # GOOSE_TABLE=goose_seed_version — отдельная таблица версий,
-    # чтобы seed-цепочка не пересекалась с основной sql/migrations.
-    GOOSE_TABLE=goose_seed_version goose -dir /app/sql/seeds postgres "${DB_URL}" up
+    SEED_UP=$(sed '/-- +goose Down/,$d' /app/sql/seeds/00001_seed_dev_accounts.sql)
+    echo "${SEED_UP}" | PGPASSWORD="${DB_PASSWORD}" psql \
+        -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
+        -v ON_ERROR_STOP=1 \
+        --quiet
 fi
 
 echo "[entrypoint] starting server..."

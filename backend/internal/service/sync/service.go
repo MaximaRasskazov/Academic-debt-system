@@ -16,6 +16,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -161,18 +162,88 @@ func (s *Service) LastSyncedAt(ctx context.Context) (time.Time, error) {
 }
 
 // applyChange обрабатывает одно изменение из эмулятора.
+//
+// Эмулятор кладёт ПОЛНЫЙ объект изменённой сущности в ch.NewValue —
+// именно её и используем. Это даёт два больших плюса:
+//
+//  1. Никаких дополнительных HTTP-запросов на каждое изменение. Раньше
+//     для 1000 changes мы делали 1000 GET'ов (по одному на каждый
+//     entity_id) — эмулятор отрубал нас по rate-limit на 50-м запросе,
+//     sync вис на минуты с context-deadline.
+//  2. Не нужны несуществующие endpoint'ы вроде /api/v1/accounts/:id —
+//     раньше код их зовёт, эмулятор возвращает 404, sync падает.
+//
+// Если ch.NewValue пустой (action="deleted" / "purged") — пропускаем.
+// Soft-delete в нашей БД мы пока не зеркалим эмуляторный, потому что
+// в текущем ТЗ удалений нет.
 func (s *Service) applyChange(ctx context.Context, ch emulator.ChangeEntry) error {
-	switch ch.EntityType {
-	case "discipline":
-		return s.syncDiscipline(ctx, ch.EntityID)
-	case "account":
-		return s.syncAccount(ctx, ch.EntityID)
-	case "debt":
-		return s.syncDebt(ctx, ch.EntityID)
-	default:
-		// Неизвестный тип (group, etc.) — пропускаем без ошибки.
+	if len(ch.NewValue) == 0 {
 		return nil
 	}
+	switch ch.EntityType {
+	case "discipline":
+		return s.applyDisciplineChange(ctx, ch.NewValue)
+	case "account":
+		return s.applyAccountChange(ctx, ch.NewValue)
+	case "debt":
+		return s.applyDebtChange(ctx, ch.NewValue)
+	default:
+		// "group" и любые будущие сущности — пропускаем без ошибки.
+		// Группы у нас в БД не репозитятся (BACK-01 решено: group_name
+		// хранится строкой в users.group_name, без отдельной таблицы).
+		return nil
+	}
+}
+
+// decodeChangeValue парсит map[string]any в типизированный DTO через
+// JSON round-trip. Не самый быстрый способ, но без зависимостей и
+// без необходимости вручную мапить поля. На наших объёмах (десятки
+// тысяч changes за полный импорт) это всё равно быстрее одного
+// HTTP-запроса к эмулятору.
+func decodeChangeValue[T any](raw map[string]any) (T, error) {
+	var dto T
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return dto, fmt.Errorf("marshal change value: %w", err)
+	}
+	if err := json.Unmarshal(b, &dto); err != nil {
+		return dto, fmt.Errorf("unmarshal change value: %w", err)
+	}
+	return dto, nil
+}
+
+func (s *Service) applyDisciplineChange(ctx context.Context, raw map[string]any) error {
+	d, err := decodeChangeValue[emulator.DisciplineDTO](raw)
+	if err != nil {
+		return err
+	}
+	code := d.Code
+	if code == "" {
+		code = "EXT-" + d.ID
+	}
+	return s.store.UpsertDisciplineFromSync(ctx, repo.UpsertDisciplineParams{
+		Name:         d.Name,
+		Code:         code,
+		Description:  d.Description,
+		ExternalID:   d.ID,
+		SystemUserID: s.systemUserID,
+	})
+}
+
+func (s *Service) applyAccountChange(ctx context.Context, raw map[string]any) error {
+	a, err := decodeChangeValue[emulator.AccountDTO](raw)
+	if err != nil {
+		return err
+	}
+	return s.upsertAccount(ctx, a)
+}
+
+func (s *Service) applyDebtChange(ctx context.Context, raw map[string]any) error {
+	d, err := decodeChangeValue[emulator.DebtDTO](raw)
+	if err != nil {
+		return err
+	}
+	return s.applyDebt(ctx, d, d.ID)
 }
 
 // ── Дисциплины ────────────────────────────────────────────────────────────────
@@ -211,26 +282,15 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) syncDiscipline(ctx context.Context, externalID string) error {
-	d, err := s.client.GetDiscipline(ctx, externalID)
-	if err != nil {
-		if errors.Is(err, emulator.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	code := d.Code
-	if code == "" {
-		code = "EXT-" + externalID
-	}
-	return s.store.UpsertDisciplineFromSync(ctx, repo.UpsertDisciplineParams{
-		Name:         d.Name,
-		Code:         code,
-		Description:  d.Description,
-		ExternalID:   externalID,
-		SystemUserID: s.systemUserID,
-	})
-}
+// syncDiscipline / syncAccount / syncDebt раньше использовались в applyChange
+// для индивидуального fetch'а сущности через GET /api/v1/{type}/{id}.
+// Удалены: эмулятор присылает полный объект в change.NewValue, дополнительные
+// HTTP-запросы избыточны и упирались в rate-limit. См. applyDisciplineChange /
+// applyAccountChange / applyDebtChange — они работают с map[string]any напрямую.
+//
+// GetAccount остаётся в emulator/client.go как back-compat (вдруг кто-то
+// захочет fetch по id), но при синхронизации через /changes он больше
+// не зовётся.
 
 // ── Аккаунты (студенты / преподаватели) ──────────────────────────────────────
 
@@ -258,18 +318,6 @@ func (s *Service) importAllAccounts(ctx context.Context, role string) error {
 	}
 	slog.Info("sync: аккаунты импортированы", "role", role, "count", total)
 	return nil
-}
-
-// syncAccount тянет один аккаунт из эмулятора и делает upsert пользователя + роль.
-func (s *Service) syncAccount(ctx context.Context, externalID string) error {
-	a, err := s.client.GetAccount(ctx, externalID)
-	if err != nil {
-		if errors.Is(err, emulator.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	return s.upsertAccount(ctx, *a)
 }
 
 // upsertAccount вставляет/обновляет пользователя и назначает ему роль.
@@ -322,18 +370,6 @@ func normalizeRole(emulatorRole string) string {
 }
 
 // ── Долги ─────────────────────────────────────────────────────────────────────
-
-// syncDebt тянет долг из эмулятора и делает upsert в БД.
-func (s *Service) syncDebt(ctx context.Context, externalID string) error {
-	d, err := s.client.GetDebt(ctx, externalID)
-	if err != nil {
-		if errors.Is(err, emulator.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	return s.applyDebt(ctx, *d, externalID)
-}
 
 // applyDebt выполняет upsert долга из DTO в БД.
 // Вынесено отдельно чтобы importAllDebts мог использовать данные из списка

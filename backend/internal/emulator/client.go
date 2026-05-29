@@ -245,22 +245,29 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 
 // get выполняет GET-запрос с backoff на 429-ответы.
 // Эмулятор при 429 сообщает retry_after_seconds=30, поэтому ждём 35с.
-func (c *Client) get(ctx context.Context, path string, dest any) error {
-	const maxAttempts = 5
-	const retryAfter = 35 * time.Second
+// RetryAfter — пауза между повторными попытками после 429.
+// В проде эмулятор просит retry_after_seconds=30, ставим 35 с запасом.
+// Тесты могут перебить на короткий интервал (см. service_test.go) чтобы
+// не ждать минуты на покрытие rate-limit-сценария.
+var RetryAfter = 35 * time.Second
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+// MaxAttempts — сколько раз пробуем при 429 перед тем как вернуть
+// ErrRateLimited. Тоже переменная-пакета для тестов.
+var MaxAttempts = 5
+
+func (c *Client) get(ctx context.Context, path string, dest any) error {
+	for attempt := 1; attempt <= MaxAttempts; attempt++ {
 		done, err := c.doRequest(ctx, path, dest)
 		if done {
 			return err
 		}
-		if attempt == maxAttempts {
+		if attempt == MaxAttempts {
 			return ErrRateLimited
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(retryAfter):
+		case <-time.After(RetryAfter):
 		}
 	}
 	return ErrRateLimited
