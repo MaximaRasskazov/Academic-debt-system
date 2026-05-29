@@ -511,12 +511,6 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                     <div v-else class="picker-empty">
                       {{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}
                     </div>
-<<<<<<< Updated upstream
-=======
-                    <div v-if="disciplineId && !loadingParticipants && !availableStudents.length" class="picker-hint">
-                      Студенты появятся после синхронизации долгов с эмулятором
-                    </div>
->>>>>>> Stashed changes
                   </div>
                 </div>
 

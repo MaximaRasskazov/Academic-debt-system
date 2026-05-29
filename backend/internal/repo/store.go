@@ -138,6 +138,8 @@ func (s *Store) SetLastSyncedAt(ctx context.Context, t time.Time) error {
 // UpsertDisciplineFromSync вставляет или обновляет дисциплину по external_id.
 // Используется SyncService для idempotent-синхронизации.
 func (s *Store) UpsertDisciplineFromSync(ctx context.Context, p UpsertDisciplineParams) error {
+	// Пробуем сначала по external_id, затем по имени (для случаев когда
+	// дисциплина была создана вручную до синхронизации).
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO disciplines (name, code, description, external_id, source, created_by)
 		VALUES ($1, $2, $3, $4, 'sync', $5)
@@ -149,7 +151,18 @@ func (s *Store) UpsertDisciplineFromSync(ctx context.Context, p UpsertDiscipline
 			updated_at  = NOW()
 	`, p.Name, p.Code, p.Description, p.ExternalID, p.SystemUserID)
 	if err != nil {
-		return fmt.Errorf("upsert discipline: %w", err)
+		if !IsUniqueViolation(err, "idx_disciplines_name_lower") {
+			return fmt.Errorf("upsert discipline: %w", err)
+		}
+		// Дисциплина с таким именем уже есть — обновляем external_id и код.
+		_, err = s.pool.Exec(ctx, `
+			UPDATE disciplines
+			SET external_id = $1, code = $2, description = $3, updated_at = NOW()
+			WHERE LOWER(name) = LOWER($4) AND deleted_at IS NULL
+		`, p.ExternalID, p.Code, p.Description, p.Name)
+		if err != nil {
+			return fmt.Errorf("upsert discipline by name: %w", err)
+		}
 	}
 	return nil
 }

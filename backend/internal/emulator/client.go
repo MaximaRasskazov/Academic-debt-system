@@ -74,14 +74,21 @@ type DebtDTO struct {
 
 // AccountDTO — данные аккаунта из эмулятора.
 type AccountDTO struct {
-	ID           string  `json:"id"`
-	Email        string  `json:"email"`
-	FirstName    string  `json:"first_name"`
-	LastName     string  `json:"last_name"`
-	MiddleName   *string `json:"middle_name"`
-	Role         string  `json:"role"`
-	Status       string  `json:"status"`
-	PasswordHash string  `json:"password_hash"`
+	ID             string  `json:"id"`
+	Email          string  `json:"email"`
+	FirstName      string  `json:"first_name"`
+	LastName       string  `json:"last_name"`
+	MiddleName     *string `json:"middle_name"`
+	Role           string  `json:"role"`
+	Status         string  `json:"status"`
+	PasswordHash   string  `json:"password_hash"`
+	LinkedEntityID string  `json:"linked_entity_id"` // ID студента/преподавателя (используется в долгах)
+}
+
+// debtsListResponse — обёртка ответа GET /api/v1/debts (список).
+type debtsListResponse struct {
+	Data []DebtDTO      `json:"data"`
+	Meta paginationMeta `json:"meta"`
 }
 
 // changesResponse — обёртка ответа GET /api/v1/changes.
@@ -186,6 +193,19 @@ func (c *Client) GetDiscipline(ctx context.Context, externalID string) (*Discipl
 		return nil, fmt.Errorf("get discipline %s: %w", externalID, err)
 	}
 	return &resp.Data, nil
+}
+
+// ListDebts возвращает долги из эмулятора постранично.
+func (c *Client) ListDebts(ctx context.Context, page, limit int) ([]DebtDTO, paginationMeta, error) {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", page))
+	params.Set("limit", fmt.Sprintf("%d", limit))
+
+	var resp debtsListResponse
+	if err := c.get(ctx, "/api/v1/debts?"+params.Encode(), &resp); err != nil {
+		return nil, paginationMeta{}, fmt.Errorf("list debts: %w", err)
+	}
+	return resp.Data, resp.Meta, nil
 }
 
 // GetDebt возвращает долг по внешнему ID.

@@ -69,6 +69,9 @@ func (s *Service) Sync(ctx context.Context) error {
 		if err := s.importAllAccounts(ctx, "teacher"); err != nil {
 			slog.Warn("sync: ошибка импорта преподавателей", "err", err)
 		}
+		if err := s.importAllDebts(ctx); err != nil {
+			slog.Warn("sync: ошибка импорта долгов", "err", err)
+		}
 	}
 
 	// Читаем все страницы изменений.
@@ -267,12 +270,19 @@ func (s *Service) upsertAccount(ctx context.Context, a emulator.AccountDTO) erro
 		return nil
 	}
 
+	// linked_entity_id — это ID студента/преподавателя, который используется
+	// в долгах (debt.student_id). Храним его как external_id пользователя,
+	// чтобы syncDebt мог найти пользователя по debt.student_id.
+	extID := a.LinkedEntityID
+	if extID == "" {
+		extID = a.ID // fallback на ID аккаунта если linked_entity_id не заполнен
+	}
 	userID, err := s.store.UpsertUserFromSync(ctx, repo.UpsertUserParams{
 		Email:        a.Email,
 		FirstName:    a.FirstName,
 		LastName:     a.LastName,
 		MiddleName:   a.MiddleName,
-		ExternalID:   a.ID,
+		ExternalID:   extID,
 		PasswordHash: a.PasswordHash,
 	})
 	if err != nil {
@@ -368,4 +378,31 @@ func (s *Service) syncDebt(ctx context.Context, externalID string) error {
 		GradedAt:     gradedAt,
 		GradedBy:     gradedBy,
 	})
+}
+
+// importAllDebts постранично импортирует все долги из эмулятора.
+func (s *Service) importAllDebts(ctx context.Context) error {
+	const pageSize = 100
+	page := 1
+	total := 0
+	errors := 0
+	for {
+		items, meta, err := s.client.ListDebts(ctx, page, pageSize)
+		if err != nil {
+			return fmt.Errorf("page %d: %w", page, err)
+		}
+		for _, d := range items {
+			if err := s.syncDebt(ctx, d.ID); err != nil {
+				slog.Warn("sync: upsert debt failed", "id", d.ID, "err", err)
+				errors++
+			}
+		}
+		total += len(items)
+		if page >= meta.TotalPages {
+			break
+		}
+		page++
+	}
+	slog.Info("sync: долги импортированы", "total", total, "errors", errors)
+	return nil
 }
