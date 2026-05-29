@@ -94,7 +94,7 @@ watch(disciplineId, async (id) => {
   loadingParticipants.value = true
   try {
     const [studRes, teachRes, debtsRes] = await Promise.allSettled([
-      disciplinesApi.getStudents(id),
+      usersApi.getAll({ role: 'student', limit: 500 }),
       usersApi.getAll({ role: 'teacher', limit: 100 }),
       debtsApi.getAll({ limit: 500 }),
     ])
@@ -107,7 +107,7 @@ watch(disciplineId, async (id) => {
     }
 
     if (studRes.status === 'fulfilled') {
-      availableStudents.value = (studRes.value.data ?? [])
+      availableStudents.value = (studRes.value.data.items ?? [])
         .filter(u => debtMap[u.id])
         .map(u => ({
           id: u.id,
