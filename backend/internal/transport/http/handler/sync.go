@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
 // Syncer — интерфейс сервиса синхронизации с внешним эмулятором деканата.
-// Определён здесь, чтобы handler не зависел от конкретной реализации:
-// в тестах можно подменить заглушкой.
 type Syncer interface {
 	Sync(ctx context.Context) error
 	LastSyncedAt(ctx context.Context) (time.Time, error)
@@ -16,7 +16,8 @@ type Syncer interface {
 
 // SyncHandler обслуживает /api/sync/*.
 type SyncHandler struct {
-	svc Syncer
+	svc     Syncer
+	running atomic.Bool // защита от параллельных запусков
 }
 
 // NewSyncHandler создаёт хендлер. svc может быть nil — тогда оба
@@ -67,20 +68,17 @@ func (h *SyncHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "sync_not_configured", "синхронизация с эмулятором не настроена")
 		return
 	}
-	// Используем отдельный контекст: HTTP-группа имеет таймаут 30s,
-	// а полный импорт дисциплин + аккаунтов + долгов занимает намного дольше.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	if err := h.svc.Sync(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "sync_failed", "синхронизация завершилась с ошибкой")
+	if !h.running.CompareAndSwap(false, true) {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "already_running"})
 		return
 	}
-	t, err := h.svc.LastSyncedAt(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "не удалось получить статус синхронизации")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"last_synced_at": t.Format(time.RFC3339),
-	})
+	go func() {
+		defer h.running.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := h.svc.Sync(ctx); err != nil {
+			slog.Warn("sync: ручной запуск завершился с ошибкой", "err", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
