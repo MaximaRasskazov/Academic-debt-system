@@ -29,16 +29,16 @@ type SubmitRetakeRequestBody struct {
 
 // RetakeRequestResponse — публичное представление заявки на создание пересдачи.
 type RetakeRequestResponse struct {
-	ID              uuid.UUID            `json:"id"`
-	RequestedBy     uuid.UUID            `json:"requested_by"`
+	ID              uuid.UUID             `json:"id"`
+	RequestedBy     uuid.UUID             `json:"requested_by"`
 	Payload         retakerequest.Payload `json:"payload"`
-	Status          string               `json:"status"`
-	ReviewedBy      *uuid.UUID           `json:"reviewed_by,omitempty"`
-	ReviewedAt      *time.Time           `json:"reviewed_at,omitempty"`
-	DecisionReason  *string              `json:"decision_reason,omitempty"`
-	CreatedRetakeID *uuid.UUID           `json:"created_retake_id,omitempty"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       *time.Time           `json:"updated_at,omitempty"`
+	Status          string                `json:"status"`
+	ReviewedBy      *uuid.UUID            `json:"reviewed_by,omitempty"`
+	ReviewedAt      *time.Time            `json:"reviewed_at,omitempty"`
+	DecisionReason  *string               `json:"decision_reason,omitempty"`
+	CreatedRetakeID *uuid.UUID            `json:"created_retake_id,omitempty"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       *time.Time            `json:"updated_at,omitempty"`
 }
 
 // RetakeRequestsListResponse — список с пагинацией.
