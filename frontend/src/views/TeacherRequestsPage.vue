@@ -437,11 +437,11 @@ function closeDetail()  { detailModal.value = null }
                   <label>Тип пересдачи</label>
                   <div class="custom-select" :class="{ open: typeDropdownOpen }">
                     <button type="button" class="custom-select-trigger" @click="typeDropdownOpen = !typeDropdownOpen">
-                      <span>{{ typeOptions.find(o => o.value === form.type)?.label }}</span>
+                      <span>{{ typeOptions.find(o => o.value === retakeType)?.label }}</span>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
                     </button>
                     <div class="custom-select-dropdown">
-                      <button v-for="opt in typeOptions" :key="opt.value" type="button" class="custom-select-option" :class="{ selected: form.type === opt.value }" @click="selectType(opt.value)">
+                      <button v-for="opt in typeOptions" :key="opt.value" type="button" class="custom-select-option" :class="{ selected: retakeType === opt.value }" @click="selectType(opt.value)">
                         {{ opt.label }}
                       </button>
                     </div>
@@ -452,7 +452,7 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field" style="flex:2">
                   <label>Дата</label>
-                  <VueDatePicker v-model="form.date" locale="ru" format="dd.MM.yyyy" model-type="format" :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг" />
+                  <VueDatePicker v-model="retakeDate" locale="ru" format="dd.MM.yyyy" model-type="format" :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг" />
                 </div>
                 <div class="field field--shrink">
                   <label>Время</label>
@@ -465,9 +465,9 @@ function closeDetail()  { detailModal.value = null }
                 <div class="field">
                   <label>Длительность (мин)</label>
                   <div class="stepper">
-                    <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="form.duration <= DURATION_MIN">−</button>
-                    <input class="stepper-input" type="number" v-model.number="form.duration" min="15" max="480" @blur="clampDuration" />
-                    <button type="button" class="stepper-btn" @click="increaseDuration"  :disabled="form.duration >= DURATION_MAX">+</button>
+                    <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="duration <= DURATION_MIN">−</button>
+                    <input class="stepper-input" type="number" v-model.number="duration" min="15" max="480" @blur="clampDuration" />
+                    <button type="button" class="stepper-btn" @click="increaseDuration"  :disabled="duration >= DURATION_MAX">+</button>
                   </div>
                 </div>
               </div>
