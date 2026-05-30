@@ -167,7 +167,20 @@ watch(disciplineId, async (id) => {
   } finally { loadingParticipants.value = false }
 })
 
-function addStudent(s) { clearTimeout(sBlur); if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s); studentSearch.value = '' }
+// addStudent / addTeacher: после выбора опции явно закрываем дропдаун.
+// clearTimeout нужен, потому что @blur у input ставит setTimeout 200ms на
+// закрытие — если мы здесь сразу же добавим элемент, blur-таймер может
+// всё равно сработать и снова закрыть уже-закрытый список (никакой беды,
+// но шум в state). Главное — мы сами ставим *Open в false: до этого
+// fix'а только blur закрывал список, а @mousedown.prevent на опции
+// предотвращал blur у input, поэтому дропдаун зависал открытым после
+// клика мышью.
+function addStudent(s) {
+  clearTimeout(sBlur)
+  if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
+  studentSearch.value = ''
+  studentOpen.value = false
+}
 function removeStudent(id) { selectedStudents.value = selectedStudents.value.filter(s => s.id !== id) }
 function addGroup(g) { availableStudents.value.filter(s => s.group === g && !selectedStudentIds.value.has(s.id)).forEach(s => selectedStudents.value.push(s)) }
 function onStudentEnter() { if (filteredStudents.value.length) addStudent(filteredStudents.value[0]) }
@@ -176,7 +189,9 @@ function addTeacher(t) {
   clearTimeout(tBlur)
   if (selectedTeacherIds.value.has(t.id)) return
   if (!isCommission.value && selectedTeachers.value.length >= 1) return
-  selectedTeachers.value.push(t); teacherSearch.value = ''
+  selectedTeachers.value.push(t)
+  teacherSearch.value = ''
+  teacherOpen.value = false
 }
 function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
 function onTeacherEnter() { if (filteredTeachers.value.length) addTeacher(filteredTeachers.value[0]) }
@@ -203,6 +218,19 @@ function selectType(val) { retakeType.value = val; typeDropdownOpen.value = fals
 function onHourBlur()   { const n = clamp(parseInt(hourDisplay.value,   10), 0, 23); hourDisplay.value   = String(n).padStart(2, '0') }
 function onMinuteBlur() { const n = clamp(parseInt(minuteDisplay.value, 10), 0, 59); minuteDisplay.value = String(n).padStart(2, '0') }
 function onTimeInput(e) { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
+
+// Форматтеры даты/времени для таблицы «Мои заявки». Без них шаблон
+// вызывает _ctx.fmtDate is not a function и страница крашится в
+// рендере списка. Используются также в RequestsPage.vue — точные копии.
+function fmtDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+function fmtTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 function decreaseDuration() { if (duration.value > DURATION_MIN) duration.value -= DURATION_STEP }
 function increaseDuration()  { if (duration.value < DURATION_MAX) duration.value += DURATION_STEP }
 function clampDuration()     { duration.value = clamp(duration.value, DURATION_MIN, DURATION_MAX) }
