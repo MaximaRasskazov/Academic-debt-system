@@ -391,7 +391,10 @@ func validatePayload(p *Payload) error {
 	// с min_teachers=3 — БД-CHECK retakes_commission_min_teachers иначе
 	// откажет. Проверим число teacher_ids уже здесь чтобы преподаватель
 	// получил понятную ошибку на submit, а не позже на approve.
-	if p.Kind == kindCommission && int32(len(p.TeacherIDs)) < minCommissionTeachers {
+	// gosec G115: len() возвращает int, который на 32-битных платформах
+	// формально может превышать int32. Сравниваем напрямую int с int —
+	// никакого переполнения.
+	if p.Kind == kindCommission && len(p.TeacherIDs) < int(minCommissionTeachers) {
 		return fmt.Errorf("%w: для комиссии нужно минимум 3 преподавателя", ErrInvalidInput)
 	}
 	return nil
