@@ -452,17 +452,19 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
               <div class="form-row">
                 <div class="field field--full picker-wrap">
                   <label>{{ isCommission ? 'Преподаватели (мин. 3)' : 'Преподаватель' }}</label>
-                  <div class="tags-row" v-if="selectedTeachers.length">
-                    <span v-for="t in selectedTeachers" :key="t.id" class="teacher-tag">
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$el.querySelector('.token-field').focus()"
+                  >
+                    <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
                       {{ t.name }}
-                      <button type="button" class="teacher-tag-remove" @click="removeTeacher(t.id)">×</button>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
                     </span>
-                  </div>
-                  <div class="picker-input-wrap">
                     <input
-                      class="input"
+                      class="token-field"
                       v-model="teacherSearch"
-                      :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск преподавателя...' : 'Сначала выберите дисциплину')"
+                      :placeholder="selectedTeachers.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
                       @focus="onTeacherFocus"
                       @blur="onTeacherBlur"
@@ -490,18 +492,20 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
               <!-- Студенты + Группа -->
               <div class="form-row">
                 <div class="field picker-wrap">
-                  <label>Студент</label>
-                  <div class="tags-row" v-if="selectedStudents.length">
-                    <span v-for="s in selectedStudents" :key="s.id" class="teacher-tag teacher-tag--student">
-                      {{ s.name }}<span v-if="s.group" class="tag-group"> · {{ s.group }}</span>
-                      <button type="button" class="teacher-tag-remove" @click="removeStudent(s.id)">×</button>
+                  <label>Студенты</label>
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$el.querySelector('.token-field-s').focus()"
+                  >
+                    <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
+                      {{ s.name }}<span v-if="s.group" class="token-group"> · {{ s.group }}</span>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeStudent(s.id)">×</button>
                     </span>
-                  </div>
-                  <div class="picker-input-wrap">
                     <input
-                      class="input"
+                      class="token-field token-field-s"
                       v-model="studentSearch"
-                      :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск по имени...' : 'Сначала выберите дисциплину')"
+                      :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя или группу...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
                       @focus="onStudentFocus"
                       @blur="onStudentBlur"
@@ -750,6 +754,44 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
   font-size: 15px; line-height: 1; padding: 0 2px; opacity: .6; transition: opacity .15s;
 }
 .teacher-tag-remove:hover { opacity: 1; }
+
+/* ── Token input (Bitrix-style chips inside field) ── */
+.token-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  min-height: 40px; max-height: 130px; overflow-y: auto;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 5px 10px; cursor: text;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.token-input::-webkit-scrollbar { width: 4px; }
+.token-input::-webkit-scrollbar-track { background: transparent; }
+.token-input::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.token-input--focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.token-input--disabled { background: #f9fafb; opacity: .7; cursor: not-allowed; }
+
+.token-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 6px 3px 10px; border-radius: 20px;
+  background: rgba(59,63,224,.1); color: #2a2e9e;
+  font: 500 12px/1.4 'Inter', sans-serif; white-space: nowrap;
+  flex-shrink: 0; max-width: 220px;
+}
+.token-chip--student { background: rgba(16,185,129,.1); color: #065f46; }
+.token-group { opacity: .7; font-size: 11px; }
+.token-remove {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 15px; line-height: 1; padding: 0 2px; opacity: .55;
+  transition: opacity .15s; flex-shrink: 0;
+}
+.token-remove:hover { opacity: 1; }
+
+.token-field {
+  flex: 1; min-width: 100px; border: none; outline: none;
+  background: transparent; font: 13px/1 'Inter', sans-serif;
+  color: var(--ink); padding: 3px 2px;
+}
+.token-field::placeholder { color: var(--ink-soft); }
+.token-field:disabled { cursor: not-allowed; }
 
 .picker-dropdown {
   position: absolute; top: calc(100% + 2px); left: 0; right: 0;
