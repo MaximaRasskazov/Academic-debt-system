@@ -13,6 +13,9 @@ import (
 type Querier interface {
 	AddParticipant(ctx context.Context, arg AddParticipantParams) (RetakeParticipant, error)
 	ApproveRetakeChangeRequest(ctx context.Context, arg ApproveRetakeChangeRequestParams) (RetakeChangeRequest, error)
+	// created_retake_id заполняется в сервисе уже после q.CreateRetake
+	// в той же транзакции — поэтому здесь это обязательный параметр.
+	ApproveRetakeRequest(ctx context.Context, arg ApproveRetakeRequestParams) (RetakeRequest, error)
 	// Сервис вызывает в одной транзакции с AttachRoleToUser(teacher).
 	ApproveTeacherRoleRequest(ctx context.Context, arg ApproveTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	AttachPermissionToRole(ctx context.Context, arg AttachPermissionToRoleParams) (PermissionRole, error)
@@ -48,6 +51,7 @@ type Querier interface {
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error)
 	CreateRetake(ctx context.Context, arg CreateRetakeParams) (Retake, error)
 	CreateRetakeChangeRequest(ctx context.Context, arg CreateRetakeChangeRequestParams) (RetakeChangeRequest, error)
+	CreateRetakeRequest(ctx context.Context, arg CreateRetakeRequestParams) (RetakeRequest, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	CreateTeacherRoleRequest(ctx context.Context, arg CreateTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -92,6 +96,7 @@ type Querier interface {
 	GetRefreshTokenByHashForUpdate(ctx context.Context, tokenHash string) (RefreshToken, error)
 	GetRetakeByID(ctx context.Context, id pgtype.UUID) (Retake, error)
 	GetRetakeChangeRequestByID(ctx context.Context, id pgtype.UUID) (RetakeChangeRequest, error)
+	GetRetakeRequestByID(ctx context.Context, id pgtype.UUID) (RetakeRequest, error)
 	GetRoleByID(ctx context.Context, id pgtype.UUID) (Role, error)
 	GetRoleBySlug(ctx context.Context, lower string) (Role, error)
 	GetTeacherRoleRequestByID(ctx context.Context, id pgtype.UUID) (TeacherRoleRequest, error)
@@ -136,7 +141,7 @@ type Querier interface {
 	ListDisciplines(ctx context.Context, arg ListDisciplinesParams) ([]Discipline, error)
 	// Батч-выборка дисциплин по списку ID. Используется в report.Service
 	// вместо N одиночных GetDisciplineByID.
-	ListDisciplinesByIDs(ctx context.Context, ids []pgtype.UUID) ([]Discipline, error)
+	ListDisciplinesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]Discipline, error)
 	// Какие дисциплины изучает студент. Используется в личном кабинете
 	// и при создании долга (валидируем, что студент учится на дисциплине).
 	ListDisciplinesForStudent(ctx context.Context, studentID pgtype.UUID) ([]Discipline, error)
@@ -150,6 +155,8 @@ type Querier interface {
 	ListParticipantsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeParticipant, error)
 	// Деканат: входящие заявки на рассмотрение.
 	ListPendingRetakeChangeRequests(ctx context.Context, arg ListPendingRetakeChangeRequestsParams) ([]RetakeChangeRequest, error)
+	// Деканат: входящие заявки на рассмотрение.
+	ListPendingRetakeRequests(ctx context.Context, arg ListPendingRetakeRequestsParams) ([]RetakeRequest, error)
 	// Деканат: входящие на рассмотрение.
 	ListPendingTeacherRoleRequests(ctx context.Context, arg ListPendingTeacherRoleRequestsParams) ([]TeacherRoleRequest, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
@@ -162,6 +169,8 @@ type Querier interface {
 	ListRetakeChangeRequestsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeChangeRequest, error)
 	// История заявок преподавателя.
 	ListRetakeChangeRequestsForTeacher(ctx context.Context, arg ListRetakeChangeRequestsForTeacherParams) ([]RetakeChangeRequest, error)
+	// История заявок преподавателя (его собственные).
+	ListRetakeRequestsForTeacher(ctx context.Context, arg ListRetakeRequestsForTeacherParams) ([]RetakeRequest, error)
 	// Деканат: общий список пересдач, с фильтром по статусу при необходимости.
 	// sqlc.narg('status') NULL означает "все статусы".
 	ListRetakes(ctx context.Context, arg ListRetakesParams) ([]Retake, error)
@@ -203,7 +212,7 @@ type Querier interface {
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	// Батч-выборка пользователей по списку ID. Используется в report.Service
 	// вместо N одиночных GetUserByID.
-	ListUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]User, error)
+	ListUsersByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]User, error)
 	ListUsersInRole(ctx context.Context, roleID pgtype.UUID) ([]User, error)
 	MarkAllNotificationsReadForUser(ctx context.Context, userID pgtype.UUID) (int64, error)
 	// Идемпотентно: повторный вызов не перезаписывает read_at.
@@ -216,6 +225,9 @@ type Querier interface {
 	// При rejected decision_reason обязателен — CHECK-constraint в таблице
 	// гарантирует это даже если сервис забудет передать.
 	RejectRetakeChangeRequest(ctx context.Context, arg RejectRetakeChangeRequestParams) (RetakeChangeRequest, error)
+	// При rejected decision_reason обязателен — CHECK-constraint в таблице
+	// гарантирует это даже если сервис забудет передать.
+	RejectRetakeRequest(ctx context.Context, arg RejectRetakeRequestParams) (RetakeRequest, error)
 	RejectTeacherRoleRequest(ctx context.Context, arg RejectTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	// Физическое удаление. Если пересдача уже стартовала или есть оценка —
 	// сервис должен отказать (проверка в бизнес-слое, не в БД).

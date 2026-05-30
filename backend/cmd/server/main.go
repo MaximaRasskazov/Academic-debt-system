@@ -36,6 +36,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
 	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
@@ -100,6 +101,7 @@ func run() error {
 	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
+	retakeRequestSvc := retakerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
 	// Шедулер автопереходов retake-статусов крутится параллельно
 	// HTTP-серверу. Останавливаем его через schedCancel перед
@@ -166,6 +168,7 @@ func run() error {
 		Debts:           debtSvc,
 		Retakes:         retakeSvc,
 		ChangeRequests:  changeRequestSvc,
+		RetakeRequests:  retakeRequestSvc,
 		Reports:         reportSvc,
 		Notify:          notifySvc,
 		NotifyHub:       notifyHub,

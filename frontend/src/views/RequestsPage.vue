@@ -4,6 +4,7 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { changeRequestsApi } from '../api/changeRequests'
 import { teacherRequestsApi } from '../api/teacherRequests'
+import { retakeRequestsApi } from '../api/retakeRequests'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
@@ -11,9 +12,9 @@ import { usersApi } from '../api/users'
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────────
-// role  — заявки на повышение до teacher
+// role   — заявки на повышение до teacher
 // change — заявки на изменение существующих пересдач
-// create — заявки преподавателей на создание новой пересдачи (бэк не готов)
+// create — заявки преподавателей на создание новой пересдачи
 const activeTab = ref('role')
 
 // ── Shared dictionaries ───────────────────────────────────────
@@ -30,6 +31,11 @@ const roleErr        = ref('')
 const changeRequests = ref([])
 const changeLoading  = ref(true)
 const changeErr      = ref('')
+
+// ── Tab 3: retake-requests (создание пересдачи) ───────────────
+const createRequests = ref([])
+const createLoading  = ref(true)
+const createErr      = ref('')
 
 // ── Helpers ───────────────────────────────────────────────────
 function userFio(id) {
@@ -101,6 +107,7 @@ function changeFieldRows(req) {
 // ── Counts для badge'ей ───────────────────────────────────────
 const roleCount   = computed(() => roleRequests.value.length)
 const changeCount = computed(() => changeRequests.value.length)
+const createCount = computed(() => createRequests.value.length)
 
 // ── Loaders ───────────────────────────────────────────────────
 async function loadRoleTab() {
@@ -145,6 +152,60 @@ async function loadChangeTab() {
   }
 }
 
+async function loadCreateTab() {
+  createLoading.value = true
+  createErr.value = ''
+  try {
+    // discipline + disciplines уже могут быть загружены табом 'change',
+    // но если пользователь сразу попал на 'create' — догружаем.
+    const [reqRes, discsRes] = await Promise.allSettled([
+      retakeRequestsApi.getAll({ limit: 200 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+    if (discsRes.status === 'fulfilled') {
+      (discsRes.value.data.items ?? discsRes.value.data ?? [])
+        .forEach((d) => { discMap.value[d.id] = d.name || d.code })
+    }
+    if (reqRes.status === 'fulfilled') {
+      createRequests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
+    } else {
+      createErr.value = 'Не удалось загрузить заявки на пересдачи'
+    }
+  } finally {
+    createLoading.value = false
+  }
+}
+
+// Форматирование payload заявки на создание для отображения карточки.
+// payload — JSONB с полями, которые описал преподаватель.
+function createFieldRows(req) {
+  const p = req.payload || {}
+  const rows = []
+  const kindLabel = p.kind === 'commission' ? 'Комиссия' : 'Обычная'
+  rows.push({ label: 'Тип', value: kindLabel })
+  if (p.scheduled_at) {
+    rows.push({ label: 'Дата и время', value: fmtDateTime(p.scheduled_at) })
+  }
+  if (p.duration_minutes) {
+    rows.push({ label: 'Длительность', value: `${p.duration_minutes} мин` })
+  }
+  if (p.building || p.room) {
+    rows.push({ label: 'Место', value: `${p.building || '—'} / ${p.room || '—'}` })
+  }
+  const studentCount = (p.student_debt_ids || []).length
+  const teacherCount = (p.teacher_ids || []).length
+  if (teacherCount) {
+    rows.push({ label: p.kind === 'commission' ? 'Комиссия' : 'Преподаватель', value: `${teacherCount} чел.` })
+  }
+  if (studentCount) {
+    rows.push({ label: 'Студенты', value: `${studentCount} чел.` })
+  }
+  if (p.notes) {
+    rows.push({ label: 'Заметки', value: p.notes })
+  }
+  return rows
+}
+
 async function loadUsers() {
   try {
     const res = await usersApi.getAll({ limit: 500 })
@@ -164,6 +225,7 @@ onMounted(async () => {
   // даже если активен только один таб.
   loadRoleTab()
   loadChangeTab()
+  loadCreateTab()
 })
 
 // ── Approve / Reject: общий confirm-flow ──────────────────────
@@ -184,6 +246,16 @@ async function approveChange(r) {
   try {
     await changeRequestsApi.approve(r.id)
     changeRequests.value = changeRequests.value.filter((x) => x.id !== r.id)
+  } catch (e) {
+    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+  } finally { approving.value = null }
+}
+
+async function approveCreate(r) {
+  approving.value = r.id
+  try {
+    await retakeRequestsApi.approve(r.id)
+    createRequests.value = createRequests.value.filter((x) => x.id !== r.id)
   } catch (e) {
     alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
   } finally { approving.value = null }
@@ -215,6 +287,9 @@ async function doReject() {
     if (rejectKind.value === 'role') {
       await teacherRequestsApi.reject(id, reason)
       roleRequests.value = roleRequests.value.filter((x) => x.id !== id)
+    } else if (rejectKind.value === 'create') {
+      await retakeRequestsApi.reject(id, reason)
+      createRequests.value = createRequests.value.filter((x) => x.id !== id)
     } else {
       await changeRequestsApi.reject(id, reason)
       changeRequests.value = changeRequests.value.filter((x) => x.id !== id)
@@ -225,15 +300,23 @@ async function doReject() {
   } finally { rejecting.value = false }
 }
 
-// Подсказка для отклонения смены роли — в reject-модалке.
-const rejectTitle = computed(() => rejectKind.value === 'role'
-  ? 'Отклонить заявку на роль'
-  : 'Отклонить заявку на изменение пересдачи')
+// Подсказка для отклонения — в reject-модалке.
+const rejectTitle = computed(() => {
+  switch (rejectKind.value) {
+    case 'role':   return 'Отклонить заявку на роль'
+    case 'create': return 'Отклонить заявку на пересдачу'
+    default:       return 'Отклонить заявку на изменение пересдачи'
+  }
+})
 
 const rejectSubtitle = computed(() => {
   const r = rejectModal.value
   if (!r) return ''
   if (rejectKind.value === 'role') return userFio(r.requested_by)
+  if (rejectKind.value === 'create') {
+    const dn = discMap.value[r.payload?.discipline_id] || 'Дисциплина'
+    return `${dn} · ${userFio(r.requested_by)}`
+  }
   return `${disciplineName(r.retake_id)} · ${userFio(r.requested_by)}`
 })
 </script>
@@ -277,6 +360,7 @@ const rejectSubtitle = computed(() => {
                 <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
               </svg>
               Заявки на пересдачи
+              <span v-if="createCount > 0" class="tab-badge">{{ createCount }}</span>
             </button>
           </div>
 
@@ -420,27 +504,67 @@ const rejectSubtitle = computed(() => {
             </div>
           </div>
 
-          <!-- ═══════════════ TAB 3: ЗАГЛУШКА ═══════════════ -->
-          <!-- На бэке нет ресурса /api/retake-requests. Задача под бэк
-               расписана в PR-описании и в roadmap. До реализации — заглушка. -->
+          <!-- ═══════════════ TAB 3: ЗАЯВКИ НА ПЕРЕСДАЧИ ═══════════════ -->
           <div v-if="activeTab === 'create'" class="section-card">
-            <div class="todo-stub">
-              <svg class="todo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="9" y1="15" x2="15" y2="15"/>
+            <div class="table-header">
+              <div class="title-row">
+                <h2 class="section-title">Заявки на создание пересдач</h2>
+                <span class="count-badge">{{ createCount }}</span>
+              </div>
+              <p class="subtitle">Преподаватели просят организовать новую пересдачу. После одобрения пересдача создаётся автоматически с участниками из заявки.</p>
+            </div>
+
+            <div v-if="createLoading" class="state-center">
+              <div class="spinner" /><span>Загрузка…</span>
+            </div>
+            <div v-else-if="createErr" class="state-center state-error">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
-              <h2>Заявки на пересдачи — в разработке</h2>
-              <p>
-                Этот раздел появится, когда бэкенд добавит ресурс
-                <code>POST /api/retake-requests</code>: преподаватели смогут
-                подавать заявку на создание новой пересдачи, а декан — одобрять
-                или отклонять её отсюда.
-              </p>
-              <p class="todo-note">
-                Сейчас пересдачи создаются деканом напрямую через раздел
-                <router-link to="/dean" class="todo-link">«Деканат»</router-link>.
-              </p>
+              {{ createErr }}
+            </div>
+            <div v-else-if="createRequests.length === 0" class="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+              <span>Новых заявок нет</span>
+              <p>Когда преподаватели подадут заявку на пересдачу — она появится здесь</p>
+            </div>
+
+            <div v-else class="change-cards">
+              <div v-for="r in createRequests" :key="r.id" class="change-card">
+                <div class="cc-head">
+                  <div class="cc-title">
+                    <strong>{{ discMap[r.payload?.discipline_id] || 'Дисциплина' }}</strong>
+                    <span class="cc-author">от {{ userFio(r.requested_by) }}</span>
+                  </div>
+                  <span class="cc-date">{{ fmtDate(r.created_at) }}</span>
+                </div>
+
+                <div class="cc-diff">
+                  <div v-for="row in createFieldRows(r)" :key="row.label" class="cc-create-row">
+                    <span class="cc-diff-label">{{ row.label }}</span>
+                    <span class="cc-diff-to">{{ row.value }}</span>
+                  </div>
+                </div>
+
+                <div v-if="r.payload?.reason" class="cc-reason">
+                  <span class="cc-reason-label">Причина:</span> {{ r.payload.reason }}
+                </div>
+
+                <div class="cc-actions">
+                  <button class="btn-sm btn-approve-sm"
+                          :disabled="approving === r.id"
+                          @click="approveCreate(r)">
+                    {{ approving === r.id ? '…' : 'Одобрить и создать' }}
+                  </button>
+                  <button class="btn-sm btn-reject-sm"
+                          :disabled="approving === r.id"
+                          @click="openReject(r, 'create')">
+                    Отклонить
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -635,6 +759,13 @@ const rejectSubtitle = computed(() => {
 .cc-diff-arrow { width: 14px; height: 14px; color: var(--brand); flex-shrink: 0; }
 .cc-diff-to { color: var(--brand-ink); font-weight: 600; }
 .cc-diff-empty { color: var(--ink-soft); font: italic 12px/1 'Inter', sans-serif; }
+
+/* Tab 3: одиночное значение (не diff) — label слева, value справа. */
+.cc-create-row {
+  display: grid; grid-template-columns: 130px 1fr;
+  align-items: center; gap: 10px;
+  font: 12px/1.4 'Inter', sans-serif;
+}
 
 .cc-reason { font: 13px/1.5 'Inter', sans-serif; color: var(--ink); padding: 0 2px; }
 .cc-reason-label { color: var(--ink-soft); font-weight: 600; }

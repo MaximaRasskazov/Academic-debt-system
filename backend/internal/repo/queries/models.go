@@ -160,6 +160,19 @@ type RetakeParticipant struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type RetakeRequest struct {
+	ID              pgtype.UUID        `json:"id"`
+	RequestedBy     pgtype.UUID        `json:"requested_by"`
+	Payload         []byte             `json:"payload"`
+	Status          string             `json:"status"`
+	ReviewedBy      pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt      pgtype.Timestamptz `json:"reviewed_at"`
+	DecisionReason  *string            `json:"decision_reason"`
+	CreatedRetakeID pgtype.UUID        `json:"created_retake_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Role struct {
 	ID          pgtype.UUID        `json:"id"`
 	Name        string             `json:"name"`
@@ -233,4 +246,5 @@ type User struct {
 	GroupName    *string            `json:"group_name"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ExternalID   *string            `json:"external_id"`
 }
