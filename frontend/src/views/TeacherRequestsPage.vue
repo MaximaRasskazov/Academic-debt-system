@@ -7,6 +7,9 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
+import { debtsApi } from '../api/debts'
+import { retakeRequestsApi } from '../api/retakeRequests'
 
 const route = useRoute()
 const sidebarOpen = ref(false)
@@ -30,46 +33,56 @@ function handleOutsideClick(e) {
   if (!e.target.closest('.custom-select')) {
     typeDropdownOpen.value = false
     editTypeOpen.value     = false
+    discDropdownOpen.value = false
   }
+  if (!e.target.closest('.group-custom-select')) groupDropOpen.value = false
 }
 onMounted(async () => {
   document.addEventListener('mousedown', handleOutsideClick)
+  await Promise.allSettled([
+    loadMyRequests(),
+    disciplinesApi.getAll({ limit: 500 }).then(r => { disciplines.value = r.data.items ?? [] }).catch(() => {}),
+  ])
 
   // Пре-заполнение при переходе с RetakesPage → кнопка "Изменить"
   const retakeId = route.query.retakeId
   if (retakeId) {
     activeTab.value = 'submit'
     try {
-      const [retakeRes, discsRes] = await Promise.allSettled([
-        retakesApi.getById(retakeId),
-        disciplinesApi.getAll({ limit: 500 }),
-      ])
-      const discMap = {}
-      if (discsRes.status === 'fulfilled')
-        (discsRes.value.data.items ?? discsRes.value.data ?? [])
-          .forEach(d => { discMap[d.id] = d.name || d.code })
-
-      if (retakeRes.status === 'fulfilled') {
-        const r = retakeRes.value.data
-        const s = r.scheduled_at ? new Date(r.scheduled_at) : null
-        form.subject  = discMap[r.discipline_id] || ''
-        form.type     = r.kind === 'commission' ? 'commission' : 'normal'
-        form.date     = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
-        form.duration = r.duration_minutes || 90
-        form.building = r.building || ''
-        form.room     = r.room     || ''
-        if (s) {
-          hourDisplay.value   = String(s.getHours()).padStart(2, '0')
-          minuteDisplay.value = String(s.getMinutes()).padStart(2, '0')
-        }
-      }
+      const r = (await retakesApi.getById(retakeId)).data
+      const s = r.scheduled_at ? new Date(r.scheduled_at) : null
+      disciplineId.value = r.discipline_id || ''
+      retakeType.value   = r.kind === 'commission' ? 'commission' : 'normal'
+      retakeDate.value   = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
+      duration.value     = r.duration_minutes || 90
+      building.value     = r.building || ''
+      room.value         = r.room     || ''
+      if (s) { hourDisplay.value = String(s.getHours()).padStart(2, '0'); minuteDisplay.value = String(s.getMinutes()).padStart(2, '0') }
     } catch { /* ignore prefill errors */ }
   }
 })
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 // ── My Requests data ──────────────────────────────────────
-const myRequests = ref([])
+const myRequests    = ref([])
+const myLoading     = ref(true)
+const discMapMy     = ref({})
+
+async function loadMyRequests() {
+  myLoading.value = true
+  try {
+    const [reqRes, discsRes] = await Promise.allSettled([
+      retakeRequestsApi.listMy({ limit: 200 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+    if (discsRes.status === 'fulfilled')
+      (discsRes.value.data.items ?? []).forEach(d => { discMapMy.value[d.id] = d.name || d.code })
+    if (reqRes.status === 'fulfilled')
+      myRequests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
+  } finally {
+    myLoading.value = false
+  }
+}
 
 const statusFilter = ref('all')
 const filteredRequests = computed(() =>
@@ -79,63 +92,156 @@ const filteredRequests = computed(() =>
 )
 const pendingCount = computed(() => myRequests.value.filter(r => r.status === 'pending').length)
 
-// ── Submit form ───────────────────────────────────────────
-const form = reactive({
-  subject: '', type: 'normal', date: null, duration: 90,
-  group: '', building: '', room: '', teachers: [], students: [], description: '',
+// ── Submit form — discipline picker ───────────────────────
+const disciplines       = ref([])
+const disciplineId      = ref('')
+const discSearch        = ref('')
+const discDropdownOpen  = ref(false)
+
+const selectedDiscipline = computed(() => disciplines.value.find(d => d.id === disciplineId.value))
+const filteredDisciplines = computed(() => {
+  const q = discSearch.value.toLowerCase()
+  return q ? disciplines.value.filter(d => d.name.toLowerCase().includes(q) || (d.code||'').toLowerCase().includes(q)) : disciplines.value
 })
+function selectDiscipline(id) { disciplineId.value = id; discDropdownOpen.value = false; discSearch.value = '' }
+
+// ── Submit form — participants ────────────────────────────
+const availableStudents   = ref([])
+const availableTeachers   = ref([])
+const selectedStudents    = ref([])
+const selectedTeachers    = ref([])
+const loadingParticipants = ref(false)
+const studentSearch       = ref('')
+const teacherSearch       = ref('')
+const studentOpen         = ref(false)
+const teacherOpen         = ref(false)
+const groupSelect         = ref('')
+const groupDropOpen       = ref(false)
+let sBlur = null, tBlur = null
+
+const selectedStudentIds = computed(() => new Set(selectedStudents.value.map(s => s.id)))
+const selectedTeacherIds = computed(() => new Set(selectedTeachers.value.map(t => t.id)))
+const availableGroups    = computed(() => [...new Set(availableStudents.value.map(s => s.group).filter(Boolean))])
+
+const filteredStudents = computed(() => {
+  const q = studentSearch.value.toLowerCase()
+  return availableStudents.value
+    .filter(s => !selectedStudentIds.value.has(s.id) && (s.name.toLowerCase().includes(q) || (s.group||'').toLowerCase().includes(q)))
+    .slice(0, 8)
+})
+const filteredTeachers = computed(() => {
+  const q = teacherSearch.value.toLowerCase()
+  return availableTeachers.value
+    .filter(t => !selectedTeacherIds.value.has(t.id) && t.name.toLowerCase().includes(q))
+    .slice(0, 8)
+})
+
+watch(disciplineId, async (id) => {
+  selectedStudents.value = []; selectedTeachers.value = []; groupSelect.value = ''
+  if (!id) return
+  loadingParticipants.value = true
+  try {
+    const [studRes, teachRes, debtsRes] = await Promise.allSettled([
+      usersApi.getAll({ role: 'student', limit: 500 }),
+      usersApi.getAll({ role: 'teacher', limit: 200 }),
+      debtsApi.getAll({ limit: 500 }),
+    ])
+    const debtMap = {}
+    if (debtsRes.status === 'fulfilled')
+      for (const d of debtsRes.value.data.items ?? [])
+        if (d.discipline_id === id && d.status === 'open') debtMap[d.student_id] = d.id
+    if (studRes.status === 'fulfilled')
+      availableStudents.value = (studRes.value.data.items ?? [])
+        .filter(u => debtMap[u.id])
+        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '', debtId: debtMap[u.id] }))
+    if (teachRes.status === 'fulfilled')
+      availableTeachers.value = (teachRes.value.data.items ?? [])
+        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') }))
+  } finally { loadingParticipants.value = false }
+})
+
+function addStudent(s) { clearTimeout(sBlur); if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s); studentSearch.value = '' }
+function removeStudent(id) { selectedStudents.value = selectedStudents.value.filter(s => s.id !== id) }
+function addGroup(g) { availableStudents.value.filter(s => s.group === g && !selectedStudentIds.value.has(s.id)).forEach(s => selectedStudents.value.push(s)) }
+function onStudentEnter() { if (filteredStudents.value.length) addStudent(filteredStudents.value[0]) }
+
+function addTeacher(t) {
+  clearTimeout(tBlur)
+  if (selectedTeacherIds.value.has(t.id)) return
+  if (!isCommission.value && selectedTeachers.value.length >= 1) return
+  selectedTeachers.value.push(t); teacherSearch.value = ''
+}
+function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
+function onTeacherEnter() { if (filteredTeachers.value.length) addTeacher(filteredTeachers.value[0]) }
+
+// ── Submit form — base fields ─────────────────────────────
+const retakeType     = ref('normal')
 const typeDropdownOpen = ref(false)
-const hourDisplay      = ref('09')
-const minuteDisplay    = ref('00')
-const teacherInput     = ref('')
-const studentInput     = ref('')
-const formError        = ref('')
-const formSuccess      = ref(false)
+const hourDisplay    = ref('09')
+const minuteDisplay  = ref('00')
+const retakeDate     = ref(null)
+const duration       = ref(90)
+const building       = ref('')
+const room           = ref('')
+const description    = ref('')
+const formError      = ref('')
+const formSuccess    = ref(false)
+const formSubmitting = ref(false)
 
-const isCommission   = computed(() => form.type === 'commission')
+const isCommission   = computed(() => retakeType.value === 'commission')
 const minTeachers    = computed(() => isCommission.value ? 3 : 1)
-const teacherCountOk = computed(() => form.teachers.length >= minTeachers.value)
+const teacherCountOk = computed(() => selectedTeachers.value.length >= minTeachers.value)
 
-function selectType(val) { form.type = val; typeDropdownOpen.value = false }
-
+function selectType(val) { retakeType.value = val; typeDropdownOpen.value = false }
 function onHourBlur()   { const n = clamp(parseInt(hourDisplay.value,   10), 0, 23); hourDisplay.value   = String(n).padStart(2, '0') }
 function onMinuteBlur() { const n = clamp(parseInt(minuteDisplay.value, 10), 0, 59); minuteDisplay.value = String(n).padStart(2, '0') }
 function onTimeInput(e) { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
+function decreaseDuration() { if (duration.value > DURATION_MIN) duration.value -= DURATION_STEP }
+function increaseDuration()  { if (duration.value < DURATION_MAX) duration.value += DURATION_STEP }
+function clampDuration()     { duration.value = clamp(duration.value, DURATION_MIN, DURATION_MAX) }
 
-function decreaseDuration() { if (form.duration > DURATION_MIN) form.duration -= DURATION_STEP }
-function increaseDuration()  { if (form.duration < DURATION_MAX) form.duration += DURATION_STEP }
-function clampDuration()     { form.duration = clamp(form.duration, DURATION_MIN, DURATION_MAX) }
-
-function addTeacher()     { const n = teacherInput.value.trim(); if (!n || (!isCommission.value && form.teachers.length >= 1)) return; form.teachers.push(n); teacherInput.value = '' }
-function removeTeacher(i) { form.teachers.splice(i, 1) }
-watch(() => form.type, t => { if (t === 'normal' && form.teachers.length > 1) form.teachers.splice(1) })
-
-function addStudent()     { const n = studentInput.value.trim(); if (!n) return; form.students.push(n); studentInput.value = '' }
-function removeStudent(i) { form.students.splice(i, 1) }
+watch(isCommission, val => { if (!val && selectedTeachers.value.length > 1) selectedTeachers.value.splice(1) })
 
 function resetForm() {
-  Object.assign(form, { subject: '', type: 'normal', date: null, duration: 90, group: '', building: '', room: '', teachers: [], students: [], description: '' })
-  hourDisplay.value = '09'; minuteDisplay.value = '00'; formError.value = ''
+  disciplineId.value = ''; retakeType.value = 'normal'; retakeDate.value = null
+  duration.value = 90; building.value = ''; room.value = ''; description.value = ''
+  hourDisplay.value = '09'; minuteDisplay.value = '00'
+  selectedStudents.value = []; selectedTeachers.value = []; groupSelect.value = ''
+  formError.value = ''
 }
 
-function submitForm() {
+async function submitForm() {
   formError.value = ''
-  if (!form.subject.trim()) { formError.value = 'Укажите дисциплину'; return }
-  if (!form.date)           { formError.value = 'Укажите дату'; return }
+  if (!disciplineId.value)  { formError.value = 'Выберите дисциплину'; return }
+  if (!retakeDate.value)    { formError.value = 'Укажите дату'; return }
   if (!teacherCountOk.value) { formError.value = `Минимум ${minTeachers.value} преподавател${minTeachers.value > 1 ? 'я' : 'ь'}`; return }
 
-  const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-  myRequests.value.unshift({
-    id: Date.now(), subject: form.subject, type: form.type, date: form.date,
-    time: `${hourDisplay.value}:${minuteDisplay.value}`,
-    duration: form.duration, group: form.group, building: form.building, room: form.room,
-    teachers: [...form.teachers], students: [...form.students], description: form.description,
-    status: 'pending', submittedAt: today, rejectReason: '',
-  })
-  resetForm()
-  formSuccess.value = true
-  setTimeout(() => { formSuccess.value = false }, 2500)
-  activeTab.value = 'my-requests'
+  const [day, month, year] = retakeDate.value.split('.')
+  const scheduledAt = new Date(`${year}-${month}-${day}T${hourDisplay.value}:${minuteDisplay.value}:00`).toISOString()
+
+  formSubmitting.value = true
+  try {
+    await retakeRequestsApi.submit({
+      discipline_id:    disciplineId.value,
+      kind:             isCommission.value ? 'commission' : 'regular',
+      scheduled_at:     scheduledAt,
+      duration_minutes: duration.value,
+      building:         building.value,
+      room:             room.value,
+      notes:            description.value || undefined,
+      teacher_ids:      selectedTeachers.value.map(t => t.id),
+      student_debt_ids: selectedStudents.value.map(s => s.debtId),
+    })
+    resetForm()
+    formSuccess.value = true
+    setTimeout(() => { formSuccess.value = false }, 2500)
+    activeTab.value = 'my-requests'
+    await loadMyRequests()
+  } catch (e) {
+    formError.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка при отправке заявки'
+  } finally {
+    formSubmitting.value = false
+  }
 }
 
 // ── Edit modal ────────────────────────────────────────────
@@ -309,7 +415,23 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field" style="flex:2">
                   <label>Дисциплина</label>
-                  <input class="input" v-model="form.subject" placeholder="Название дисциплины" />
+                  <div class="picker-wrap-field">
+                    <div class="custom-select" :class="{ open: discDropdownOpen }">
+                      <button type="button" class="custom-select-trigger" @click="discDropdownOpen = !discDropdownOpen">
+                        <span :class="{ placeholder: !disciplineId }">{{ selectedDiscipline?.name || 'Выберите дисциплину' }}</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+                      </button>
+                      <div v-if="discDropdownOpen" class="custom-select-dropdown">
+                        <div class="disc-search-wrap">
+                          <input class="disc-search-input" v-model="discSearch" placeholder="Поиск…" @click.stop />
+                        </div>
+                        <button v-for="d in filteredDisciplines" :key="d.id"
+                          type="button" class="custom-select-option" :class="{ selected: disciplineId === d.id }"
+                          @click="selectDiscipline(d.id)">{{ d.name }}</button>
+                        <div v-if="!filteredDisciplines.length" class="picker-empty">Не найдено</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="field">
                   <label>Тип пересдачи</label>
@@ -350,48 +472,87 @@ function closeDetail()  { detailModal.value = null }
                 </div>
               </div>
 
+              <!-- Преподаватели — token input -->
               <div class="form-row">
-                <div class="field field--full">
-                  <label>{{ isCommission ? 'Преподаватели комиссии' : 'Преподаватель' }}</label>
-                  <div class="tags-wrap">
-                    <span v-for="(t, i) in form.teachers" :key="'t'+i" class="tag">{{ t }}<button type="button" class="tag-remove" @click="removeTeacher(i)">×</button></span>
-                    <input v-if="isCommission || form.teachers.length === 0" class="tag-input" v-model="teacherInput"
-                           :placeholder="isCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'"
-                           @keydown.enter.prevent="addTeacher" />
+                <div class="field field--full picker-wrap">
+                  <label>{{ isCommission ? 'Преподаватели комиссии (мин. 3)' : 'Преподаватель' }}</label>
+                  <div class="token-input" :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }">
+                    <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
+                      <span class="token-chip-text">{{ t.name }}</span>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
+                    </span>
+                    <input class="token-field"
+                      v-model="teacherSearch"
+                      :placeholder="selectedTeachers.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
+                      :disabled="!disciplineId || loadingParticipants"
+                      @focus="teacherOpen = true" @blur="tBlur = setTimeout(() => teacherOpen = false, 200)"
+                      @keydown.enter.prevent="onTeacherEnter"
+                    />
                   </div>
-                  <p v-if="isCommission && form.teachers.length > 0 && !teacherCountOk" class="hint-warn">Для пересдачи с комиссией необходимо минимум 3 преподавателя</p>
+                  <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
+                    <button v-for="t in filteredTeachers" :key="t.id" type="button" class="picker-option" @mousedown.prevent="addTeacher(t)">{{ t.name }}</button>
+                    <div v-if="!filteredTeachers.length" class="picker-empty">{{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}</div>
+                  </div>
+                  <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="hint-warn">Минимум 3 преподавателя для комиссии</p>
                 </div>
               </div>
 
+              <!-- Студенты + Группа — token input -->
               <div class="form-row">
-                <div class="field field--full">
+                <div class="field picker-wrap">
                   <label>Студенты</label>
-                  <div class="tags-wrap">
-                    <span v-for="(s, i) in form.students" :key="'s'+i" class="tag tag--student">{{ s }}<button type="button" class="tag-remove" @click="removeStudent(i)">×</button></span>
-                    <input class="tag-input" v-model="studentInput" placeholder="ФИО студента, затем Enter" @keydown.enter.prevent="addStudent" />
+                  <div class="token-input" :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }">
+                    <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
+                      <span class="token-chip-text">{{ s.name }}</span>
+                      <span v-if="s.group" class="token-group">· {{ s.group }}</span>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeStudent(s.id)">×</button>
+                    </span>
+                    <input class="token-field"
+                      v-model="studentSearch"
+                      :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
+                      :disabled="!disciplineId || loadingParticipants"
+                      @focus="studentOpen = true" @blur="sBlur = setTimeout(() => studentOpen = false, 200)"
+                      @keydown.enter.prevent="onStudentEnter"
+                    />
+                  </div>
+                  <div v-show="studentOpen && disciplineId" class="picker-dropdown">
+                    <button v-for="s in filteredStudents" :key="s.id" type="button" class="picker-option" @mousedown.prevent="addStudent(s)">
+                      <span>{{ s.name }}</span><span v-if="s.group" class="suggest-group">{{ s.group }}</span>
+                    </button>
+                    <div v-if="!filteredStudents.length" class="picker-empty">{{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}</div>
                   </div>
                 </div>
-              </div>
 
-              <div class="form-row">
                 <div class="field">
                   <label>Группа</label>
-                  <input class="input" v-model="form.group" placeholder="Название группы" />
+                  <div class="group-custom-select" :class="{ open: groupDropOpen }">
+                    <button type="button" class="group-select-trigger" :disabled="!availableGroups.length" @click="groupDropOpen = !groupDropOpen">
+                      <span :class="{ placeholder: !groupSelect }">{{ groupSelect || (disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину') }}</span>
+                      <svg class="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div v-show="groupDropOpen && availableGroups.length" class="group-select-dropdown">
+                      <button v-for="g in availableGroups" :key="g" type="button" class="group-select-option" :class="{ selected: groupSelect === g }" @click="groupSelect = g; groupDropOpen = false">{{ g }}</button>
+                    </div>
+                  </div>
+                  <button v-if="groupSelect" type="button" class="btn-add-group" style="margin-top:6px" @click="addGroup(groupSelect); groupSelect = ''">+ Добавить группу</button>
                 </div>
+              </div>
+
+              <div class="form-row">
                 <div class="field">
                   <label>Корпус</label>
-                  <input class="input" v-model="form.building" placeholder="№ корпуса" />
+                  <input class="input" v-model="building" placeholder="№ корпуса" />
                 </div>
                 <div class="field">
                   <label>Аудитория</label>
-                  <input class="input" v-model="form.room" placeholder="№ аудитории" />
+                  <input class="input" v-model="room" placeholder="№ аудитории" />
                 </div>
               </div>
 
               <div class="form-row">
                 <div class="field field--full">
                   <label>Описание / причина</label>
-                  <textarea class="input textarea" v-model="form.description" placeholder="Причина или дополнительные сведения…" rows="3" />
+                  <textarea class="input textarea" v-model="description" placeholder="Причина или дополнительные сведения…" rows="3" />
                 </div>
               </div>
 
@@ -401,7 +562,9 @@ function closeDetail()  { detailModal.value = null }
                 Заявка успешно подана
               </p>
 
-              <button class="btn-submit" type="submit">Отправить заявку</button>
+              <button class="btn-submit" type="submit" :disabled="formSubmitting">
+                {{ formSubmitting ? 'Отправка…' : 'Отправить заявку' }}
+              </button>
 
             </form>
           </div>
@@ -816,6 +979,82 @@ function closeDetail()  { detailModal.value = null }
 .tag-input { border: none; outline: none; flex: 1; min-width: 180px; font: 13px/1 'Inter', sans-serif; color: var(--ink); background: transparent; padding: 4px 0; }
 .tag-input::placeholder { color: #b7b9c2; }
 .hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
+
+/* ── Token input (как у декана) ── */
+.picker-wrap { position: relative; }
+.picker-wrap-field { position: relative; }
+.token-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 44px; max-height: 140px; overflow-y: auto;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 6px 10px; cursor: text;
+  transition: border-color .2s, box-shadow .2s; box-sizing: border-box;
+}
+.token-input::-webkit-scrollbar { width: 4px; }
+.token-input::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.token-input--focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.token-input--disabled { background: #f9fafb; opacity: .7; cursor: not-allowed; }
+.token-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px; border-radius: 20px;
+  background: rgba(59,63,224,.1); color: #2a2e9e;
+  font: 500 12px/1.4 'Inter', sans-serif; max-width: 200px; flex-shrink: 0;
+}
+.token-chip--student { background: rgba(16,185,129,.1); color: #065f46; }
+.token-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.token-group { opacity: .7; font-size: 11px; flex-shrink: 0; }
+.token-remove { background: none; border: none; cursor: pointer; color: inherit; font-size: 15px; line-height: 1; padding: 0 2px; opacity: .55; flex-shrink: 0; }
+.token-remove:hover { opacity: 1; }
+.token-field { flex: 1; min-width: 80px; border: none; outline: none; background: transparent; font: 13px/1 'Inter', sans-serif; color: var(--ink); padding: 3px 2px; }
+.token-field::placeholder { color: var(--ink-soft); }
+.token-field:disabled { cursor: not-allowed; }
+
+.picker-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); max-height: 220px; overflow-y: auto;
+}
+.picker-dropdown::-webkit-scrollbar { width: 4px; }
+.picker-dropdown::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.picker-option {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 9px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; gap: 8px;
+}
+.picker-option:hover { background: rgba(59,63,224,.07); }
+.picker-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.suggest-group { font-size: 11px; color: var(--ink-soft); background: rgba(59,63,224,.08); border-radius: 10px; padding: 2px 8px; }
+
+.disc-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.disc-search-input { width: 100%; border: 1.5px solid var(--line); border-radius: 8px; padding: 6px 10px; font: 13px/1 'Inter', sans-serif; outline: none; }
+.disc-search-input:focus { border-color: var(--brand); }
+
+/* ── Group custom select ── */
+.group-custom-select { position: relative; }
+.group-select-trigger {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; height: 40px; padding: 0 12px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: border-color .2s;
+}
+.group-select-trigger:disabled { opacity: .5; cursor: not-allowed; background: #f9fafb; }
+.group-custom-select.open .group-select-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.group-select-trigger .placeholder { color: var(--ink-soft); }
+.select-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; transition: transform .2s; }
+.group-custom-select.open .select-arrow { transform: rotate(180deg); }
+.group-select-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); max-height: 200px; overflow-y: auto;
+}
+.group-select-option {
+  display: block; width: 100%; text-align: left; padding: 9px 14px;
+  background: none; border: none; font: 13px/1 'Inter', sans-serif; color: var(--ink); cursor: pointer;
+}
+.group-select-option:hover { background: rgba(59,63,224,.07); }
+.group-select-option.selected { color: var(--brand); font-weight: 600; }
 
 /* ── Custom select ── */
 .custom-select { position: relative; }
