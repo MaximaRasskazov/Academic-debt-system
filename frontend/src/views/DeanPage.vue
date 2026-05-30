@@ -162,6 +162,11 @@ function onStudentEnter() {
   if (filteredStudents.value.length > 0) addStudent(filteredStudents.value[0])
 }
 
+// ── Group dropdown ────────────────────────────────────────────
+const groupDropdownOpen = ref(false)
+function selectGroup(g) { groupSelect.value = g; groupDropdownOpen.value = false }
+function handleGroupOutside(e) { if (!e.target.closest('.group-custom-select')) groupDropdownOpen.value = false }
+
 // ── Type ──────────────────────────────────────────────────────
 const typeDropdownOpen = ref(false)
 const typeOptions = [
@@ -275,6 +280,7 @@ function handleOutsideClick(e) {
     typeDropdownOpen.value = false
     discDropdownOpen.value = false
   }
+  if (!e.target.closest('.group-custom-select')) groupDropdownOpen.value = false
 }
 
 async function loadDashboard() {
@@ -533,10 +539,28 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                 <div class="field">
                   <label>Группа</label>
                   <div class="group-select-row">
-                    <select class="input" v-model="groupSelect" :disabled="!availableGroups.length">
-                      <option value="">{{ disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину' }}</option>
-                      <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
-                    </select>
+                    <div class="group-custom-select" :class="{ open: groupDropdownOpen }">
+                      <button
+                        type="button" class="group-select-trigger"
+                        :disabled="!availableGroups.length"
+                        @click="groupDropdownOpen = !groupDropdownOpen"
+                      >
+                        <span :class="{ placeholder: !groupSelect }">
+                          {{ groupSelect || (disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину') }}
+                        </span>
+                        <svg class="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                      <div v-show="groupDropdownOpen && availableGroups.length" class="group-select-dropdown">
+                        <button
+                          v-for="g in availableGroups" :key="g"
+                          type="button" class="group-select-option"
+                          :class="{ selected: groupSelect === g }"
+                          @click="selectGroup(g)"
+                        >{{ g }}</button>
+                      </div>
+                    </div>
                     <button
                       type="button" class="btn-add-group"
                       :disabled="!groupSelect"
@@ -826,7 +850,39 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 /* ── Group select row ── */
 .group-select-row { display: flex; gap: 8px; }
-.group-select-row .input { flex: 1; }
+
+.group-custom-select { position: relative; flex: 1; }
+.group-select-trigger {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; height: 40px; padding: 0 12px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; text-align: left;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.group-select-trigger:hover:not(:disabled) { border-color: #a0a3b1; }
+.group-select-trigger:disabled { opacity: .5; cursor: not-allowed; background: #f9fafb; }
+.group-custom-select.open .group-select-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.group-select-trigger .placeholder { color: var(--ink-soft); }
+.select-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; transition: transform .2s var(--ease); }
+.group-custom-select.open .select-arrow { transform: rotate(180deg); }
+
+.group-select-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
+  max-height: 200px; overflow-y: auto;
+}
+.group-select-dropdown::-webkit-scrollbar { width: 4px; }
+.group-select-dropdown::-webkit-scrollbar-track { background: transparent; }
+.group-select-dropdown::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.group-select-option {
+  display: block; width: 100%; text-align: left; padding: 9px 14px;
+  background: none; border: none; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s;
+}
+.group-select-option:hover { background: rgba(59,63,224,.07); }
+.group-select-option.selected { color: var(--brand); font-weight: 600; }
 .btn-add-group {
   height: 38px; padding: 0 14px; flex-shrink: 0;
   border: 1.5px solid var(--line); border-radius: var(--radius);
