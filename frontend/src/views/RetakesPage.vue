@@ -1,6 +1,5 @@
 <script setup>
 import { ref, computed, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
@@ -8,9 +7,11 @@ import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
 import { debtsApi } from '../api/debts'
+import { changeRequestsApi } from '../api/changeRequests'
+import VueDatePicker from '@vuepic/vue-datepicker'
+import '@vuepic/vue-datepicker/dist/main.css'
 
-const auth   = useAuthStore()
-const router = useRouter()
+const auth = useAuthStore()
 const sidebarOpen = ref(false)
 
 // ── Data ──────────────────────────────────────────────────
@@ -96,9 +97,110 @@ function fmtTime(iso) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-// ── Teacher action ────────────────────────────────────────
-function goTeacherEdit(retake) {
-  router.push({ path: '/teacher-requests', query: { retakeId: retake.id } })
+// ── Teacher: запрос изменения уже назначенной пересдачи ───────
+// По ТЗ: "Преподаватель может подать заявку на изменение времени и
+// места пересдачи... Деканат должен рассмотреть эту заявку и
+// одобрить/не одобрить её. В случае неодобрения необходимо написать
+// причину."
+//
+// Под капотом — POST /api/retake-change-requests с теми полями, что
+// препод хочет изменить. Бэк требует actor=участник этой пересдачи
+// и retake.status ∈ {scheduled, in_progress}. Декан увидит заявку
+// на /requests, таб "Изменения пересдач".
+const reqChangeOpen   = ref(false)
+const reqChangeTarget = ref(null)
+const reqChangeForm   = reactive({
+  scheduledAt: '',      // ISO без часов — отдельные поля даты+времени
+  hour:        '',
+  minute:      '',
+  duration:    '',      // строка чтобы пустое = "не меняем"
+  building:    '',
+  room:        '',
+  notes:       '',
+  reason:      '',
+})
+const reqChangeSaving  = ref(false)
+const reqChangeError   = ref('')
+const reqChangeSuccess = ref(false)
+
+function openRequestChange(retake) {
+  reqChangeTarget.value = retake
+  // НИЧЕГО не префилим — пустые поля означают "не менять". Препод
+  // заполняет только то, что хочет изменить. Так бизнес-логика
+  // соответствует семантике "requested_changes": каждое поле опционально.
+  Object.assign(reqChangeForm, {
+    scheduledAt: '', hour: '', minute: '',
+    duration: '', building: '', room: '', notes: '', reason: '',
+  })
+  reqChangeError.value = ''
+  reqChangeSuccess.value = false
+  reqChangeOpen.value = true
+}
+function closeRequestChange() {
+  reqChangeOpen.value = false
+  reqChangeTarget.value = null
+}
+
+async function submitRequestChange() {
+  reqChangeError.value = ''
+
+  // Собираем requested_changes только из непустых полей.
+  const changes = {}
+  const f = reqChangeForm
+
+  // Дата+время: если указана дата ИЛИ часы/минуты — собираем полный ISO.
+  // Если только дата без времени — берём 00:00; если только время — ошибка.
+  if (f.scheduledAt || f.hour || f.minute) {
+    if (!f.scheduledAt) {
+      reqChangeError.value = 'Укажите дату вместе с временем'
+      return
+    }
+    const hh = String(f.hour || '00').padStart(2, '0')
+    const mm = String(f.minute || '00').padStart(2, '0')
+    // scheduledAt format dd.MM.yyyy → нужен ISO. VueDatePicker model-type="format"
+    const [d, mo, y] = f.scheduledAt.split('.')
+    if (!d || !mo || !y) {
+      reqChangeError.value = 'Дата в формате дд.мм.гггг'
+      return
+    }
+    const iso = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`).toISOString()
+    changes.scheduled_at = iso
+  }
+
+  if (f.duration !== '' && f.duration != null) {
+    const d = Number(f.duration)
+    if (!Number.isInteger(d) || d <= 0) {
+      reqChangeError.value = 'Длительность должна быть положительным числом минут'
+      return
+    }
+    changes.duration_minutes = d
+  }
+
+  if (f.building.trim() !== '') changes.building = f.building.trim()
+  if (f.room.trim()     !== '') changes.room     = f.room.trim()
+  if (f.notes.trim()    !== '') changes.notes    = f.notes.trim()
+
+  if (Object.keys(changes).length === 0) {
+    reqChangeError.value = 'Укажите хотя бы одно изменение'
+    return
+  }
+
+  reqChangeSaving.value = true
+  try {
+    await changeRequestsApi.submit({
+      retake_id: reqChangeTarget.value.id,
+      requested_changes: changes,
+      reason: f.reason.trim() || undefined,
+    })
+    reqChangeSuccess.value = true
+    setTimeout(() => closeRequestChange(), 1400)
+  } catch (e) {
+    reqChangeError.value = e.response?.data?.message
+      || e.response?.data?.error
+      || 'Не удалось отправить заявку'
+  } finally {
+    reqChangeSaving.value = false
+  }
 }
 
 // ── Dean edit modal ───────────────────────────────────────
@@ -377,13 +479,14 @@ async function saveEdit() {
             <div class="card-foot">
               <span class="kind-tag">{{ KIND_LABELS[r.kind] || r.kind }}</span>
               <div class="card-actions">
-                <!-- Teacher: request edit -->
-                <button v-if="auth.isTeacher" class="btn-action" @click="goTeacherEdit(r)">
+                <!-- Teacher: запросить изменения (POST /api/retake-change-requests) -->
+                <button v-if="auth.isTeacher && r.status !== 'completed' && r.status !== 'cancelled'"
+                        class="btn-action" @click="openRequestChange(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                   </svg>
-                  Изменить
+                  Запросить изменения
                 </button>
                 <!-- Dean: direct edit -->
                 <button v-if="auth.isDean" class="btn-action" @click="openEdit(r)">
@@ -537,6 +640,116 @@ async function saveEdit() {
                   <path d="M20 6L9 17l-5-5"/>
                 </svg>
                 {{ editSaving ? 'Сохранение…' : 'Сохранить' }}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- ── Request-change modal (teacher) ── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="reqChangeOpen" class="modal-overlay" @click.self="closeRequestChange">
+          <div class="modal modal--edit">
+
+            <div class="modal-head">
+              <span class="modal-title">Запросить изменения пересдачи</span>
+              <button class="modal-close" @click="closeRequestChange" aria-label="Закрыть">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            <div class="modal-body modal-body--form">
+              <p class="hint-info">
+                Заполните только те поля, которые хотите изменить. Пустые поля останутся прежними.
+                Декан рассмотрит заявку и одобрит или отклонит её.
+              </p>
+
+              <div v-if="reqChangeTarget" class="current-info">
+                <div class="ci-row"><span class="ci-key">Сейчас:</span></div>
+                <div class="ci-row">
+                  <span class="ci-key">Дата и время</span>
+                  <span class="ci-val">{{ fmtDate(reqChangeTarget.scheduled_at) }} в {{ fmtTime(reqChangeTarget.scheduled_at) }}</span>
+                </div>
+                <div class="ci-row">
+                  <span class="ci-key">Место</span>
+                  <span class="ci-val">{{ reqChangeTarget.building || '—' }} / {{ reqChangeTarget.room || '—' }}</span>
+                </div>
+                <div class="ci-row">
+                  <span class="ci-key">Длительность</span>
+                  <span class="ci-val">{{ reqChangeTarget.duration_minutes }} мин</span>
+                </div>
+              </div>
+
+              <form class="req-form" @submit.prevent="submitRequestChange" novalidate>
+                <div class="form-row">
+                  <div class="field" style="flex:2">
+                    <label>Новая дата</label>
+                    <VueDatePicker v-model="reqChangeForm.scheduledAt" locale="ru"
+                                   format="dd.MM.yyyy" model-type="format"
+                                   :enable-time-picker="false" auto-apply
+                                   placeholder="дд.мм.гггг" />
+                  </div>
+                  <div class="field">
+                    <label>Новое время</label>
+                    <div class="time-picker">
+                      <input class="time-input" type="text" inputmode="numeric"
+                             v-model="reqChangeForm.hour" maxlength="2" placeholder="чч"
+                             @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
+                      <span class="time-colon">:</span>
+                      <input class="time-input" type="text" inputmode="numeric"
+                             v-model="reqChangeForm.minute" maxlength="2" placeholder="мм"
+                             @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="field">
+                    <label>Длительность (мин)</label>
+                    <input class="input" type="number" min="15" max="480"
+                           v-model="reqChangeForm.duration" placeholder="напр. 90" />
+                  </div>
+                  <div class="field">
+                    <label>Корпус</label>
+                    <input class="input" v-model="reqChangeForm.building" placeholder="напр. 1" />
+                  </div>
+                  <div class="field">
+                    <label>Аудитория</label>
+                    <input class="input" v-model="reqChangeForm.room" placeholder="напр. 204" />
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="field field--full">
+                    <label>Дополнительные заметки</label>
+                    <input class="input" v-model="reqChangeForm.notes" placeholder="опционально" />
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="field field--full">
+                    <label>Причина изменения</label>
+                    <textarea class="input textarea" rows="3"
+                              v-model="reqChangeForm.reason"
+                              placeholder="Объясните декану, почему нужны изменения — это поможет ему быстрее одобрить заявку" />
+                  </div>
+                </div>
+
+                <p v-if="reqChangeError" class="form-msg form-error">{{ reqChangeError }}</p>
+                <p v-if="reqChangeSuccess" class="form-msg form-success">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                  Заявка отправлена декану
+                </p>
+              </form>
+            </div>
+
+            <div class="modal-foot">
+              <button class="btn-cancel" type="button" @click="closeRequestChange">Отмена</button>
+              <button class="btn-save" type="button" :disabled="reqChangeSaving" @click="submitRequestChange">
+                {{ reqChangeSaving ? 'Отправка…' : 'Отправить заявку' }}
               </button>
             </div>
 
@@ -820,6 +1033,39 @@ async function saveEdit() {
 .stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .form-error { font: 13px/1.4 'Inter', sans-serif; color: #dc2626; margin: 0; }
+.form-msg { font: 13px/1.4 'Inter', sans-serif; margin: 0; display: flex; align-items: center; gap: 6px; }
+.form-success { color: #059669; }
+.form-success svg { width: 15px; height: 15px; }
+
+.textarea { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+.field--full { width: 100%; flex: 1 1 100%; }
+
+/* Request-change modal helpers */
+.req-form { display: flex; flex-direction: column; gap: 14px; }
+
+.hint-info {
+  background: rgba(59,63,224,.06);
+  border: 1px solid rgba(59,63,224,.18);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font: 13px/1.45 'Inter', sans-serif;
+  color: var(--brand-ink);
+  margin: 0 0 16px;
+}
+
+.current-info {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 16px;
+}
+.ci-row {
+  display: flex; gap: 14px; align-items: baseline;
+  font: 13px/1.4 'Inter', sans-serif;
+}
+.ci-key { color: var(--ink-soft); min-width: 130px; font-weight: 500; }
+.ci-val { color: var(--ink); font-weight: 600; }
 
 /* ── Modal sections (статус + участники) ── */
 .modal-section {

@@ -1,16 +1,13 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
-import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
 import { retakeRequestsApi } from '../api/retakeRequests'
 
-const route = useRoute()
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────
@@ -38,7 +35,6 @@ function clamp(val, min, max) { return Math.max(min, Math.min(max, val || min)) 
 function handleOutsideClick(e) {
   if (!e.target.closest('.custom-select')) {
     typeDropdownOpen.value = false
-    editTypeOpen.value     = false
     discDropdownOpen.value = false
   }
   if (!e.target.closest('.group-custom-select')) groupDropOpen.value = false
@@ -56,23 +52,6 @@ onMounted(async () => {
     loadMyRequests(),
     disciplinesApi.getAll({ limit: 500 }).then(r => { disciplines.value = r.data.items ?? [] }).catch(() => {}),
   ])
-
-  // Пре-заполнение при переходе с RetakesPage → кнопка "Изменить"
-  const retakeId = route.query.retakeId
-  if (retakeId) {
-    activeTab.value = 'submit'
-    try {
-      const r = (await retakesApi.getById(retakeId)).data
-      const s = r.scheduled_at ? new Date(r.scheduled_at) : null
-      disciplineId.value = r.discipline_id || ''
-      retakeType.value   = r.kind === 'commission' ? 'commission' : 'normal'
-      retakeDate.value   = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
-      duration.value     = r.duration_minutes || 90
-      building.value     = r.building || ''
-      room.value         = r.room     || ''
-      if (s) { hourDisplay.value = String(s.getHours()).padStart(2, '0'); minuteDisplay.value = String(s.getMinutes()).padStart(2, '0') }
-    } catch { /* ignore prefill errors */ }
-  }
 })
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
@@ -310,74 +289,12 @@ async function submitForm() {
   }
 }
 
-// ── Edit modal ────────────────────────────────────────────
-const editOpen  = ref(false)
-const editId    = ref(null)
-const editForm  = reactive({
-  subject: '', type: 'normal', date: null, duration: 90,
-  group: '', building: '', room: '', teachers: [], students: [], description: '',
-})
-const editTypeOpen     = ref(false)
-const editHour         = ref('09')
-const editMinute       = ref('00')
-const editTeacherInput = ref('')
-const editStudentInput = ref('')
-const editFormError    = ref('')
-
-const editIsCommission   = computed(() => editForm.type === 'commission')
-const editMinTeachers    = computed(() => editIsCommission.value ? 3 : 1)
-const editTeacherCountOk = computed(() => editForm.teachers.length >= editMinTeachers.value)
-
-function selectEditType(val) { editForm.type = val; editTypeOpen.value = false }
-
-function onEditHourBlur()   { const n = clamp(parseInt(editHour.value,   10), 0, 23); editHour.value   = String(n).padStart(2, '0') }
-function onEditMinuteBlur() { const n = clamp(parseInt(editMinute.value, 10), 0, 59); editMinute.value = String(n).padStart(2, '0') }
-
-function editDecreaseDuration() { if (editForm.duration > DURATION_MIN) editForm.duration -= DURATION_STEP }
-function editIncreaseDuration()  { if (editForm.duration < DURATION_MAX) editForm.duration += DURATION_STEP }
-function editClampDuration()     { editForm.duration = clamp(editForm.duration, DURATION_MIN, DURATION_MAX) }
-
-function addEditTeacher()     { const n = editTeacherInput.value.trim(); if (!n || (!editIsCommission.value && editForm.teachers.length >= 1)) return; editForm.teachers.push(n); editTeacherInput.value = '' }
-function removeEditTeacher(i) { editForm.teachers.splice(i, 1) }
-watch(() => editForm.type, t => { if (t === 'normal' && editForm.teachers.length > 1) editForm.teachers.splice(1) })
-
-function addEditStudent()     { const n = editStudentInput.value.trim(); if (!n) return; editForm.students.push(n); editStudentInput.value = '' }
-function removeEditStudent(i) { editForm.students.splice(i, 1) }
-
-function openEditModal(r) {
-  editId.value = r.id
-  const p = r.payload || {}
-  const s = p.scheduled_at ? new Date(p.scheduled_at) : null
-  Object.assign(editForm, {
-    subject: discMapMy.value[p.discipline_id] || '', type: p.kind === 'commission' ? 'commission' : 'normal',
-    date: s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null,
-    duration: p.duration_minutes || 90, group: '', building: p.building || '', room: p.room || '',
-    teachers: [], students: [], description: p.notes || '',
-  })
-  editHour.value   = s ? String(s.getHours()).padStart(2, '0') : '09'
-  editMinute.value = s ? String(s.getMinutes()).padStart(2, '0') : '00'
-  editFormError.value = ''; editOpen.value = true
-}
-function closeEditModal() { editOpen.value = false }
-
-function saveEdit() {
-  editFormError.value = ''
-  if (!editForm.subject.trim()) { editFormError.value = 'Укажите дисциплину'; return }
-  if (!editForm.date)           { editFormError.value = 'Укажите дату'; return }
-  if (!editTeacherCountOk.value) { editFormError.value = `Минимум ${editMinTeachers.value} преподавател${editMinTeachers.value > 1 ? 'я' : 'ь'}`; return }
-
-  const idx = myRequests.value.findIndex(r => r.id === editId.value)
-  if (idx !== -1) {
-    Object.assign(myRequests.value[idx], {
-      subject: editForm.subject, type: editForm.type, date: editForm.date,
-      time: `${editHour.value}:${editMinute.value}`,
-      duration: editForm.duration, group: editForm.group, building: editForm.building,
-      room: editForm.room, teachers: [...editForm.teachers], students: [...editForm.students],
-      description: editForm.description, status: 'pending',
-    })
-  }
-  closeEditModal()
-}
+// Edit-модалка удалена сознательно. По ТЗ редактировать заявку на
+// СОЗДАНИЕ пересдачи нельзя — изменения УЖЕ НАЗНАЧЕННОЙ пересдачи
+// идут через отдельный flow «заявка на изменение» (см.
+// /api/retake-change-requests, кнопка «Запросить изменения» на
+// /retakes). Pending-заявка живёт максимум до решения декана; если
+// препод передумал — он может подать новую вместо неё.
 
 // ── Detail modal ──────────────────────────────────────────
 const detailModal = ref(null)
@@ -463,7 +380,6 @@ function closeDetail()  { detailModal.value = null }
                     <td>
                       <div class="action-btns">
                         <button class="btn-sm btn-outline" @click="openDetail(r)">Подробнее</button>
-                        <button class="btn-sm btn-primary" @click="openEditModal(r)">Изменить</button>
                       </div>
                     </td>
                   </tr>
@@ -736,131 +652,6 @@ function closeDetail()  { detailModal.value = null }
 
             <div class="modal-foot">
               <button class="btn-outline" @click="closeDetail">Закрыть</button>
-              <button class="btn-primary" @click="() => { const r = detailModal; closeDetail(); openEditModal(r) }">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                Изменить заявку
-              </button>
-            </div>
-
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <!-- ── Edit modal ── -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div v-if="editOpen" class="modal-overlay" @click.self="closeEditModal">
-          <div class="modal modal--edit">
-
-            <div class="modal-head">
-              <span class="modal-title">Редактировать заявку</span>
-              <button class="modal-close" @click="closeEditModal" aria-label="Закрыть">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-
-            <div class="modal-body modal-body--form">
-              <form class="retake-form" @submit.prevent="saveEdit" novalidate>
-
-                <div class="form-row">
-                  <div class="field" style="flex:2">
-                    <label>Дисциплина</label>
-                    <input class="input" v-model="editForm.subject" placeholder="Название дисциплины" />
-                  </div>
-                  <div class="field">
-                    <label>Тип пересдачи</label>
-                    <div class="custom-select" :class="{ open: editTypeOpen }">
-                      <button type="button" class="custom-select-trigger" @click="editTypeOpen = !editTypeOpen">
-                        <span>{{ typeOptions.find(o => o.value === editForm.type)?.label }}</span>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                      </button>
-                      <div class="custom-select-dropdown">
-                        <button v-for="opt in typeOptions" :key="opt.value" type="button" class="custom-select-option" :class="{ selected: editForm.type === opt.value }" @click="selectEditType(opt.value)">
-                          {{ opt.label }}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field" style="flex:2">
-                    <label>Дата</label>
-                    <VueDatePicker v-model="editForm.date" locale="ru" format="dd.MM.yyyy" model-type="format" :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг" />
-                  </div>
-                  <div class="field field--shrink">
-                    <label>Время</label>
-                    <div class="time-picker">
-                      <input class="time-input" type="text" inputmode="numeric" v-model="editHour"   maxlength="2" placeholder="00" @input="onTimeInput" @blur="onEditHourBlur" />
-                      <span class="time-colon">:</span>
-                      <input class="time-input" type="text" inputmode="numeric" v-model="editMinute" maxlength="2" placeholder="00" @input="onTimeInput" @blur="onEditMinuteBlur" />
-                    </div>
-                  </div>
-                  <div class="field">
-                    <label>Длительность (мин)</label>
-                    <div class="stepper">
-                      <button type="button" class="stepper-btn" @click="editDecreaseDuration" :disabled="editForm.duration <= DURATION_MIN">−</button>
-                      <input class="stepper-input" type="number" v-model.number="editForm.duration" min="15" max="480" @blur="editClampDuration" />
-                      <button type="button" class="stepper-btn" @click="editIncreaseDuration"  :disabled="editForm.duration >= DURATION_MAX">+</button>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field field--full">
-                    <label>{{ editIsCommission ? 'Преподаватели' : 'Преподаватель' }}</label>
-                    <div class="tags-wrap">
-                      <span v-for="(t, i) in editForm.teachers" :key="'et'+i" class="tag">{{ t }}<button type="button" class="tag-remove" @click="removeEditTeacher(i)">×</button></span>
-                      <input v-if="editIsCommission || editForm.teachers.length === 0" class="tag-input" v-model="editTeacherInput" :placeholder="editIsCommission ? 'ФИО преподавателя, затем Enter' : 'ФИО преподавателя'" @keydown.enter.prevent="addEditTeacher" />
-                    </div>
-                    <p v-if="editIsCommission && editForm.teachers.length > 0 && !editTeacherCountOk" class="hint-warn">Минимум 3 преподавателя для комиссии</p>
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field field--full">
-                    <label>Студенты</label>
-                    <div class="tags-wrap">
-                      <span v-for="(s, i) in editForm.students" :key="'es'+i" class="tag tag--student">{{ s }}<button type="button" class="tag-remove" @click="removeEditStudent(i)">×</button></span>
-                      <input class="tag-input" v-model="editStudentInput" placeholder="ФИО студента, затем Enter" @keydown.enter.prevent="addEditStudent" />
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field">
-                    <label>Группа</label>
-                    <input class="input" v-model="editForm.group" placeholder="Название группы" />
-                  </div>
-                  <div class="field">
-                    <label>Корпус</label>
-                    <input class="input" v-model="editForm.building" placeholder="№ корпуса" />
-                  </div>
-                  <div class="field">
-                    <label>Аудитория</label>
-                    <input class="input" v-model="editForm.room" placeholder="№ аудитории" />
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field field--full">
-                    <label>Описание</label>
-                    <textarea class="input textarea" v-model="editForm.description" placeholder="Причина или дополнительные сведения..." rows="3" />
-                  </div>
-                </div>
-
-                <p v-if="editFormError" class="form-msg form-error">{{ editFormError }}</p>
-
-              </form>
-            </div>
-
-            <div class="modal-foot">
-              <button class="btn-outline" type="button" @click="closeEditModal">Отмена</button>
-              <button class="btn-primary" type="button" @click="saveEdit">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
-                Сохранить изменения
-              </button>
             </div>
 
           </div>
