@@ -41,7 +41,10 @@ COPY --from=builder /go/bin/goose /usr/local/bin/goose
 COPY sql/migrations /app/sql/migrations
 COPY sql/seeds /app/sql/seeds
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Windows-разработчики коммитят .sh с CRLF — alpine /bin/sh падает с
+# "exec format error" на \r в shebang. Срезаем \r и даём +x.
+# Это безопасно для LF-файлов: sed просто ничего не найдёт.
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 USER app
 

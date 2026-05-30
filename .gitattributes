@@ -1,0 +1,34 @@
+# Принудительный LF для shell-скриптов, чтобы Windows-разработчики не
+# коммитили CRLF (alpine /bin/sh падает с "exec format error" на \r в
+# shebang). После добавления этого файла Windows-юзеру нужно один раз:
+#   git rm --cached -r .
+#   git reset --hard
+# чтобы git перечитал eol-настройки.
+#
+# В Dockerfile дополнительно есть `sed -i 's/\r$//' entrypoint.sh` —
+# двойная страховка, если кто-то закоммитил CRLF до этого хука.
+
+*.sh           text eol=lf
+Dockerfile     text eol=lf
+entrypoint.sh  text eol=lf
+
+# SQL-миграции и сиды goose читает через psql / pgx — оба переносят CRLF,
+# но для единообразия тоже LF.
+*.sql          text eol=lf
+
+# Go-исходники — gofmt всегда LF, фиксируем.
+*.go           text eol=lf
+
+# Vue / JS / JSON / YAML — LF, как обычно во фронт-стэках.
+*.vue          text eol=lf
+*.js           text eol=lf
+*.json         text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.md           text eol=lf
+
+# Бинарные ассеты — не трогаем.
+*.png          binary
+*.jpg          binary
+*.svg          text eol=lf
+*.ico          binary
