@@ -434,20 +434,23 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field" style="flex:2">
                   <label>Дисциплина</label>
-                  <div class="picker-wrap-field">
-                    <div class="custom-select" :class="{ open: discDropdownOpen }">
-                      <button type="button" class="custom-select-trigger" @click="discDropdownOpen = !discDropdownOpen">
-                        <span :class="{ placeholder: !disciplineId }">{{ selectedDiscipline?.name || 'Выберите дисциплину' }}</span>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                      </button>
-                      <div v-if="discDropdownOpen" class="custom-select-dropdown">
-                        <div class="disc-search-wrap">
-                          <input class="disc-search-input" v-model="discSearch" placeholder="Поиск…" @click.stop />
-                        </div>
+                  <div class="custom-select" :class="{ open: discDropdownOpen }">
+                    <button type="button" class="custom-select-trigger" @click="discDropdownOpen = !discDropdownOpen">
+                      <span :class="{ placeholder: !disciplineId }">{{ selectedDiscipline?.name || 'Выберите дисциплину' }}</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    <div class="custom-select-dropdown">
+                      <div class="dropdown-search-wrap">
+                        <input class="dropdown-search" v-model="discSearch" placeholder="Поиск..." @click.stop />
+                      </div>
+                      <div class="dropdown-scroll">
                         <button v-for="d in filteredDisciplines" :key="d.id"
                           type="button" class="custom-select-option" :class="{ selected: disciplineId === d.id }"
-                          @click="selectDiscipline(d.id)">{{ d.name }}</button>
-                        <div v-if="!filteredDisciplines.length" class="picker-empty">Не найдено</div>
+                          @click="selectDiscipline(d.id)">
+                          <span class="disc-name">{{ d.name }}</span>
+                          <span class="disc-code">{{ d.code }}</span>
+                        </button>
+                        <div v-if="!filteredDisciplines.length" class="dropdown-empty">Ничего не найдено</div>
                       </div>
                     </div>
                   </div>
@@ -1045,9 +1048,22 @@ function closeDetail()  { detailModal.value = null }
 .picker-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .suggest-group { font-size: 11px; color: var(--ink-soft); background: rgba(59,63,224,.08); border-radius: 10px; padding: 2px 8px; }
 
-.disc-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--line); }
-.disc-search-input { width: 100%; border: 1.5px solid var(--line); border-radius: 8px; padding: 6px 10px; font: 13px/1 'Inter', sans-serif; outline: none; }
-.disc-search-input:focus { border-color: var(--brand); }
+/* Поиск + скролл в дропдауне дисциплин — идентично странице декана */
+.dropdown-search-wrap { padding: 8px 8px 4px; border-bottom: 1px solid var(--line); }
+.dropdown-search {
+  width: 100%; height: 30px; border: 1.5px solid var(--line); border-radius: 6px;
+  padding: 0 10px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  outline: none; background: #fff;
+}
+.dropdown-search:focus { border-color: var(--brand); }
+.dropdown-scroll { max-height: 240px; overflow-y: auto; }
+.dropdown-scroll::-webkit-scrollbar { width: 4px; }
+.dropdown-scroll::-webkit-scrollbar-track { background: transparent; }
+.dropdown-scroll::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.dropdown-scroll::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
+.dropdown-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.disc-name { flex: 1; }
+.disc-code { font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
 
 /* ── Group custom select ── */
 .group-custom-select { position: relative; }
@@ -1097,7 +1113,12 @@ function closeDetail()  { detailModal.value = null }
   transition: opacity .15s var(--ease), transform .15s var(--ease);
 }
 .custom-select.open .custom-select-dropdown { opacity: 1; pointer-events: all; transform: translateY(0); }
-.custom-select-option { display: block; width: 100%; text-align: left; background: none; border: none; padding: 10px 14px; font: 13px/1.4 'Inter', sans-serif; color: var(--ink); cursor: pointer; transition: background .12s; }
+.custom-select-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 9px 14px; font: 13px/1.4 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s;
+}
 .custom-select-option:hover { background: rgba(59,63,224,.06); }
 .custom-select-option.selected { color: var(--brand); font-weight: 500; background: rgba(59,63,224,.05); }
 
