@@ -33,7 +33,7 @@ func testServices(t *testing.T) (*repo.Store, *auth.Service) {
 
 	store := repo.NewStore(pool)
 	tokens := token.New(store, secret, 15*time.Minute, 7*24*time.Hour)
-	return store, auth.New(store, tokens)
+	return store, auth.New(store, tokens, nil)
 }
 
 // uniqueRegisterInput возвращает RegisterInput с уникальным email,

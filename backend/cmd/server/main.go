@@ -73,9 +73,16 @@ func run() error {
 	defer pool.Close()
 	slog.Info("database connected", "host", cfg.DBHost, "db", cfg.DBName)
 
+	// Клиент эмулятора создаём один раз и переиспользуем в auth (proxy-login)
+	// и sync. Если EMULATOR_URL пуст — клиент nil, эмулятор-логин отключён.
+	var emulatorClient *emulator.Client
+	if cfg.EmulatorURL != "" {
+		emulatorClient = emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
+	}
+
 	store := repo.NewStore(pool)
 	tokens := token.New(store, []byte(cfg.JWTSecret), cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
-	authSvc := auth.New(store, tokens)
+	authSvc := auth.New(store, tokens, emulatorClient)
 	rbacSvc := rbac.New(store)
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
@@ -123,7 +130,6 @@ func run() error {
 		// pgutil.PgUUID превращает uuid.Nil в NULL — нельзя использовать
 		// для системного пользователя, чей UUID намеренно равен нулевому.
 		systemUserID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000000"), Valid: true}
-		emulatorClient := emulator.New(cfg.EmulatorURL, cfg.EmulatorAPIKey)
 		syncSvc = syncsvc.New(store, emulatorClient, systemUserID)
 
 		syncCtx, syncCancel := context.WithCancel(context.Background())

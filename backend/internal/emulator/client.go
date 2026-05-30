@@ -5,6 +5,7 @@
 package emulator
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -314,3 +315,69 @@ var ErrNotFound = fmt.Errorf("emulator: не найдено")
 // retry. Sync-сервис должен ловить эту ошибку и НЕ сдвигать
 // last_synced_at, чтобы при следующем тике эти change'ы пришли снова.
 var ErrRateLimited = fmt.Errorf("emulator: rate limited (429)")
+
+// authCheckRequest — тело POST /api/v1/auth/check.
+type authCheckRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// authCheckResponse — успешный ответ auth/check (200).
+// Нас интересует только подтверждение и external_id для связки
+// с локальной записью пользователя.
+type authCheckResponse struct {
+	Success bool `json:"success"`
+	Account struct {
+		ExternalID string `json:"external_id"`
+		Email      string `json:"email"`
+		Role       string `json:"role"`
+	} `json:"account"`
+}
+
+// ErrAuthInvalid возвращается, когда эмулятор ответил 401 —
+// учётные данные неверны. Отличается от ErrRateLimited и сетевых
+// ошибок, чтобы auth-слой мог различить «неверный пароль» и
+// «эмулятор недоступен».
+var ErrAuthInvalid = fmt.Errorf("emulator: неверные учётные данные")
+
+// AuthCheck проверяет email+password на стороне эмулятора.
+// Возвращает external_id подтверждённого аккаунта при успехе,
+// ErrAuthInvalid при 401, или сетевую/прочую ошибку если эмулятор
+// недоступен (auth-слой трактует это как «сервис деканата лёг»).
+func (c *Client) AuthCheck(ctx context.Context, email, password string) (string, error) {
+	body, err := json.Marshal(authCheckRequest{Email: email, Password: password})
+	if err != nil {
+		return "", fmt.Errorf("marshal auth check: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base+"/api/v1/auth/check", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build auth check request: %w", err)
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("do auth check: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", ErrAuthInvalid
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("auth check: эмулятор ответил %d", resp.StatusCode)
+	}
+
+	var out authCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode auth check: %w", err)
+	}
+	if !out.Success || out.Account.ExternalID == "" {
+		return "", ErrAuthInvalid
+	}
+	return out.Account.ExternalID, nil
+}

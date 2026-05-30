@@ -53,7 +53,7 @@ func setup(t *testing.T) *fixture {
 	return &fixture{
 		store: store,
 		users: user.New(store),
-		auth:  auth.New(store, tokens),
+		auth:  auth.New(store, tokens, nil),
 	}
 }
 
