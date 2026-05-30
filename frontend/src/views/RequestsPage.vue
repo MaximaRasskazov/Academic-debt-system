@@ -3,61 +3,57 @@ import { ref, computed, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { changeRequestsApi } from '../api/changeRequests'
+import { teacherRequestsApi } from '../api/teacherRequests'
+import { retakeRequestsApi } from '../api/retakeRequests'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
 
 const sidebarOpen = ref(false)
 
-// ── Data ──────────────────────────────────────────────────
-const requests  = ref([])
-const retakeMap = ref({})
-const discMap   = ref({})
+// ── Tabs ──────────────────────────────────────────────────────
+// role   — заявки на повышение до teacher
+// change — заявки на изменение существующих пересдач
+// create — заявки преподавателей на создание новой пересдачи
+const activeTab = ref('role')
+
+// ── Shared dictionaries ───────────────────────────────────────
 const userMap   = ref({})
-const loading   = ref(true)
-const loadErr   = ref('')
+const discMap   = ref({})
+const retakeMap = ref({})
 
-onMounted(async () => {
-  try {
-    const [reqRes, retakesRes, discsRes, usersRes] = await Promise.allSettled([
-      changeRequestsApi.getAll({ limit: 200 }),
-      retakesApi.getAll({ limit: 500 }),
-      disciplinesApi.getAll({ limit: 500 }),
-      usersApi.getAll({ limit: 200 }),
-    ])
+// ── Tab 1: teacher-role-requests ──────────────────────────────
+const roleRequests   = ref([])
+const roleLoading    = ref(true)
+const roleErr        = ref('')
 
-    if (discsRes.status === 'fulfilled')
-      (discsRes.value.data.items ?? discsRes.value.data ?? [])
-        .forEach(d => { discMap.value[d.id] = d.name || d.code })
+// ── Tab 2: retake-change-requests ─────────────────────────────
+const changeRequests = ref([])
+const changeLoading  = ref(true)
+const changeErr      = ref('')
 
-    if (retakesRes.status === 'fulfilled')
-      (retakesRes.value.data.items ?? retakesRes.value.data ?? [])
-        .forEach(r => { retakeMap.value[r.id] = r })
+// ── Tab 3: retake-requests (создание пересдачи) ───────────────
+const createRequests = ref([])
+const createLoading  = ref(true)
+const createErr      = ref('')
 
-    if (usersRes.status === 'fulfilled')
-      (usersRes.value.data.items ?? usersRes.value.data ?? [])
-        .forEach(u => {
-          userMap.value[u.id] = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email
-        })
-
-    if (reqRes.status === 'fulfilled')
-      requests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
-    else
-      loadErr.value = 'Не удалось загрузить заявки'
-  } finally {
-    loading.value = false
-  }
-})
-
-// ── Helpers ───────────────────────────────────────────────
-function disciplineName(r) {
-  const retake = retakeMap.value[r.retake_id]
+// ── Helpers ───────────────────────────────────────────────────
+function userFio(id) {
+  if (!id) return '—'
+  return userMap.value[id] || `id:${String(id).slice(0, 8)}…`
+}
+function userEmail(id) {
+  if (!id) return ''
+  return userMap.value[`${id}__email`] || ''
+}
+function disciplineName(retakeId) {
+  const retake = retakeMap.value[retakeId]
   return retake ? (discMap.value[retake.discipline_id] || 'Дисциплина') : '—'
 }
-function retakeDate(r) {
-  const retake = retakeMap.value[r.retake_id]
-  if (!retake?.scheduled_at) return '—'
-  return new Date(retake.scheduled_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+function retakeScheduled(retakeId) {
+  const retake = retakeMap.value[retakeId]
+  if (!retake?.scheduled_at) return null
+  return retake.scheduled_at
 }
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -66,52 +62,263 @@ function fmtDate(iso) {
 function fmtTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+function fmtDateTime(iso) {
+  if (!iso) return '—'
+  return `${fmtDate(iso)} ${fmtTime(iso)}`
 }
 
-function changesSummary(r) {
-  const c = r.requested_changes || {}
-  const parts = []
-  if (c.scheduled_at)     parts.push(`Дата: ${fmtDate(c.scheduled_at)} ${fmtTime(c.scheduled_at)}`)
-  if (c.building)         parts.push(`Корпус: ${c.building}`)
-  if (c.room)             parts.push(`Ауд.: ${c.room}`)
-  if (c.duration_minutes) parts.push(`Длит.: ${c.duration_minutes} мин`)
-  if (c.notes)            parts.push(`Заметки: ${c.notes}`)
-  return parts.join(' · ') || '—'
+// Сводка по предлагаемым изменениям и снапшот текущего расписания пересдачи.
+// На бэке поля requested_changes: scheduled_at | duration_minutes | building | room | notes
+function changeFieldRows(req) {
+  const proposed = req.requested_changes || {}
+  const retake   = retakeMap.value[req.retake_id] || {}
+
+  // Каждая строка — пара "было → стало". Показываем только поля, которые
+  // реально меняются (есть в requested_changes).
+  const rows = []
+  if (proposed.scheduled_at) {
+    rows.push({
+      label: 'Дата и время',
+      from: fmtDateTime(retake.scheduled_at),
+      to:   fmtDateTime(proposed.scheduled_at),
+    })
+  }
+  if (proposed.duration_minutes != null) {
+    rows.push({
+      label: 'Длительность',
+      from: retake.duration_minutes ? `${retake.duration_minutes} мин` : '—',
+      to:   `${proposed.duration_minutes} мин`,
+    })
+  }
+  if (proposed.building != null) {
+    rows.push({ label: 'Корпус',    from: retake.building || '—', to: proposed.building || '—' })
+  }
+  if (proposed.room != null) {
+    rows.push({ label: 'Аудитория', from: retake.room     || '—', to: proposed.room     || '—' })
+  }
+  if (proposed.notes != null) {
+    rows.push({ label: 'Заметки',   from: retake.notes    || '—', to: proposed.notes    || '—' })
+  }
+  return rows
 }
 
-// ── Approve ───────────────────────────────────────────────
+// ── Counts для badge'ей ───────────────────────────────────────
+const roleCount   = computed(() => roleRequests.value.length)
+const changeCount = computed(() => changeRequests.value.length)
+const createCount = computed(() => createRequests.value.length)
+
+// ── Loaders ───────────────────────────────────────────────────
+async function loadRoleTab() {
+  roleLoading.value = true
+  roleErr.value = ''
+  try {
+    // teacherRequestsApi.listPending() возвращает массив TeacherRequestResponse.
+    const list = await teacherRequestsApi.listPending()
+    roleRequests.value = Array.isArray(list) ? list : (list?.items ?? [])
+  } catch (e) {
+    roleErr.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось загрузить заявки'
+  } finally {
+    roleLoading.value = false
+  }
+}
+
+async function loadChangeTab() {
+  changeLoading.value = true
+  changeErr.value = ''
+  try {
+    const [reqRes, retakesRes, discsRes] = await Promise.allSettled([
+      changeRequestsApi.getAll({ limit: 200 }),
+      retakesApi.getAll({ limit: 500 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+
+    if (discsRes.status === 'fulfilled') {
+      (discsRes.value.data.items ?? discsRes.value.data ?? [])
+        .forEach((d) => { discMap.value[d.id] = d.name || d.code })
+    }
+    if (retakesRes.status === 'fulfilled') {
+      (retakesRes.value.data.items ?? retakesRes.value.data ?? [])
+        .forEach((r) => { retakeMap.value[r.id] = r })
+    }
+    if (reqRes.status === 'fulfilled') {
+      changeRequests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
+    } else {
+      changeErr.value = 'Не удалось загрузить заявки на изменение'
+    }
+  } finally {
+    changeLoading.value = false
+  }
+}
+
+async function loadCreateTab() {
+  createLoading.value = true
+  createErr.value = ''
+  try {
+    // discipline + disciplines уже могут быть загружены табом 'change',
+    // но если пользователь сразу попал на 'create' — догружаем.
+    const [reqRes, discsRes] = await Promise.allSettled([
+      retakeRequestsApi.getAll({ limit: 200 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+    if (discsRes.status === 'fulfilled') {
+      (discsRes.value.data.items ?? discsRes.value.data ?? [])
+        .forEach((d) => { discMap.value[d.id] = d.name || d.code })
+    }
+    if (reqRes.status === 'fulfilled') {
+      createRequests.value = reqRes.value.data.items ?? reqRes.value.data ?? []
+    } else {
+      createErr.value = 'Не удалось загрузить заявки на пересдачи'
+    }
+  } finally {
+    createLoading.value = false
+  }
+}
+
+// Форматирование payload заявки на создание для отображения карточки.
+// payload — JSONB с полями, которые описал преподаватель.
+function createFieldRows(req) {
+  const p = req.payload || {}
+  const rows = []
+  const kindLabel = p.kind === 'commission' ? 'Комиссия' : 'Обычная'
+  rows.push({ label: 'Тип', value: kindLabel })
+  if (p.scheduled_at) {
+    rows.push({ label: 'Дата и время', value: fmtDateTime(p.scheduled_at) })
+  }
+  if (p.duration_minutes) {
+    rows.push({ label: 'Длительность', value: `${p.duration_minutes} мин` })
+  }
+  if (p.building || p.room) {
+    rows.push({ label: 'Место', value: `${p.building || '—'} / ${p.room || '—'}` })
+  }
+  const studentCount = (p.student_debt_ids || []).length
+  const teacherCount = (p.teacher_ids || []).length
+  if (teacherCount) {
+    rows.push({ label: p.kind === 'commission' ? 'Комиссия' : 'Преподаватель', value: `${teacherCount} чел.` })
+  }
+  if (studentCount) {
+    rows.push({ label: 'Студенты', value: `${studentCount} чел.` })
+  }
+  if (p.notes) {
+    rows.push({ label: 'Заметки', value: p.notes })
+  }
+  return rows
+}
+
+async function loadUsers() {
+  try {
+    const res = await usersApi.getAll({ limit: 500 })
+    const list = res.data.items ?? res.data ?? []
+    list.forEach((u) => {
+      const fio = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email
+      userMap.value[u.id] = fio
+      userMap.value[`${u.id}__email`] = u.email
+    })
+  } catch { /* ФИО не критично — покажем id-обрезок */ }
+}
+
+onMounted(async () => {
+  // Юзеры нужны для ФИО в обоих табах — грузим один раз.
+  await loadUsers()
+  // Параллельно тянем обе вкладки — badge'и должны быть видны сразу,
+  // даже если активен только один таб.
+  loadRoleTab()
+  loadChangeTab()
+  loadCreateTab()
+})
+
+// ── Approve / Reject: общий confirm-flow ──────────────────────
 const approving  = ref(null)
 
-async function doApprove(r) {
+async function approveRole(r) {
+  approving.value = r.id
+  try {
+    await teacherRequestsApi.approve(r.id)
+    roleRequests.value = roleRequests.value.filter((x) => x.id !== r.id)
+  } catch (e) {
+    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+  } finally { approving.value = null }
+}
+
+async function approveChange(r) {
   approving.value = r.id
   try {
     await changeRequestsApi.approve(r.id)
-    requests.value = requests.value.filter(req => req.id !== r.id)
-  } catch { /* silent — row stays, user can retry */ }
-  finally { approving.value = null }
+    changeRequests.value = changeRequests.value.filter((x) => x.id !== r.id)
+  } catch (e) {
+    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+  } finally { approving.value = null }
 }
 
-// ── Reject modal ──────────────────────────────────────────
+async function approveCreate(r) {
+  approving.value = r.id
+  try {
+    await retakeRequestsApi.approve(r.id)
+    createRequests.value = createRequests.value.filter((x) => x.id !== r.id)
+  } catch (e) {
+    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+  } finally { approving.value = null }
+}
+
+// ── Reject modal ──────────────────────────────────────────────
+// Один модал на оба таба. kind = 'role' | 'change' определяет
+// какой API-метод дёргать и какой список фильтровать на success.
 const rejectModal  = ref(null)
+const rejectKind   = ref(null)
 const rejectReason = ref('')
 const rejecting    = ref(false)
 const rejectErr    = ref('')
 
-function openReject(r)  { rejectModal.value = r; rejectReason.value = ''; rejectErr.value = '' }
-function closeReject()  { rejectModal.value = null }
+function openReject(r, kind) {
+  rejectModal.value  = r
+  rejectKind.value   = kind
+  rejectReason.value = ''
+  rejectErr.value    = ''
+}
+function closeReject() { rejectModal.value = null; rejectKind.value = null }
 
 async function doReject() {
-  if (!rejectReason.value.trim()) { rejectErr.value = 'Укажите причину отклонения'; return }
+  const reason = rejectReason.value.trim()
+  if (!reason) { rejectErr.value = 'Укажите причину отклонения'; return }
   rejecting.value = true; rejectErr.value = ''
   try {
-    await changeRequestsApi.reject(rejectModal.value.id, rejectReason.value.trim())
-    requests.value = requests.value.filter(r => r.id !== rejectModal.value.id)
+    const id = rejectModal.value.id
+    if (rejectKind.value === 'role') {
+      await teacherRequestsApi.reject(id, reason)
+      roleRequests.value = roleRequests.value.filter((x) => x.id !== id)
+    } else if (rejectKind.value === 'create') {
+      await retakeRequestsApi.reject(id, reason)
+      createRequests.value = createRequests.value.filter((x) => x.id !== id)
+    } else {
+      await changeRequestsApi.reject(id, reason)
+      changeRequests.value = changeRequests.value.filter((x) => x.id !== id)
+    }
     closeReject()
   } catch (e) {
     rejectErr.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка'
   } finally { rejecting.value = false }
 }
+
+// Подсказка для отклонения — в reject-модалке.
+const rejectTitle = computed(() => {
+  switch (rejectKind.value) {
+    case 'role':   return 'Отклонить заявку на роль'
+    case 'create': return 'Отклонить заявку на пересдачу'
+    default:       return 'Отклонить заявку на изменение пересдачи'
+  }
+})
+
+const rejectSubtitle = computed(() => {
+  const r = rejectModal.value
+  if (!r) return ''
+  if (rejectKind.value === 'role') return userFio(r.requested_by)
+  if (rejectKind.value === 'create') {
+    const dn = discMap.value[r.payload?.discipline_id] || 'Дисциплина'
+    return `${dn} · ${userFio(r.requested_by)}`
+  }
+  return `${disciplineName(r.retake_id)} · ${userFio(r.requested_by)}`
+})
 </script>
 
 <template>
@@ -125,85 +332,241 @@ async function doReject() {
       <main class="main">
         <div class="content-wrap">
 
-          <!-- ── Loading ── -->
-          <div v-if="loading" class="state-center">
-            <div class="spinner" /><span>Загрузка заявок…</span>
+          <!-- ── Tabs ── -->
+          <div class="page-tabs">
+            <button class="tab-btn" :class="{ active: activeTab === 'role' }" @click="activeTab = 'role'">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                <circle cx="8.5" cy="7" r="4"/>
+                <line x1="20" y1="8" x2="20" y2="14"/>
+                <line x1="23" y1="11" x2="17" y2="11"/>
+              </svg>
+              Смена роли
+              <span v-if="roleCount > 0" class="tab-badge">{{ roleCount }}</span>
+            </button>
+
+            <button class="tab-btn" :class="{ active: activeTab === 'change' }" @click="activeTab = 'change'">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+              </svg>
+              Изменения пересдач
+              <span v-if="changeCount > 0" class="tab-badge">{{ changeCount }}</span>
+            </button>
+
+            <button class="tab-btn" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+              Заявки на пересдачи
+              <span v-if="createCount > 0" class="tab-badge">{{ createCount }}</span>
+            </button>
           </div>
 
-          <div v-else-if="loadErr" class="state-center state-error">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            {{ loadErr }}
-          </div>
-
-          <template v-else>
-            <div class="section-card">
-
-              <div class="table-header">
-                <div class="title-row">
-                  <h2 class="section-title">Заявки на изменение пересдач</h2>
-                  <span class="count-badge">{{ requests.length }}</span>
-                </div>
-                <p class="subtitle">Новые заявки от преподавателей — ожидают решения</p>
+          <!-- ═══════════════ TAB 1: РОЛЬ ═══════════════ -->
+          <div v-if="activeTab === 'role'" class="section-card">
+            <div class="table-header">
+              <div class="title-row">
+                <h2 class="section-title">Заявки на роль преподавателя</h2>
+                <span class="count-badge">{{ roleCount }}</span>
               </div>
-
-              <div v-if="requests.length === 0" class="empty-state">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                  <path d="M22 12h-6l-2 3H10l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>
-                </svg>
-                <span>Новых заявок нет</span>
-                <p>Когда преподаватели подадут заявки, они появятся здесь</p>
-              </div>
-
-              <div v-else class="table-wrap">
-                <table class="data-table">
-                  <thead>
-                    <tr class="head-row">
-                      <th>№</th>
-                      <th>Дисциплина</th>
-                      <th>Преподаватель</th>
-                      <th>Запрашиваемые изменения</th>
-                      <th>Причина</th>
-                      <th>Пересдача</th>
-                      <th>Подана</th>
-                      <th>Действия</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="(r, i) in requests" :key="r.id">
-                      <td class="td-num">{{ i + 1 }}</td>
-                      <td class="td-subject">{{ disciplineName(r) }}</td>
-                      <td class="td-nowrap">{{ userMap[r.requested_by] || '—' }}</td>
-                      <td class="td-changes">{{ changesSummary(r) }}</td>
-                      <td class="td-reason">{{ r.reason || '—' }}</td>
-                      <td class="td-nowrap td-soft">{{ retakeDate(r) }}</td>
-                      <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
-                      <td>
-                        <div class="action-btns">
-                          <button
-                            class="btn-sm btn-approve-sm"
-                            :disabled="approving === r.id"
-                            @click="doApprove(r)"
-                          >
-                            {{ approving === r.id ? '…' : 'Одобрить' }}
-                          </button>
-                          <button
-                            class="btn-sm btn-reject-sm"
-                            :disabled="approving === r.id"
-                            @click="openReject(r)"
-                          >
-                            Отклонить
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
+              <p class="subtitle">Студенты подают заявку на получение роли teacher. После одобрения роль выдаётся автоматически.</p>
             </div>
-          </template>
+
+            <div v-if="roleLoading" class="state-center">
+              <div class="spinner" /><span>Загрузка…</span>
+            </div>
+            <div v-else-if="roleErr" class="state-center state-error">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {{ roleErr }}
+            </div>
+            <div v-else-if="roleRequests.length === 0" class="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                <circle cx="8.5" cy="7" r="4"/>
+              </svg>
+              <span>Новых заявок нет</span>
+              <p>Когда студенты подадут заявку — она появится здесь</p>
+            </div>
+
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr class="head-row">
+                    <th>№</th>
+                    <th>Пользователь</th>
+                    <th>Email</th>
+                    <th>Мотивация</th>
+                    <th>Подана</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(r, i) in roleRequests" :key="r.id">
+                    <td class="td-num">{{ i + 1 }}</td>
+                    <td class="td-subject">{{ userFio(r.requested_by) }}</td>
+                    <td class="td-soft">{{ userEmail(r.requested_by) || '—' }}</td>
+                    <td class="td-reason">{{ r.reason || '—' }}</td>
+                    <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
+                    <td>
+                      <div class="action-btns">
+                        <button class="btn-sm btn-approve-sm"
+                                :disabled="approving === r.id"
+                                @click="approveRole(r)">
+                          {{ approving === r.id ? '…' : 'Одобрить' }}
+                        </button>
+                        <button class="btn-sm btn-reject-sm"
+                                :disabled="approving === r.id"
+                                @click="openReject(r, 'role')">
+                          Отклонить
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══════════════ TAB 2: ИЗМЕНЕНИЯ ═══════════════ -->
+          <div v-if="activeTab === 'change'" class="section-card">
+            <div class="table-header">
+              <div class="title-row">
+                <h2 class="section-title">Заявки на изменение пересдач</h2>
+                <span class="count-badge">{{ changeCount }}</span>
+              </div>
+              <p class="subtitle">Преподаватели просят изменить дату/аудиторию/длительность уже назначенной пересдачи.</p>
+            </div>
+
+            <div v-if="changeLoading" class="state-center">
+              <div class="spinner" /><span>Загрузка…</span>
+            </div>
+            <div v-else-if="changeErr" class="state-center state-error">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {{ changeErr }}
+            </div>
+            <div v-else-if="changeRequests.length === 0" class="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+              </svg>
+              <span>Новых заявок нет</span>
+              <p>Когда преподаватели подадут заявку — она появится здесь</p>
+            </div>
+
+            <div v-else class="change-cards">
+              <div v-for="r in changeRequests" :key="r.id" class="change-card">
+                <div class="cc-head">
+                  <div class="cc-title">
+                    <strong>{{ disciplineName(r.retake_id) }}</strong>
+                    <span class="cc-author">от {{ userFio(r.requested_by) }}</span>
+                  </div>
+                  <span class="cc-date">{{ fmtDate(r.created_at) }}</span>
+                </div>
+
+                <div class="cc-diff">
+                  <div v-for="row in changeFieldRows(r)" :key="row.label" class="cc-diff-row">
+                    <span class="cc-diff-label">{{ row.label }}</span>
+                    <span class="cc-diff-from">{{ row.from }}</span>
+                    <svg class="cc-diff-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                    </svg>
+                    <span class="cc-diff-to">{{ row.to }}</span>
+                  </div>
+                  <div v-if="changeFieldRows(r).length === 0" class="cc-diff-empty">
+                    Изменения не указаны
+                  </div>
+                </div>
+
+                <div v-if="r.reason" class="cc-reason">
+                  <span class="cc-reason-label">Причина:</span> {{ r.reason }}
+                </div>
+
+                <div class="cc-actions">
+                  <button class="btn-sm btn-approve-sm"
+                          :disabled="approving === r.id"
+                          @click="approveChange(r)">
+                    {{ approving === r.id ? '…' : 'Одобрить' }}
+                  </button>
+                  <button class="btn-sm btn-reject-sm"
+                          :disabled="approving === r.id"
+                          @click="openReject(r, 'change')">
+                    Отклонить
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══════════════ TAB 3: ЗАЯВКИ НА ПЕРЕСДАЧИ ═══════════════ -->
+          <div v-if="activeTab === 'create'" class="section-card">
+            <div class="table-header">
+              <div class="title-row">
+                <h2 class="section-title">Заявки на создание пересдач</h2>
+                <span class="count-badge">{{ createCount }}</span>
+              </div>
+              <p class="subtitle">Преподаватели просят организовать новую пересдачу. После одобрения пересдача создаётся автоматически с участниками из заявки.</p>
+            </div>
+
+            <div v-if="createLoading" class="state-center">
+              <div class="spinner" /><span>Загрузка…</span>
+            </div>
+            <div v-else-if="createErr" class="state-center state-error">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {{ createErr }}
+            </div>
+            <div v-else-if="createRequests.length === 0" class="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+              <span>Новых заявок нет</span>
+              <p>Когда преподаватели подадут заявку на пересдачу — она появится здесь</p>
+            </div>
+
+            <div v-else class="change-cards">
+              <div v-for="r in createRequests" :key="r.id" class="change-card">
+                <div class="cc-head">
+                  <div class="cc-title">
+                    <strong>{{ discMap[r.payload?.discipline_id] || 'Дисциплина' }}</strong>
+                    <span class="cc-author">от {{ userFio(r.requested_by) }}</span>
+                  </div>
+                  <span class="cc-date">{{ fmtDate(r.created_at) }}</span>
+                </div>
+
+                <div class="cc-diff">
+                  <div v-for="row in createFieldRows(r)" :key="row.label" class="cc-create-row">
+                    <span class="cc-diff-label">{{ row.label }}</span>
+                    <span class="cc-diff-to">{{ row.value }}</span>
+                  </div>
+                </div>
+
+                <div v-if="r.payload?.reason" class="cc-reason">
+                  <span class="cc-reason-label">Причина:</span> {{ r.payload.reason }}
+                </div>
+
+                <div class="cc-actions">
+                  <button class="btn-sm btn-approve-sm"
+                          :disabled="approving === r.id"
+                          @click="approveCreate(r)">
+                    {{ approving === r.id ? '…' : 'Одобрить и создать' }}
+                  </button>
+                  <button class="btn-sm btn-reject-sm"
+                          :disabled="approving === r.id"
+                          @click="openReject(r, 'create')">
+                    Отклонить
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
 
         </div>
       </main>
@@ -216,7 +579,7 @@ async function doReject() {
           <div class="modal">
 
             <div class="modal-head">
-              <span class="modal-title">Отклонить заявку</span>
+              <span class="modal-title">{{ rejectTitle }}</span>
               <button class="modal-close" @click="closeReject" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                   <path d="M18 6L6 18M6 6l12 12"/>
@@ -225,15 +588,14 @@ async function doReject() {
             </div>
 
             <div class="modal-body">
-              <div class="modal-disc">{{ disciplineName(rejectModal) }}</div>
-              <div class="modal-teacher">{{ userMap[rejectModal.requested_by] || 'Преподаватель' }}</div>
+              <div class="modal-disc">{{ rejectSubtitle }}</div>
 
               <div class="field">
                 <label class="field-label">Причина отклонения <span class="required">*</span></label>
                 <textarea
                   class="input textarea"
                   v-model="rejectReason"
-                  placeholder="Укажите причину — она будет отправлена преподавателю…"
+                  placeholder="Укажите причину — она будет отправлена пользователю…"
                   rows="4"
                 />
               </div>
@@ -282,16 +644,43 @@ async function doReject() {
 .main         { flex: 1; padding: 24px; }
 .content-wrap { max-width: 1200px; display: flex; flex-direction: column; gap: 20px; }
 
+/* ── Tabs ── */
+.page-tabs {
+  display: flex; gap: 6px;
+  background: var(--card); border-radius: 14px; padding: 6px;
+  box-shadow: var(--shadow);
+}
+.tab-btn {
+  flex: 1; height: 44px; border: none; border-radius: 10px;
+  font: 600 13px/1 'Inter', sans-serif; color: var(--ink-soft); background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+  transition: background .2s var(--ease), color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.tab-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.tab-btn.active {
+  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
+  color: #fff;
+  box-shadow: 0 4px 14px -4px rgba(91,59,217,.5);
+}
+.tab-btn:not(.active):hover { background: rgba(59,63,224,.06); color: var(--brand); }
+.tab-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  background: rgba(245,158,11,.25); color: #b45309;
+  font: 700 11px/1 'Inter', sans-serif;
+}
+.tab-btn.active .tab-badge { background: rgba(255,255,255,.25); color: #fff; }
+
 /* ── States ── */
 .state-center {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; padding: 80px 20px;
-  font: 500 15px/1.5 'Inter', sans-serif; color: var(--ink-soft); text-align: center;
+  gap: 12px; padding: 60px 20px;
+  font: 500 14px/1.5 'Inter', sans-serif; color: var(--ink-soft); text-align: center;
 }
 .state-error { color: #dc2626; }
-.state-error svg { width: 36px; height: 36px; }
+.state-error svg { width: 32px; height: 32px; }
 .spinner {
-  width: 32px; height: 32px; border-radius: 50%;
+  width: 28px; height: 28px; border-radius: 50%;
   border: 3px solid var(--line); border-top-color: var(--brand);
   animation: spin .8s linear infinite;
 }
@@ -303,7 +692,7 @@ async function doReject() {
   box-shadow: var(--shadow); padding: 24px;
 }
 
-.table-header { margin-bottom: 4px; }
+.table-header { margin-bottom: 16px; }
 .title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .section-title {
   font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
@@ -315,7 +704,7 @@ async function doReject() {
   background: rgba(59,63,224,.1); color: var(--brand-ink);
   font: 600 12px/1 'Inter', sans-serif;
 }
-.subtitle { font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); margin: 0 0 18px; }
+.subtitle { font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); margin: 0; }
 
 /* ── Empty ── */
 .empty-state {
@@ -343,12 +732,48 @@ async function doReject() {
 .td-subject { font-weight: 600; min-width: 140px; }
 .td-nowrap  { white-space: nowrap; }
 .td-soft    { color: var(--ink-soft); }
-.td-changes { max-width: 240px; font-size: 12px; color: var(--brand-ink); }
-.td-reason  { max-width: 180px; font-size: 12px; color: var(--ink-soft); }
+.td-reason  { max-width: 280px; font-size: 12px; color: var(--ink-soft); }
 
-/* ── Actions ── */
+/* ── Change-request cards (Tab 2) ── */
+.change-cards { display: flex; flex-direction: column; gap: 14px; }
+.change-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; background: #fff;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.cc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cc-title { display: flex; flex-direction: column; gap: 2px; }
+.cc-title strong { font: 600 14px/1.3 'Inter', sans-serif; color: var(--ink); }
+.cc-author { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.cc-date { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
+
+.cc-diff { display: flex; flex-direction: column; gap: 6px; background: var(--bg); padding: 10px 12px; border-radius: 8px; }
+.cc-diff-row {
+  display: grid;
+  grid-template-columns: 100px 1fr auto 1fr;
+  align-items: center; gap: 10px;
+  font: 12px/1.4 'Inter', sans-serif;
+}
+.cc-diff-label { color: var(--ink-soft); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
+.cc-diff-from { color: var(--ink-soft); text-decoration: line-through; opacity: .7; }
+.cc-diff-arrow { width: 14px; height: 14px; color: var(--brand); flex-shrink: 0; }
+.cc-diff-to { color: var(--brand-ink); font-weight: 600; }
+.cc-diff-empty { color: var(--ink-soft); font: italic 12px/1 'Inter', sans-serif; }
+
+/* Tab 3: одиночное значение (не diff) — label слева, value справа. */
+.cc-create-row {
+  display: grid; grid-template-columns: 130px 1fr;
+  align-items: center; gap: 10px;
+  font: 12px/1.4 'Inter', sans-serif;
+}
+
+.cc-reason { font: 13px/1.5 'Inter', sans-serif; color: var(--ink); padding: 0 2px; }
+.cc-reason-label { color: var(--ink-soft); font-weight: 600; }
+
+.cc-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ── Action buttons ── */
 .action-btns { display: flex; gap: 6px; }
-
 .btn-sm { height: 30px; padding: 0 12px; border-radius: 8px; font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap; border: none; transition: opacity .15s, transform .1s; }
 .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -358,12 +783,29 @@ async function doReject() {
 .btn-reject-sm { background: rgba(220,38,38,.08); color: #b91c1c; }
 .btn-reject-sm:hover:not(:disabled) { background: rgba(220,38,38,.15); }
 
+/* ── Tab 3 stub ── */
+.todo-stub {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 60px 30px; text-align: center; color: var(--ink-soft);
+}
+.todo-icon { width: 48px; height: 48px; color: var(--ink-soft); opacity: .4; }
+.todo-stub h2 {
+  margin: 0; font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 16px; font-weight: 600; color: var(--ink);
+}
+.todo-stub p { font: 13px/1.6 'Inter', sans-serif; color: var(--ink-soft); margin: 0; max-width: 520px; }
+.todo-stub code {
+  background: var(--bg); padding: 2px 8px; border-radius: 6px;
+  font: 600 12px/1 'JetBrains Mono', ui-monospace, monospace; color: var(--brand-ink);
+}
+.todo-note { color: #9ca3af; font-size: 12px; margin-top: 6px; }
+.todo-link { color: var(--brand); text-decoration: underline; }
+
 /* ── Modal ── */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 400;
   background: rgba(10,12,30,.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; padding: 20px;
-  /* CSS-переменные для teleport-контента */
   --bg:        #f3f4f7;
   --card:      #ffffff;
   --ink:       #1a1d24;
@@ -398,8 +840,7 @@ async function doReject() {
 .modal-close svg { width: 16px; height: 16px; }
 
 .modal-body   { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-.modal-disc   { font: 700 14px/1.3 'Inter', sans-serif; color: var(--ink); }
-.modal-teacher{ font: 500 13px/1   'Inter', sans-serif; color: var(--ink-soft); }
+.modal-disc   { font: 600 13px/1.4 'Inter', sans-serif; color: var(--ink); }
 
 .field        { display: flex; flex-direction: column; gap: 6px; }
 .field-label  { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
@@ -446,5 +887,9 @@ async function doReject() {
 .modal-leave-active  .modal { transition: transform .2s var(--ease); }
 .modal-enter-from .modal, .modal-leave-to .modal { transform: scale(.96) translateY(10px); }
 
-@media (max-width: 640px) { .main { padding: 16px; } }
+@media (max-width: 640px) {
+  .main { padding: 16px; }
+  .cc-diff-row { grid-template-columns: 1fr; gap: 2px; }
+  .cc-diff-arrow { transform: rotate(90deg); }
+}
 </style>

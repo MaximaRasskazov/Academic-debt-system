@@ -25,7 +25,10 @@ beforeEach(() => {
     _message: (data) => wsMock.onmessage?.({ data: JSON.stringify(data) }),
     _close:   () => wsMock.onclose?.(),
   }
-  WsMockCtor = vi.fn(() => wsMock)
+  // `new WebSocket(...)` требует конструктируемой функции — arrow-function
+  // им быть не может. Поэтому используем function expression и
+  // прицепляем vi.fn-spy через .mockImplementation отдельно для assertion'ов.
+  WsMockCtor = vi.fn(function MockWebSocket() { return wsMock })
   vi.stubGlobal('WebSocket', WsMockCtor)
 
   notificationsApi.unreadCount.mockResolvedValue({ count: 5 })

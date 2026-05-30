@@ -32,6 +32,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakerequest"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
@@ -52,6 +53,7 @@ type Deps struct {
 	Debts           *debt.Service
 	Retakes         *retake.Service
 	ChangeRequests  *changerequest.Service
+	RetakeRequests  *retakerequest.Service
 	Reports         *report.Service
 	Notify          *notify.Service
 	NotifyHub       *notify.Hub
@@ -110,6 +112,7 @@ func NewRouter(d Deps) http.Handler {
 		mountDebts(r, d)
 		mountRetakes(r, d)
 		mountChangeRequests(r, d)
+		mountRetakeRequests(r, d)
 		mountReports(r, d)
 		mountNotificationsREST(r, d)
 		mountTeacherRequests(r, d)
