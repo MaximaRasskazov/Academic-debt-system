@@ -4,4 +4,14 @@ import vue from '@vitejs/plugin-vue'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8080',
+      '/ws':  { target: 'ws://localhost:8080', ws: true },
+    },
+  },
+  test: {
+    environment: 'node',
+    setupFiles: ['./src/test/setup.js'],
+  },
 })
