@@ -486,7 +486,7 @@ async function saveEdit() {
                       class="input" v-model="editTeacherSearch" placeholder="Добавить преподавателя…"
                       @focus="editTeacherOpen = true"
                       @blur="editTeacherBlur = setTimeout(() => editTeacherOpen = false, 200)"
-                      @keydown.enter.prevent="if(editFilteredTeachers.length) addParticipant('teacher', editFilteredTeachers[0])"
+                      @keydown.enter.prevent="editFilteredTeachers.length && addParticipant('teacher', editFilteredTeachers[0])"
                     />
                     <div v-show="editTeacherOpen && editFilteredTeachers.length" class="picker-dropdown-modal">
                       <button v-for="t in editFilteredTeachers" :key="t.id"
@@ -513,7 +513,7 @@ async function saveEdit() {
                       class="input" v-model="editStudentSearch" placeholder="Добавить студента…"
                       @focus="editStudentOpen = true"
                       @blur="editStudentBlur = setTimeout(() => editStudentOpen = false, 200)"
-                      @keydown.enter.prevent="if(editFilteredStudents.length) addParticipant('student', editFilteredStudents[0])"
+                      @keydown.enter.prevent="editFilteredStudents.length && addParticipant('student', editFilteredStudents[0])"
                     />
                     <div v-show="editStudentOpen && editFilteredStudents.length" class="picker-dropdown-modal">
                       <button v-for="s in editFilteredStudents" :key="s.id"
