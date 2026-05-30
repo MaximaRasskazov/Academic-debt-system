@@ -254,6 +254,7 @@ async function submitRetake() {
     selectedStudents.value = []; selectedTeachers.value = []
     submitSuccess.value = true
     setTimeout(() => { submitSuccess.value = false }, 3000)
+    await loadDashboard()
   } catch (e) {
     submitError.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка при создании пересдачи'
   } finally {
@@ -269,9 +270,7 @@ function handleOutsideClick(e) {
   }
 }
 
-onMounted(async () => {
-  document.addEventListener('mousedown', handleOutsideClick)
-
+async function loadDashboard() {
   const [summaryRes, retakesRes, scheduledRes, disciplinesRes] = await Promise.allSettled([
     debtsApi.getSummary(),
     retakesApi.getAll({ limit: 200 }),
@@ -320,6 +319,11 @@ onMounted(async () => {
       }
     })
   }
+}
+
+onMounted(async () => {
+  document.addEventListener('mousedown', handleOutsideClick)
+  await loadDashboard()
 })
 
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))

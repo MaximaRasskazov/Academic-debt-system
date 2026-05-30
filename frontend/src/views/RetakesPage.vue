@@ -27,7 +27,7 @@ const STATUS_LABELS = {
   completed:   'Завершена',
   cancelled:   'Отменена',
 }
-const KIND_LABELS = { normal: 'Обычная', commission: 'С комиссией' }
+const KIND_LABELS = { regular: 'Обычная', commission: 'С комиссией' }
 
 const CHIPS = [
   { value: 'all',         label: 'Все' },
