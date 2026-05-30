@@ -119,6 +119,7 @@ func NewRouter(d Deps) http.Handler {
 		mountRBAC(r, d)
 		mountSync(r, d)
 		mountUsers(r, d)
+		mountDirectory(r, d)
 	})
 
 	// Swagger UI — без таймаута, статика подаётся напрямую.

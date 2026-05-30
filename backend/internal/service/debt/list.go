@@ -56,6 +56,20 @@ func (s *Service) ListForTeacher(ctx context.Context, teacherID uuid.UUID, limit
 	return rows, nil
 }
 
+// ListDebtorsByDiscipline — список открытых должников по дисциплине
+// с ФИО и группой. Используется фронтом формы заявки на пересдачу:
+// преподаватель выбирает кого записать. Без фильтра по
+// teacher_disciplines — пока эмулятор эти связи не отдаёт, любой
+// preподаватель видит должников по любой дисциплине; декан тоже
+// использует это для своего UI создания пересдачи.
+func (s *Service) ListDebtorsByDiscipline(ctx context.Context, disciplineID uuid.UUID) ([]queries.ListDebtorsByDisciplineRow, error) {
+	rows, err := s.store.ListDebtorsByDiscipline(ctx, pgutil.PgUUID(disciplineID))
+	if err != nil {
+		return nil, fmt.Errorf("list debtors by discipline: %w", err)
+	}
+	return rows, nil
+}
+
 // ListAll — общий список для деканата.
 func (s *Service) ListAll(ctx context.Context, limit, offset int32) ([]queries.Debt, int64, error) {
 	rows, err := s.store.ListAllDebts(ctx, queries.ListAllDebtsParams{

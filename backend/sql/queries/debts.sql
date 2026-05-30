@@ -46,6 +46,26 @@ WHERE discipline_id = ANY(sqlc.arg('discipline_ids')::uuid[])
 ORDER BY created_at DESC
 LIMIT sqlc.arg('lim') OFFSET sqlc.arg('off');
 
+-- name: ListDebtorsByDiscipline :many
+-- Преподаватель видит должников по конкретной дисциплине с ФИО+группой —
+-- нужно для формы заявки на пересдачу (выбрать кого записывать).
+-- JOIN с users безопасен: возвращаем только тех студентов, у кого есть
+-- открытый долг по дисциплине, то есть тех, кого actor и так видит
+-- через GET /api/debts/by-discipline. Без password_hash и т.п.
+SELECT
+    d.id            AS debt_id,
+    d.student_id,
+    u.first_name,
+    u.last_name,
+    u.middle_name,
+    u.group_name
+FROM debts d
+JOIN users u ON u.id = d.student_id
+WHERE d.discipline_id = $1
+  AND d.status = 'open'
+  AND d.deleted_at IS NULL
+ORDER BY u.last_name ASC, u.first_name ASC;
+
 -- name: ListAllDebts :many
 -- Деканат: общий список (debts.view.all) с пагинацией.
 SELECT *

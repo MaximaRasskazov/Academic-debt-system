@@ -7,8 +7,7 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
-import { usersApi } from '../api/users'
-import { debtsApi } from '../api/debts'
+import { directoryApi } from '../api/directory'
 import { retakeRequestsApi } from '../api/retakeRequests'
 
 const route = useRoute()
@@ -142,32 +141,29 @@ watch(disciplineId, async (id) => {
   if (!id) return
   loadingParticipants.value = true
   try {
-    // Преподаватель может смотреть только долги по своим дисциплинам
-    const debtsRes = await debtsApi.getByDiscipline({ limit: 500 }).catch(() => null)
-    const debtMap = {}
-    if (debtsRes) {
-      for (const d of debtsRes.data.items ?? debtsRes.data ?? [])
-        if (d.discipline_id === id && d.status === 'open') debtMap[d.student_id] = d.id
+    // Должники по выбранной дисциплине — узкий эндпойнт, доступен
+    // преподавателю под debts.view.by_discipline без users.view.
+    // Возвращает сразу debt_id + ФИО + группу.
+    const debtorsRes = await directoryApi.listDebtors(id).catch(() => null)
+    if (debtorsRes) {
+      availableStudents.value = (debtorsRes.data.items ?? []).map((d) => ({
+        id:     d.student_id,
+        debtId: d.debt_id,
+        name:   [d.last_name, d.first_name, d.middle_name].filter(Boolean).join(' ') || d.student_id,
+        group:  d.group_name ?? '',
+      }))
     }
-    // Студентов строим из долгов — не нужен отдельный запрос на users
-    availableStudents.value = Object.entries(debtMap).map(([studentId, debtId]) => ({
-      id: studentId, debtId, name: studentId, group: '',
-    }))
-    // Догружаем имена студентов если есть долги
-    if (availableStudents.value.length) {
-      const studRes = await usersApi.getAll({ role: 'student', limit: 500 }).catch(() => null)
-      if (studRes) {
-        const userInfo = {}
-        for (const u of studRes.data.items ?? [])
-          userInfo[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '' }
-        availableStudents.value = availableStudents.value.map(s => ({ ...s, ...(userInfo[s.id] ?? {}) }))
-      }
+
+    // Список преподавателей для комиссии — отдельный узкий эндпойнт
+    // под retakes.request. Учитель НЕ имеет users.view, поэтому
+    // обычный /api/users ему вернул бы 403.
+    const teachersRes = await directoryApi.listTeachers().catch(() => null)
+    if (teachersRes) {
+      availableTeachers.value = (teachersRes.data.items ?? []).map((t) => ({
+        id:   t.id,
+        name: [t.last_name, t.first_name, t.middle_name].filter(Boolean).join(' '),
+      }))
     }
-    // Преподаватели — тоже через users, но 403 обрабатываем gracefully
-    const teachRes = await usersApi.getAll({ role: 'teacher', limit: 200 }).catch(() => null)
-    if (teachRes)
-      availableTeachers.value = (teachRes.data.items ?? [])
-        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') }))
   } finally { loadingParticipants.value = false }
 })
 

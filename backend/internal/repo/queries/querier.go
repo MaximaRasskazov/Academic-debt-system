@@ -129,6 +129,12 @@ type Querier interface {
 	// История изменений конкретной сущности — лента "что менялось у этого
 	// долга / пересдачи / роли". Используется при выводе story-страницы.
 	ListChangeLogsForEntity(ctx context.Context, arg ListChangeLogsForEntityParams) ([]ChangeLog, error)
+	// Преподаватель видит должников по конкретной дисциплине с ФИО+группой —
+	// нужно для формы заявки на пересдачу (выбрать кого записывать).
+	// JOIN с users безопасен: возвращаем только тех студентов, у кого есть
+	// открытый долг по дисциплине, то есть тех, кого actor и так видит
+	// через GET /api/debts/by-discipline. Без password_hash и т.п.
+	ListDebtorsByDiscipline(ctx context.Context, disciplineID pgtype.UUID) ([]ListDebtorsByDisciplineRow, error)
 	// Преподаватель: должники по конкретной дисциплине. Сервис
 	// предварительно проверяет teacher_disciplines.IsTeacherOfDiscipline.
 	ListDebtsByDiscipline(ctx context.Context, arg ListDebtsByDisciplineParams) ([]Debt, error)
