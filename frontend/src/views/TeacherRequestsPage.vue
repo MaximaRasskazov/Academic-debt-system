@@ -28,6 +28,13 @@ const TYPE_LABELS   = { normal: 'Обычная', commission: 'С комисси
 function clamp(val, min, max) { return Math.max(min, Math.min(max, val || min)) }
 
 // ── Outside click (close dropdowns) ──────────────────────
+// Закрывает все списки страницы, когда клик произошёл за пределами их
+// контейнеров. Каждый дропдаун обёрнут в свой родитель, по его классу
+// и определяем "снаружи или внутри".
+//
+// picker-wrap покрывает оба token-input'а: teacher и student.
+// Они закрываются одним блоком, но это ок — если юзер кликнул мимо
+// обоих, оба и должны закрыться.
 function handleOutsideClick(e) {
   if (!e.target.closest('.custom-select')) {
     typeDropdownOpen.value = false
@@ -35,6 +42,13 @@ function handleOutsideClick(e) {
     discDropdownOpen.value = false
   }
   if (!e.target.closest('.group-custom-select')) groupDropOpen.value = false
+
+  // picker-wrap содержит и input, и dropdown как siblings — клик внутри
+  // не должен закрывать; клик снаружи — закрывает оба picker'а.
+  if (!e.target.closest('.picker-wrap')) {
+    teacherOpen.value = false
+    studentOpen.value = false
+  }
 }
 onMounted(async () => {
   document.addEventListener('mousedown', handleOutsideClick)
