@@ -458,7 +458,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                     @click="$el.querySelector('.token-field').focus()"
                   >
                     <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
-                      {{ t.name }}
+                      <span class="token-chip-text">{{ t.name }}</span>
                       <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
                     </span>
                     <input
@@ -499,7 +499,8 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                     @click="$el.querySelector('.token-field-s').focus()"
                   >
                     <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
-                      {{ s.name }}<span v-if="s.group" class="token-group"> · {{ s.group }}</span>
+                      <span class="token-chip-text">{{ s.name }}</span>
+                      <span v-if="s.group" class="token-group">· {{ s.group }}</span>
                       <button type="button" class="token-remove" @mousedown.prevent="removeStudent(s.id)">×</button>
                     </span>
                     <input
@@ -757,27 +758,32 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 /* ── Token input (Bitrix-style chips inside field) ── */
 .token-input {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
-  min-height: 40px; max-height: 130px; overflow-y: auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 44px; max-height: 140px; overflow-y: auto;
   border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: #fff; padding: 5px 10px; cursor: text;
+  background: #fff; padding: 6px 10px; cursor: text;
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+  box-sizing: border-box;
 }
 .token-input::-webkit-scrollbar { width: 4px; }
 .token-input::-webkit-scrollbar-track { background: transparent; }
-.token-input::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.token-input::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.token-input::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
 .token-input--focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
 .token-input--disabled { background: #f9fafb; opacity: .7; cursor: not-allowed; }
 
 .token-chip {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 3px 6px 3px 10px; border-radius: 20px;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px; border-radius: 20px;
   background: rgba(59,63,224,.1); color: #2a2e9e;
-  font: 500 12px/1.4 'Inter', sans-serif; white-space: nowrap;
-  flex-shrink: 0; max-width: 220px;
+  font: 500 12px/1.4 'Inter', sans-serif;
+  max-width: 200px; min-width: 0; flex-shrink: 0;
+}
+.token-chip-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 .token-chip--student { background: rgba(16,185,129,.1); color: #065f46; }
-.token-group { opacity: .7; font-size: 11px; }
+.token-group { opacity: .7; font-size: 11px; flex-shrink: 0; }
 .token-remove {
   background: none; border: none; cursor: pointer; color: inherit;
   font-size: 15px; line-height: 1; padding: 0 2px; opacity: .55;
@@ -786,7 +792,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 .token-remove:hover { opacity: 1; }
 
 .token-field {
-  flex: 1; min-width: 100px; border: none; outline: none;
+  flex: 1; min-width: 80px; border: none; outline: none;
   background: transparent; font: 13px/1 'Inter', sans-serif;
   color: var(--ink); padding: 3px 2px;
 }
