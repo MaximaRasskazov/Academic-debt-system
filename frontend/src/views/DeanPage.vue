@@ -155,6 +155,13 @@ function addTeacher(t) {
 
 function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
 
+function onTeacherEnter() {
+  if (filteredTeachers.value.length > 0) addTeacher(filteredTeachers.value[0])
+}
+function onStudentEnter() {
+  if (filteredStudents.value.length > 0) addStudent(filteredStudents.value[0])
+}
+
 // ── Type ──────────────────────────────────────────────────────
 const typeDropdownOpen = ref(false)
 const typeOptions = [
@@ -451,28 +458,27 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                       <button type="button" class="teacher-tag-remove" @click="removeTeacher(t.id)">×</button>
                     </span>
                   </div>
-                  <div v-if="isCommission || selectedTeachers.length === 0">
-                    <div class="picker-input-wrap">
-                      <input
-                        class="input"
-                        v-model="teacherSearch"
-                        :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск преподавателя...' : 'Сначала выберите дисциплину')"
-                        :disabled="!disciplineId || loadingParticipants"
-                        @focus="onTeacherFocus"
-                        @blur="onTeacherBlur"
-                      />
+                  <div class="picker-input-wrap">
+                    <input
+                      class="input"
+                      v-model="teacherSearch"
+                      :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск преподавателя...' : 'Сначала выберите дисциплину')"
+                      :disabled="!disciplineId || loadingParticipants"
+                      @focus="onTeacherFocus"
+                      @blur="onTeacherBlur"
+                      @keydown.enter.prevent="onTeacherEnter"
+                    />
+                  </div>
+                  <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
+                    <div v-if="filteredTeachers.length">
+                      <button
+                        v-for="t in filteredTeachers" :key="t.id"
+                        type="button" class="picker-option"
+                        @mousedown.prevent="addTeacher(t)"
+                      >{{ t.name }}</button>
                     </div>
-                    <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
-                      <div v-if="filteredTeachers.length">
-                        <button
-                          v-for="t in filteredTeachers" :key="t.id"
-                          type="button" class="picker-option"
-                          @mousedown.prevent="addTeacher(t)"
-                        >{{ t.name }}</button>
-                      </div>
-                      <div v-else class="picker-empty">
-                        {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
-                      </div>
+                    <div v-else class="picker-empty">
+                      {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
                     </div>
                   </div>
                   <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="field-hint-warn">
@@ -499,6 +505,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                       :disabled="!disciplineId || loadingParticipants"
                       @focus="onStudentFocus"
                       @blur="onStudentBlur"
+                      @keydown.enter.prevent="onStudentEnter"
                     />
                   </div>
                   <div v-show="studentOpen && disciplineId" class="picker-dropdown">
@@ -750,6 +757,10 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
   box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
   z-index: 100; max-height: 220px; overflow-y: auto;
 }
+.picker-dropdown::-webkit-scrollbar { width: 4px; }
+.picker-dropdown::-webkit-scrollbar-track { background: transparent; }
+.picker-dropdown::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.picker-dropdown::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
 .picker-option {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; text-align: left; background: none; border: none;

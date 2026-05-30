@@ -6,6 +6,8 @@ import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
+import { debtsApi } from '../api/debts'
 
 const auth   = useAuthStore()
 const router = useRouter()
@@ -100,16 +102,68 @@ function goTeacherEdit(retake) {
 }
 
 // ── Dean edit modal ───────────────────────────────────────
-const editOpen   = ref(false)
-const editTarget = ref(null)
-const editForm   = reactive({ building: '', room: '', hour: '09', minute: '00', duration: 90 })
-const editSaving = ref(false)
-const editError  = ref('')
+const editOpen        = ref(false)
+const editTarget      = ref(null)
+const editForm        = reactive({ building: '', room: '', hour: '09', minute: '00', duration: 90 })
+const editSaving      = ref(false)
+const editError       = ref('')
+
+// Participants state
+const editParticipants   = ref({ teachers: [], students: [] })
+const editLoadingPart    = ref(false)
+const editAllStudents    = ref([])
+const editAllTeachers    = ref([])
+const editStudentSearch  = ref('')
+const editTeacherSearch  = ref('')
+const editStudentOpen    = ref(false)
+const editTeacherOpen    = ref(false)
+let editStudentBlur = null, editTeacherBlur = null
+
+const editFilteredStudents = computed(() => {
+  const q = editStudentSearch.value.toLowerCase()
+  const enrolled = new Set(editParticipants.value.students.map(s => s.user_id))
+  return editAllStudents.value
+    .filter(s => !enrolled.has(s.id) && (s.name.toLowerCase().includes(q) || (s.group || '').toLowerCase().includes(q)))
+    .slice(0, 8)
+})
+const editFilteredTeachers = computed(() => {
+  const q = editTeacherSearch.value.toLowerCase()
+  const enrolled = new Set(editParticipants.value.teachers.map(t => t.user_id))
+  return editAllTeachers.value
+    .filter(t => !enrolled.has(t.id) && t.name.toLowerCase().includes(q))
+    .slice(0, 8)
+})
+
+// Status change
+const STATUS_TRANSITIONS = {
+  scheduled:   [{ value: 'in_progress', label: 'Начать пересдачу' }, { value: 'cancelled', label: 'Отменить' }],
+  in_progress: [{ value: 'completed',   label: 'Завершить' },         { value: 'cancelled', label: 'Отменить' }],
+}
+const availableStatuses = computed(() => STATUS_TRANSITIONS[editTarget.value?.status] ?? [])
+const statusSaving = ref(false)
+
+async function changeStatus(newStatus) {
+  if (!editTarget.value) return
+  statusSaving.value = true
+  editError.value = ''
+  try {
+    if (newStatus === 'in_progress') await retakesApi.start(editTarget.value.id)
+    else if (newStatus === 'completed') await retakesApi.complete(editTarget.value.id)
+    else if (newStatus === 'cancelled') await retakesApi.cancel(editTarget.value.id)
+    const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
+    if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: newStatus }
+    editTarget.value = { ...editTarget.value, status: newStatus }
+  } catch {
+    editError.value = 'Ошибка при изменении статуса'
+  } finally {
+    statusSaving.value = false
+  }
+}
 
 const STEP = 5, DMIN = 15, DMAX = 480
 function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v || mn)) }
 
-function openEdit(r) {
+async function openEdit(r) {
   editTarget.value = r
   editForm.building = r.building || ''
   editForm.room     = r.room     || ''
@@ -120,13 +174,84 @@ function openEdit(r) {
     editForm.minute = String(d.getMinutes()).padStart(2, '0')
   }
   editError.value = ''
-  editOpen.value  = true
+  editParticipants.value = { teachers: [], students: [] }
+  editAllStudents.value = []
+  editAllTeachers.value = []
+  editOpen.value = true
+
+  editLoadingPart.value = true
+  try {
+    const [partRes, studRes, teachRes, debtsRes] = await Promise.allSettled([
+      retakesApi.getParticipants(r.id),
+      usersApi.getAll({ role: 'student', limit: 500 }),
+      usersApi.getAll({ role: 'teacher', limit: 200 }),
+      debtsApi.getAll({ limit: 500 }),
+    ])
+    if (partRes.status === 'fulfilled') {
+      const parts = partRes.value.data ?? []
+      editParticipants.value = {
+        teachers: parts.filter(p => p.kind === 'teacher' || p.kind === 'commission_member'),
+        students: parts.filter(p => p.kind === 'student'),
+      }
+    }
+    const debtMap = {}
+    if (debtsRes.status === 'fulfilled') {
+      for (const d of debtsRes.value.data.items ?? []) {
+        if (d.discipline_id === r.discipline_id && d.status === 'open') debtMap[d.student_id] = d.id
+      }
+    }
+    if (studRes.status === 'fulfilled') {
+      editAllStudents.value = (studRes.value.data.items ?? [])
+        .filter(u => debtMap[u.id])
+        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '', debtId: debtMap[u.id] }))
+    }
+    if (teachRes.status === 'fulfilled') {
+      editAllTeachers.value = (teachRes.value.data.items ?? [])
+        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') }))
+    }
+  } finally {
+    editLoadingPart.value = false
+  }
 }
+
 function closeEdit() { editOpen.value = false; editTarget.value = null }
 
 function onHourBlur()   { editForm.hour   = String(clamp(parseInt(editForm.hour,   10), 0, 23)).padStart(2, '0') }
 function onMinuteBlur() { editForm.minute = String(clamp(parseInt(editForm.minute, 10), 0, 59)).padStart(2, '0') }
 function onTimeKey(e)   { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
+
+async function removeParticipant(type, userId) {
+  try {
+    if (type === 'teacher') {
+      await retakesApi.removeTeacher(editTarget.value.id, userId)
+      editParticipants.value.teachers = editParticipants.value.teachers.filter(p => p.user_id !== userId)
+    } else {
+      await retakesApi.removeStudent(editTarget.value.id, userId)
+      editParticipants.value.students = editParticipants.value.students.filter(p => p.user_id !== userId)
+    }
+  } catch { editError.value = 'Ошибка при удалении участника' }
+}
+
+async function addParticipant(type, user) {
+  try {
+    if (type === 'teacher') {
+      await retakesApi.addTeacher(editTarget.value.id, user.id)
+      editParticipants.value.teachers.push({ user_id: user.id, first_name: '', last_name: user.name, kind: 'teacher' })
+      editTeacherSearch.value = ''
+      editTeacherOpen.value = false
+    } else {
+      await retakesApi.addStudent(editTarget.value.id, { student_id: user.id, debt_id: user.debtId })
+      editParticipants.value.students.push({ user_id: user.id, first_name: '', last_name: user.name, group: user.group, kind: 'student' })
+      editStudentSearch.value = ''
+      editStudentOpen.value = false
+    }
+  } catch { editError.value = 'Ошибка при добавлении участника' }
+}
+
+function participantName(p) {
+  if (p.name) return p.name
+  return [p.last_name, p.first_name, p.middle_name].filter(Boolean).join(' ') || '—'
+}
 
 async function saveEdit() {
   if (!editTarget.value) return
@@ -143,13 +268,7 @@ async function saveEdit() {
     })
     const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
     if (idx !== -1) {
-      retakes.value[idx] = {
-        ...retakes.value[idx],
-        building:         editForm.building,
-        room:             editForm.room,
-        duration_minutes: editForm.duration,
-        scheduled_at:     base.toISOString(),
-      }
+      retakes.value[idx] = { ...retakes.value[idx], building: editForm.building, room: editForm.room, duration_minutes: editForm.duration, scheduled_at: base.toISOString() }
     }
     closeEdit()
   } catch {
@@ -301,6 +420,23 @@ async function saveEdit() {
             <div class="modal-body">
               <div class="modal-disc">{{ discMap[editTarget?.discipline_id] || 'Дисциплина' }}</div>
 
+              <!-- Изменение статуса -->
+              <div v-if="availableStatuses.length" class="modal-section">
+                <div class="section-label">Статус</div>
+                <div class="status-current">
+                  Сейчас: <span class="status-chip" :class="'s-' + editTarget?.status">{{ STATUS_LABELS[editTarget?.status] }}</span>
+                </div>
+                <div class="status-actions">
+                  <button
+                    v-for="s in availableStatuses" :key="s.value"
+                    class="btn-status" :class="'btn-status--' + s.value"
+                    :disabled="statusSaving"
+                    @click="changeStatus(s.value)"
+                  >{{ s.label }}</button>
+                </div>
+              </div>
+
+              <!-- Время + Длительность -->
               <div class="form-row">
                 <div class="field">
                   <label>Время</label>
@@ -322,6 +458,7 @@ async function saveEdit() {
                 </div>
               </div>
 
+              <!-- Корпус + Аудитория -->
               <div class="form-row">
                 <div class="field">
                   <label>Корпус</label>
@@ -333,11 +470,68 @@ async function saveEdit() {
                 </div>
               </div>
 
+              <!-- Преподаватели -->
+              <div v-if="auth.isDean" class="modal-section">
+                <div class="section-label">Преподаватели</div>
+                <div v-if="editLoadingPart" class="part-loading">Загрузка…</div>
+                <template v-else>
+                  <div class="part-tags" v-if="editParticipants.teachers.length">
+                    <span v-for="t in editParticipants.teachers" :key="t.user_id" class="part-tag">
+                      {{ participantName(t) }}
+                      <button type="button" class="tag-remove" @click="removeParticipant('teacher', t.user_id)">×</button>
+                    </span>
+                  </div>
+                  <div class="picker-wrap-modal">
+                    <input
+                      class="input" v-model="editTeacherSearch" placeholder="Добавить преподавателя…"
+                      @focus="editTeacherOpen = true"
+                      @blur="editTeacherBlur = setTimeout(() => editTeacherOpen = false, 200)"
+                      @keydown.enter.prevent="if(editFilteredTeachers.length) addParticipant('teacher', editFilteredTeachers[0])"
+                    />
+                    <div v-show="editTeacherOpen && editFilteredTeachers.length" class="picker-dropdown-modal">
+                      <button v-for="t in editFilteredTeachers" :key="t.id"
+                        type="button" class="picker-opt"
+                        @mousedown.prevent="addParticipant('teacher', t)">{{ t.name }}</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Студенты -->
+              <div v-if="auth.isDean" class="modal-section">
+                <div class="section-label">Студенты</div>
+                <div v-if="editLoadingPart" class="part-loading">Загрузка…</div>
+                <template v-else>
+                  <div class="part-tags" v-if="editParticipants.students.length">
+                    <span v-for="s in editParticipants.students" :key="s.user_id" class="part-tag part-tag--student">
+                      {{ participantName(s) }}
+                      <button type="button" class="tag-remove" @click="removeParticipant('student', s.user_id)">×</button>
+                    </span>
+                  </div>
+                  <div class="picker-wrap-modal">
+                    <input
+                      class="input" v-model="editStudentSearch" placeholder="Добавить студента…"
+                      @focus="editStudentOpen = true"
+                      @blur="editStudentBlur = setTimeout(() => editStudentOpen = false, 200)"
+                      @keydown.enter.prevent="if(editFilteredStudents.length) addParticipant('student', editFilteredStudents[0])"
+                    />
+                    <div v-show="editStudentOpen && editFilteredStudents.length" class="picker-dropdown-modal">
+                      <button v-for="s in editFilteredStudents" :key="s.id"
+                        type="button" class="picker-opt"
+                        @mousedown.prevent="addParticipant('student', s)">
+                        <span>{{ s.name }}</span>
+                        <span v-if="s.group" class="opt-group">{{ s.group }}</span>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
               <p v-if="editError" class="form-error">{{ editError }}</p>
             </div>
 
             <div class="modal-foot">
-              <button class="btn-cancel" @click="closeEdit">Отмена</button>
+              <button class="btn-cancel" @click="closeEdit">Закрыть</button>
               <button class="btn-save" :disabled="editSaving" @click="saveEdit">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                   <path d="M20 6L9 17l-5-5"/>
@@ -530,16 +724,25 @@ async function saveEdit() {
 .btn-action:hover { transform: scale(1.04); box-shadow: 0 4px 10px -4px rgba(91,59,217,.65); }
 .btn-action svg { width: 13px; height: 13px; }
 
-/* ── Modal ── */
-.modal-overlay {
+/* ── Modal (global т.к. Teleport выносит за пределы scoped-дерева) ── */
+:global(.modal-overlay) {
   position: fixed; inset: 0; z-index: 400;
   background: rgba(10,12,30,.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
-.modal {
-  background: var(--card); border-radius: 16px; width: 100%; max-width: 480px;
+:global(.modal) {
+  --card:     #ffffff;
+  --bg:       #f3f4f7;
+  --ink:      #1a1d24;
+  --ink-soft: #6b7280;
+  --line:     #d7d9e0;
+  --brand:    #3b3fe0;
+  --radius:   10px;
+  --ease:     cubic-bezier(.2,.7,.2,1);
+  background: #ffffff; border-radius: 16px; width: 100%; max-width: 520px;
   box-shadow: 0 24px 64px -12px rgba(10,12,30,.3);
   display: flex; flex-direction: column; max-height: 90vh; overflow: hidden;
+  border: 1px solid #e5e7eb;
 }
 
 .modal-head {
@@ -617,6 +820,60 @@ async function saveEdit() {
 .stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .form-error { font: 13px/1.4 'Inter', sans-serif; color: #dc2626; margin: 0; }
+
+/* ── Modal sections (статус + участники) ── */
+.modal-section {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; background: var(--bg); border-radius: var(--radius);
+}
+.section-label { font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
+.status-current { font: 13px/1.4 'Inter', sans-serif; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-status {
+  padding: 6px 14px; border-radius: 8px; font: 600 12px/1 'Inter', sans-serif;
+  cursor: pointer; border: 1.5px solid transparent; transition: all .15s;
+}
+.btn-status--in_progress { background: rgba(59,130,246,.1); color: #1d4ed8; border-color: rgba(59,130,246,.3); }
+.btn-status--in_progress:hover { background: rgba(59,130,246,.2); }
+.btn-status--completed   { background: rgba(16,185,129,.1); color: #065f46; border-color: rgba(16,185,129,.3); }
+.btn-status--completed:hover { background: rgba(16,185,129,.2); }
+.btn-status--cancelled   { background: rgba(239,68,68,.1); color: #991b1b; border-color: rgba(239,68,68,.3); }
+.btn-status--cancelled:hover { background: rgba(239,68,68,.2); }
+.btn-status:disabled { opacity: .5; cursor: not-allowed; }
+
+.part-loading { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.part-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.part-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px 4px 12px; border-radius: 20px;
+  font: 500 12px/1 'Inter', sans-serif;
+  background: rgba(59,63,224,.1); color: #2a2e9e;
+}
+.part-tag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.tag-remove {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 14px; line-height: 1; padding: 0 2px; opacity: .6; transition: opacity .15s;
+}
+.tag-remove:hover { opacity: 1; }
+
+.picker-wrap-modal { position: relative; }
+.picker-dropdown-modal {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 200;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
+  max-height: 180px; overflow-y: auto;
+}
+.picker-dropdown-modal::-webkit-scrollbar { width: 4px; }
+.picker-dropdown-modal::-webkit-scrollbar-track { background: transparent; }
+.picker-dropdown-modal::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.picker-opt {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; gap: 8px;
+}
+.picker-opt:hover { background: rgba(59,63,224,.07); }
+.opt-group { font-size: 11px; color: var(--ink-soft); background: rgba(59,63,224,.08); border-radius: 10px; padding: 2px 8px; }
 
 .modal-foot {
   display: flex; justify-content: flex-end; gap: 10px;
