@@ -130,9 +130,18 @@ func run() error {
 		syncDone := make(chan struct{})
 		go func() {
 			defer close(syncDone)
+			slog.Info("sync: планировщик запущен", "interval", cfg.SyncInterval)
+
+			// Первый sync — СРАЗУ после старта, не ждём первого тика
+			// time.Ticker. Без этого свежеподнятый контейнер 5 минут стоит
+			// с одними сидами, пользователи смотрят в админку и не видят
+			// данных из эмулятора. Все последующие проходят по тикеру.
+			if err := syncSvc.Sync(syncCtx); err != nil {
+				slog.Warn("sync: первый запуск завершился с ошибкой", "err", err)
+			}
+
 			ticker := time.NewTicker(cfg.SyncInterval)
 			defer ticker.Stop()
-			slog.Info("sync: планировщик запущен", "interval", cfg.SyncInterval)
 			for {
 				select {
 				case <-ticker.C:

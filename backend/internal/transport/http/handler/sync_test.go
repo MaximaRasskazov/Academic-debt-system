@@ -61,18 +61,23 @@ func TestSyncHandler_Status_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-func TestSyncHandler_Trigger_OK(t *testing.T) {
-	ts := time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)
-	h := handler.NewSyncHandler(&syncerStub{lastSyncedAt: ts})
+// Trigger теперь работает асинхронно (см. handler/sync.go и PR fix(sync):
+// Trigger запускает синк асинхронно, возвращает 202 сразу). Мы всегда
+// отвечаем 202 Accepted сразу, а сам Sync крутится в горутине. Поэтому
+// "успех" и "ошибка sync'а" с точки зрения handler — это один и тот же
+// ответ: ошибка sync'а в logs, в http-ответе её не видно. Тесты ниже
+// проверяют корректную семантику этого асинхронного flow.
+
+func TestSyncHandler_Trigger_AcceptedAndRunsInBackground(t *testing.T) {
+	stub := &syncerStub{lastSyncedAt: time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)}
+	h := handler.NewSyncHandler(stub)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/sync/trigger", nil)
 	h.Trigger(w, r)
 
-	require.Equal(t, http.StatusOK, w.Code)
-	var body map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, ts.Format(time.RFC3339), body["last_synced_at"])
+	require.Equal(t, http.StatusAccepted, w.Code,
+		"Trigger должен сразу отвечать 202 Accepted и запускать Sync в горутине")
 }
 
 func TestSyncHandler_Trigger_NotConfigured(t *testing.T) {
@@ -85,12 +90,15 @@ func TestSyncHandler_Trigger_NotConfigured(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-func TestSyncHandler_Trigger_SyncError(t *testing.T) {
+func TestSyncHandler_Trigger_SyncErrorOnlyInLogs(t *testing.T) {
+	// Sync вернёт ошибку, но это видно только в slog.Warn — HTTP-клиент
+	// уже получил 202. Тест убеждается, что handler не делает ничего
+	// глупого и не пытается записать ошибку в w после ServeHTTP.
 	h := handler.NewSyncHandler(&syncerStub{syncErr: errors.New("emulator unreachable")})
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/sync/trigger", nil)
 	h.Trigger(w, r)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 }

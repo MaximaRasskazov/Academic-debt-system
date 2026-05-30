@@ -10,9 +10,24 @@ import (
 	"time"
 )
 
+// withFastBackoff подменяет глобальные RetryAfter/MaxAttempts на
+// тестовые значения и восстанавливает их в Cleanup. Это позволяет
+// проверять retry-логику без 35×N секунд ожидания.
+func withFastBackoff(t *testing.T, attempts int) {
+	t.Helper()
+	prevRetry, prevMax := RetryAfter, MaxAttempts
+	RetryAfter = 10 * time.Millisecond
+	MaxAttempts = attempts
+	t.Cleanup(func() {
+		RetryAfter = prevRetry
+		MaxAttempts = prevMax
+	})
+}
+
 // TestGet_RetriesOn429 — клиент должен повторить запрос после 429.
 // Если на третьей попытке сервер отдаёт 200 — должен успешно распарсить.
 func TestGet_RetriesOn429(t *testing.T) {
+	withFastBackoff(t, 3)
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := attempts.Add(1)
@@ -26,8 +41,6 @@ func TestGet_RetriesOn429(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "test-key")
-	// Сжимаем backoff в тестах — 1с+2с подождать слишком долго для unit.
-	// Backoff жёстко зашит, поэтому ждём реальные ~3 секунды.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -43,9 +56,10 @@ func TestGet_RetriesOn429(t *testing.T) {
 	}
 }
 
-// TestGet_RateLimitedAfterMaxAttempts — если все 3 попытки получили 429,
+// TestGet_RateLimitedAfterMaxAttempts — если все попытки получили 429,
 // клиент возвращает ErrRateLimited, не маскируя ошибку.
 func TestGet_RateLimitedAfterMaxAttempts(t *testing.T) {
+	withFastBackoff(t, 3)
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)

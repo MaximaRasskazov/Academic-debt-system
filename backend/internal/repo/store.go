@@ -299,24 +299,45 @@ func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgt
 	return nil
 }
 
-// CountDisciplines возвращает количество активных дисциплин в БД.
+// CountDisciplines возвращает количество дисциплин, СИНХРОНИЗИРОВАННЫХ
+// с эмулятором (external_id IS NOT NULL). Используется sync.Service чтобы
+// решить, нужен ли первичный полный импорт.
+//
+// Считаем ТОЛЬКО эмуляторные записи, а не все вообще — иначе dev-сиды
+// или руками-созданные через UI дисциплины "мешали" бы sync-у:
+// он бы видел "уже есть 6 дисциплин" и пропускал первый импорт из
+// эмулятора, оставляя БД с одним только сид-набором.
 func (s *Store) CountDisciplines(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM disciplines WHERE deleted_at IS NULL`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM disciplines
+		WHERE external_id IS NOT NULL
+		  AND deleted_at IS NULL
+	`).Scan(&n)
 	return n, err
 }
 
-// CountSyncedUsers возвращает количество пользователей с паролем (из эмулятора или seed).
+// CountSyncedUsers возвращает количество пользователей, импортированных
+// из эмулятора. external_id IS NOT NULL — единственный надёжный признак
+// эмуляторного источника. Прежняя эвристика (`password_hash != ”
+// AND email NOT LIKE '%localhost%'`) ловила и dev-сидов (у них пароль
+// захэширован), и leftover-тестовых `+timestamp@test.local`-юзеров,
+// из-за чего sync-импорт ошибочно пропускался.
 func (s *Store) CountSyncedUsers(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE password_hash != '' AND email NOT LIKE '%localhost%'`).Scan(&n)
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM users WHERE external_id IS NOT NULL`).Scan(&n)
 	return n, err
 }
 
-// CountDebts возвращает количество активных долгов в БД.
+// CountDebts — количество долгов из эмулятора. См. CountDisciplines.
 func (s *Store) CountDebts(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM debts WHERE deleted_at IS NULL`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM debts
+		WHERE external_id IS NOT NULL
+		  AND deleted_at IS NULL
+	`).Scan(&n)
 	return n, err
 }
 
