@@ -167,21 +167,33 @@ watch(disciplineId, async (id) => {
   } finally { loadingParticipants.value = false }
 })
 
-// addStudent / addTeacher: после выбора опции явно закрываем дропдаун.
-// clearTimeout нужен, потому что @blur у input ставит setTimeout 200ms на
-// закрытие — если мы здесь сразу же добавим элемент, blur-таймер может
-// всё равно сработать и снова закрыть уже-закрытый список (никакой беды,
-// но шум в state). Главное — мы сами ставим *Open в false: до этого
-// fix'а только blur закрывал список, а @mousedown.prevent на опции
-// предотвращал blur у input, поэтому дропдаун зависал открытым после
-// клика мышью.
+// addStudent / addTeacher: после выбора опции оставляем дропдаун
+// открытым, чтобы пользователь мог продолжить добавлять (часто бывает
+// нужно выбрать несколько студентов или собрать комиссию из 3+ человек
+// подряд). Закрываем только когда добавлять больше нечего — для
+// regular-пересдачи это сразу после первого teacher'а (там лимит 1).
+//
+// Почему дропдаун остаётся открытым "сам по себе": @mousedown.prevent
+// на опции отменяет blur у input'а, фокус не уходит, v-show="*Open"
+// продолжает показывать список. Если бы мы ставили *Open=false на
+// каждом клике, пользователь видел бы пустую область под focused
+// input'ом и был бы вынужден кликать в input снова (а это no-op для
+// уже-focused элемента — приходится сначала переходить в другой и
+// обратно).
 function addStudent(s) {
   clearTimeout(sBlur)
   if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
   studentSearch.value = ''
-  studentOpen.value = false
+  // студентов всегда можно добавлять много — НЕ закрываем
 }
-function removeStudent(id) { selectedStudents.value = selectedStudents.value.filter(s => s.id !== id) }
+// При удалении токена возможно дропдаун был закрыт (например, regular
+// teacher после выбора единственного — мы закрыли список). Снимая
+// токен пользователь, скорее всего, хочет выбрать другого — открываем
+// дропдаун снова, чтобы не приходилось кликать в input повторно.
+function removeStudent(id) {
+  selectedStudents.value = selectedStudents.value.filter(s => s.id !== id)
+  studentOpen.value = true
+}
 function addGroup(g) { availableStudents.value.filter(s => s.group === g && !selectedStudentIds.value.has(s.id)).forEach(s => selectedStudents.value.push(s)) }
 function onStudentEnter() { if (filteredStudents.value.length) addStudent(filteredStudents.value[0]) }
 
@@ -191,9 +203,14 @@ function addTeacher(t) {
   if (!isCommission.value && selectedTeachers.value.length >= 1) return
   selectedTeachers.value.push(t)
   teacherSearch.value = ''
-  teacherOpen.value = false
+  // Для regular уже выбрали единственного — закрываем (больше нечего).
+  // Для commission юзер собирает 3+ человек подряд, дропдаун оставляем.
+  if (!isCommission.value) teacherOpen.value = false
 }
-function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
+function removeTeacher(id) {
+  selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id)
+  teacherOpen.value = true
+}
 function onTeacherEnter() { if (filteredTeachers.value.length) addTeacher(filteredTeachers.value[0]) }
 
 // ── Submit form — base fields ─────────────────────────────
