@@ -138,24 +138,35 @@ const filteredTeachers = computed(() => {
 
 watch(disciplineId, async (id) => {
   selectedStudents.value = []; selectedTeachers.value = []; groupSelect.value = ''
+  availableStudents.value = []; availableTeachers.value = []
   if (!id) return
   loadingParticipants.value = true
   try {
-    const [studRes, teachRes, debtsRes] = await Promise.allSettled([
-      usersApi.getAll({ role: 'student', limit: 500 }),
-      usersApi.getAll({ role: 'teacher', limit: 200 }),
-      debtsApi.getAll({ limit: 500 }),
-    ])
+    // Преподаватель может смотреть только долги по своим дисциплинам
+    const debtsRes = await debtsApi.getByDiscipline({ limit: 500 }).catch(() => null)
     const debtMap = {}
-    if (debtsRes.status === 'fulfilled')
-      for (const d of debtsRes.value.data.items ?? [])
+    if (debtsRes) {
+      for (const d of debtsRes.data.items ?? debtsRes.data ?? [])
         if (d.discipline_id === id && d.status === 'open') debtMap[d.student_id] = d.id
-    if (studRes.status === 'fulfilled')
-      availableStudents.value = (studRes.value.data.items ?? [])
-        .filter(u => debtMap[u.id])
-        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '', debtId: debtMap[u.id] }))
-    if (teachRes.status === 'fulfilled')
-      availableTeachers.value = (teachRes.value.data.items ?? [])
+    }
+    // Студентов строим из долгов — не нужен отдельный запрос на users
+    availableStudents.value = Object.entries(debtMap).map(([studentId, debtId]) => ({
+      id: studentId, debtId, name: studentId, group: '',
+    }))
+    // Догружаем имена студентов если есть долги
+    if (availableStudents.value.length) {
+      const studRes = await usersApi.getAll({ role: 'student', limit: 500 }).catch(() => null)
+      if (studRes) {
+        const userInfo = {}
+        for (const u of studRes.data.items ?? [])
+          userInfo[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '' }
+        availableStudents.value = availableStudents.value.map(s => ({ ...s, ...(userInfo[s.id] ?? {}) }))
+      }
+    }
+    // Преподаватели — тоже через users, но 403 обрабатываем gracefully
+    const teachRes = await usersApi.getAll({ role: 'teacher', limit: 200 }).catch(() => null)
+    if (teachRes)
+      availableTeachers.value = (teachRes.data.items ?? [])
         .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') }))
   } finally { loadingParticipants.value = false }
 })
@@ -280,8 +291,16 @@ function removeEditStudent(i) { editForm.students.splice(i, 1) }
 
 function openEditModal(r) {
   editId.value = r.id
-  Object.assign(editForm, { subject: r.subject, type: r.type, date: r.date, duration: r.duration, group: r.group, building: r.building, room: r.room, teachers: [...r.teachers], students: [...r.students], description: r.description })
-  const [h, m] = r.time.split(':'); editHour.value = h; editMinute.value = m
+  const p = r.payload || {}
+  const s = p.scheduled_at ? new Date(p.scheduled_at) : null
+  Object.assign(editForm, {
+    subject: discMapMy.value[p.discipline_id] || '', type: p.kind === 'commission' ? 'commission' : 'normal',
+    date: s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null,
+    duration: p.duration_minutes || 90, group: '', building: p.building || '', room: p.room || '',
+    teachers: [], students: [], description: p.notes || '',
+  })
+  editHour.value   = s ? String(s.getHours()).padStart(2, '0') : '09'
+  editMinute.value = s ? String(s.getMinutes()).padStart(2, '0') : '00'
   editFormError.value = ''; editOpen.value = true
 }
 function closeEditModal() { editOpen.value = false }
@@ -367,7 +386,7 @@ function closeDetail()  { detailModal.value = null }
                     <th>Дисциплина</th>
                     <th>Тип</th>
                     <th>Дата</th>
-                    <th>Группа</th>
+                    <th>Время</th>
                     <th>Статус</th>
                     <th>Подана</th>
                     <th>Действия</th>
@@ -376,16 +395,16 @@ function closeDetail()  { detailModal.value = null }
                 <tbody>
                   <tr v-for="(r, i) in filteredRequests" :key="r.id">
                     <td class="td-num">{{ i + 1 }}</td>
-                    <td class="td-subject">{{ r.subject }}</td>
-                    <td>{{ TYPE_LABELS[r.type] }}</td>
-                    <td class="td-nowrap">{{ r.date }}</td>
-                    <td>{{ r.group || '—' }}</td>
+                    <td class="td-subject">{{ discMapMy[r.payload?.discipline_id] || '—' }}</td>
+                    <td>{{ TYPE_LABELS[r.payload?.kind] || r.payload?.kind }}</td>
+                    <td class="td-nowrap">{{ fmtDate(r.payload?.scheduled_at) }}</td>
+                    <td>{{ fmtTime(r.payload?.scheduled_at) || '—' }}</td>
                     <td>
                       <span class="status-badge" :class="'status-' + r.status">
                         {{ STATUS_LABELS[r.status] }}
                       </span>
                     </td>
-                    <td class="td-nowrap td-soft">{{ r.submittedAt }}</td>
+                    <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
                     <td>
                       <div class="action-btns">
                         <button class="btn-sm btn-outline" @click="openDetail(r)">Подробнее</button>
