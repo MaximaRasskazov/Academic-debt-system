@@ -117,7 +117,12 @@ jobs:
 
       - name: Run tests
         working-directory: backend
-        run: go test -race -cover ./... -coverprofile=coverage.out
+        # -p 1 — пакеты выполняются последовательно. Интеграционные тесты
+        # всех пакетов делят одну тестовую БД; при параллельном прогоне
+        # (дефолт) возникают гонки за общие данные (scheduler двигает
+        # статусы, которые читает report) и конкуренция за пул соединений,
+        # из-за чего тесты флакали. Последовательный прогон это устраняет.
+        run: go test -race -cover -p 1 ./... -coverprofile=coverage.out
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
