@@ -618,27 +618,11 @@ async function saveEdit() {
             <div class="modal-body">
               <div class="modal-disc">{{ discMap[editTarget?.discipline_id] || 'Дисциплина' }}</div>
 
-              <!-- Изменение статуса -->
-              <div class="form-row">
-                <div class="field">
-                  <label>Статус</label>
-                  <div class="status-select-wrap">
-                    <select
-                      class="input status-select"
-                      v-model="editStatusSelect"
-                      :disabled="statusSaving || !availableNextStatuses.length"
-                      @change="changeStatus(editStatusSelect)"
-                    >
-                      <option :value="editTarget?.status">
-                        {{ STATUS_LABELS[editTarget?.status] }}{{ !availableNextStatuses.length ? ' (финальный)' : ' (текущий)' }}
-                      </option>
-                      <option v-for="s in availableNextStatuses" :key="s" :value="s">
-                        {{ STATUS_NEXT_LABEL[s] }}
-                      </option>
-                    </select>
-                    <span v-if="statusSaving" class="status-saving-hint">Сохранение…</span>
-                  </div>
-                </div>
+              <!-- Статус -->
+              <div class="modal-status-row">
+                <span class="status-badge" :class="'status-' + editTarget?.status">
+                  {{ STATUS_LABELS[editTarget?.status] }}
+                </span>
               </div>
 
               <!-- Время + Длительность -->
@@ -1095,17 +1079,27 @@ async function saveEdit() {
 .modal-close:hover { background: var(--bg); color: var(--ink); }
 .modal-close svg { width: 16px; height: 16px; }
 
-.modal-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.modal-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
 .modal-body::-webkit-scrollbar { width: 4px; }
 .modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
 .modal-disc {
-  font: 600 14px/1.4 'Inter', sans-serif; color: var(--ink);
-  background: var(--bg); border-radius: 8px; padding: 10px 14px;
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 17px; font-weight: 700; color: #3C38B6;
+  padding: 0 0 4px;
 }
 
+.modal-status-row { display: flex; align-items: center; }
+.status-badge {
+  display: inline-flex; align-items: center; padding: 4px 12px;
+  border-radius: 20px; font: 600 12px/1.4 'Inter', sans-serif;
+}
+.status-scheduled  { background: rgba(59,63,224,.1);  color: #3b3fe0; }
+.status-in_progress { background: rgba(245,158,11,.12); color: #b45309; }
+.status-completed  { background: rgba(16,185,129,.12); color: #065f46; }
+.status-cancelled  { background: rgba(220,38,38,.1);   color: #b91c1c; }
 .form-row { display: flex; gap: 16px; }
-.field    { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.field    { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .field label { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
 
 .input {

@@ -38,7 +38,7 @@ function handleOutsideClick(e) {
     typeDropdownOpen.value = false
     discDropdownOpen.value = false
   }
-  if (!e.target.closest('.group-custom-select')) groupDropOpen.value = false
+  if (!e.target.closest('.group-custom-select')) groupDropdownOpen.value = false
 
   // picker-wrap содержит и input, и dropdown как siblings — клик внутри
   // не должен закрывать; клик снаружи — закрывает оба picker'а.
@@ -109,18 +109,26 @@ const teacherSearch       = ref('')
 const studentOpen         = ref(false)
 const teacherOpen         = ref(false)
 const groupSelect         = ref('')
-const groupDropOpen       = ref(false)
-let sBlur = null, tBlur = null
+const groupDropdownOpen   = ref(false)
+
+let teacherBlurTimer = null
+let studentBlurTimer = null
 
 function onTeacherFocus() {
-  clearTimeout(tBlur)
+  clearTimeout(teacherBlurTimer)
   studentOpen.value = false
   teacherOpen.value = true
 }
+function onTeacherBlur() {
+  teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200)
+}
 function onStudentFocus() {
-  clearTimeout(sBlur)
+  clearTimeout(studentBlurTimer)
   teacherOpen.value = false
   studentOpen.value = true
+}
+function onStudentBlur() {
+  studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200)
 }
 
 const selectedStudentIds = computed(() => new Set(selectedStudents.value.map(s => s.id)))
@@ -146,9 +154,6 @@ watch(disciplineId, async (id) => {
   if (!id) return
   loadingParticipants.value = true
   try {
-    // Должники по выбранной дисциплине — узкий эндпойнт, доступен
-    // преподавателю под debts.view.by_discipline без users.view.
-    // Возвращает сразу debt_id + ФИО + группу.
     const debtorsRes = await directoryApi.listDebtors(id).catch(() => null)
     if (debtorsRes) {
       availableStudents.value = (debtorsRes.data.items ?? []).map((d) => ({
@@ -158,10 +163,6 @@ watch(disciplineId, async (id) => {
         group:  d.group_name ?? '',
       }))
     }
-
-    // Список преподавателей для комиссии — отдельный узкий эндпойнт
-    // под retakes.request. Учитель НЕ имеет users.view, поэтому
-    // обычный /api/users ему вернул бы 403.
     const teachersRes = await directoryApi.listTeachers().catch(() => null)
     if (teachersRes) {
       availableTeachers.value = (teachersRes.data.items ?? []).map((t) => ({
@@ -172,38 +173,26 @@ watch(disciplineId, async (id) => {
   } finally { loadingParticipants.value = false }
 })
 
-// addStudent / addTeacher: после выбора опции оставляем дропдаун
-// открытым, чтобы пользователь мог продолжить добавлять (часто бывает
-// нужно выбрать несколько студентов или собрать комиссию из 3+ человек
-// подряд). Закрываем только когда добавлять больше нечего — для
-// regular-пересдачи это сразу после первого teacher'а (там лимит 1).
-//
-// Почему дропдаун остаётся открытым "сам по себе": @mousedown.prevent
-// на опции отменяет blur у input'а, фокус не уходит, v-show="*Open"
-// продолжает показывать список. Если бы мы ставили *Open=false на
-// каждом клике, пользователь видел бы пустую область под focused
-// input'ом и был бы вынужден кликать в input снова (а это no-op для
-// уже-focused элемента — приходится сначала переходить в другой и
-// обратно).
 function addStudent(s) {
-  clearTimeout(sBlur)
+  clearTimeout(studentBlurTimer)
   if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
   studentSearch.value = ''
   studentOpen.value = true
 }
-// При удалении токена возможно дропдаун был закрыт (например, regular
-// teacher после выбора единственного — мы закрыли список). Снимая
-// токен пользователь, скорее всего, хочет выбрать другого — открываем
-// дропдаун снова, чтобы не приходилось кликать в input повторно.
 function removeStudent(id) {
   selectedStudents.value = selectedStudents.value.filter(s => s.id !== id)
   studentOpen.value = true
 }
-function addGroup(g) { availableStudents.value.filter(s => s.group === g && !selectedStudentIds.value.has(s.id)).forEach(s => selectedStudents.value.push(s)) }
+function addGroup(g) {
+  for (const s of availableStudents.value) {
+    if (s.group === g && !selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
+  }
+}
+function selectGroup(g) { groupSelect.value = g; groupDropdownOpen.value = false }
 function onStudentEnter() { if (filteredStudents.value.length) addStudent(filteredStudents.value[0]) }
 
 function addTeacher(t) {
-  clearTimeout(tBlur)
+  clearTimeout(teacherBlurTimer)
   if (selectedTeacherIds.value.has(t.id)) return
   if (!isCommission.value && selectedTeachers.value.length >= 1) return
   selectedTeachers.value.push(t)
@@ -556,71 +545,119 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
                 </div>
               </div>
 
-              <!-- Преподаватели — token input -->
+              <!-- Преподаватели -->
               <div class="form-row">
                 <div class="field field--full picker-wrap">
-                  <label>{{ isCommission ? 'Преподаватели комиссии (мин. 3)' : 'Преподаватель' }}</label>
-                  <div class="token-input" :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
-                    @click="$event.currentTarget.querySelector('input')?.focus()">
+                  <label>{{ isCommission ? 'Преподаватели (мин. 3)' : 'Преподаватель' }}</label>
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
+                  >
                     <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
                       <span class="token-chip-text">{{ t.name }}</span>
                       <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
                     </span>
-                    <input class="token-field"
+                    <input
+                      class="token-field"
                       v-model="teacherSearch"
                       :placeholder="selectedTeachers.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
-                      @focus="onTeacherFocus" @blur="tBlur = setTimeout(() => teacherOpen = false, 200)"
+                      @focus="onTeacherFocus"
+                      @blur="onTeacherBlur"
                       @keydown.enter.prevent="onTeacherEnter"
                     />
                   </div>
                   <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
-                    <button v-for="t in filteredTeachers" :key="t.id" type="button" class="picker-option" @mousedown.prevent="addTeacher(t)">{{ t.name }}</button>
-                    <div v-if="!filteredTeachers.length" class="picker-empty">{{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}</div>
+                    <div v-if="filteredTeachers.length">
+                      <button
+                        v-for="t in filteredTeachers" :key="t.id"
+                        type="button" class="picker-option"
+                        @mousedown.prevent="addTeacher(t)"
+                      >{{ t.name }}</button>
+                    </div>
+                    <div v-else class="picker-empty">
+                      {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
+                    </div>
                   </div>
-                  <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="hint-warn">Минимум 3 преподавателя для комиссии</p>
+                  <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="field-hint-warn">
+                    Для пересдачи с комиссией необходимо минимум 3 преподавателя
+                  </p>
                 </div>
               </div>
 
-              <!-- Студенты + Группа — token input -->
+              <!-- Студенты + Группа -->
               <div class="form-row">
                 <div class="field picker-wrap">
                   <label>Студенты</label>
-                  <div class="token-input" :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
-                    @click="$event.currentTarget.querySelector('input')?.focus()">
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
+                  >
                     <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
                       <span class="token-chip-text">{{ s.name }}</span>
                       <span v-if="s.group" class="token-group">· {{ s.group }}</span>
                       <button type="button" class="token-remove" @mousedown.prevent="removeStudent(s.id)">×</button>
                     </span>
-                    <input class="token-field"
+                    <input
+                      class="token-field token-field-s"
                       v-model="studentSearch"
-                      :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
+                      :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя или группу...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
-                      @focus="onStudentFocus" @blur="sBlur = setTimeout(() => studentOpen = false, 200)"
+                      @focus="onStudentFocus"
+                      @blur="onStudentBlur"
                       @keydown.enter.prevent="onStudentEnter"
                     />
                   </div>
                   <div v-show="studentOpen && disciplineId" class="picker-dropdown">
-                    <button v-for="s in filteredStudents" :key="s.id" type="button" class="picker-option" @mousedown.prevent="addStudent(s)">
-                      <span>{{ s.name }}</span><span v-if="s.group" class="suggest-group">{{ s.group }}</span>
-                    </button>
-                    <div v-if="!filteredStudents.length" class="picker-empty">{{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}</div>
+                    <div v-if="filteredStudents.length">
+                      <button
+                        v-for="s in filteredStudents" :key="s.id"
+                        type="button" class="picker-option"
+                        @mousedown.prevent="addStudent(s)"
+                      >
+                        <span>{{ s.name }}</span>
+                        <span v-if="s.group" class="suggest-group">{{ s.group }}</span>
+                      </button>
+                    </div>
+                    <div v-else class="picker-empty">
+                      {{ loadingParticipants ? 'Загрузка...' : (availableStudents.length ? 'Нет совпадений' : 'Нет студентов с долгами') }}
+                    </div>
                   </div>
                 </div>
 
                 <div class="field">
                   <label>Группа</label>
-                  <div class="group-custom-select" :class="{ open: groupDropOpen }">
-                    <button type="button" class="group-select-trigger" :disabled="!availableGroups.length" @click="groupDropOpen = !groupDropOpen">
-                      <span :class="{ placeholder: !groupSelect }">{{ groupSelect || (disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину') }}</span>
-                      <svg class="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-                    </button>
-                    <div v-show="groupDropOpen && availableGroups.length" class="group-select-dropdown">
-                      <button v-for="g in availableGroups" :key="g" type="button" class="group-select-option" :class="{ selected: groupSelect === g }" @click="groupSelect = g; groupDropOpen = false">{{ g }}</button>
+                  <div class="group-select-row">
+                    <div class="group-custom-select" :class="{ open: groupDropdownOpen }">
+                      <button
+                        type="button" class="group-select-trigger"
+                        :disabled="!availableGroups.length"
+                        @click="groupDropdownOpen = !groupDropdownOpen"
+                      >
+                        <span :class="{ placeholder: !groupSelect }">
+                          {{ groupSelect || (disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину') }}
+                        </span>
+                        <svg class="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                      <div v-show="groupDropdownOpen && availableGroups.length" class="group-select-dropdown">
+                        <button
+                          v-for="g in availableGroups" :key="g"
+                          type="button" class="group-select-option"
+                          :class="{ selected: groupSelect === g }"
+                          @click="selectGroup(g)"
+                        >{{ g }}</button>
+                      </div>
                     </div>
+                    <button
+                      type="button" class="btn-add-group"
+                      :disabled="!groupSelect"
+                      @click="addGroup(groupSelect); groupSelect = ''"
+                    >+ Добавить</button>
                   </div>
-                  <button v-if="groupSelect" type="button" class="btn-add-group" style="margin-top:6px" @click="addGroup(groupSelect); groupSelect = ''">+ Добавить группу</button>
                 </div>
               </div>
 
@@ -953,6 +990,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .tag-input { border: none; outline: none; flex: 1; min-width: 180px; font: 13px/1 'Inter', sans-serif; color: var(--ink); background: transparent; padding: 4px 0; }
 .tag-input::placeholder { color: #b7b9c2; }
 .hint-warn { font-size: 12px; color: #d97706; margin: 4px 0 0; }
+.field-hint-warn { font: 12px/1.4 'Inter', sans-serif; color: #d97706; margin: 4px 0 0; }
 
 /* ── Token input (как у декана) ── */
 .picker-wrap { position: relative; }
@@ -1018,7 +1056,8 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .disc-code { font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
 
 /* ── Group custom select ── */
-.group-custom-select { position: relative; }
+.group-select-row { display: flex; gap: 8px; }
+.group-custom-select { position: relative; flex: 1; }
 .group-select-trigger {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; height: 40px; padding: 0 12px;
