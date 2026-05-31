@@ -83,10 +83,10 @@ type GradeSender interface {
 // нарушение strict layering ради атомарности (нельзя смешать tx двух
 // сервисов без сложной transactional-functor машинерии).
 type Service struct {
-	store     *repo.Store
-	audit     *audit.Service
-	changelog *changelog.Service
-	notify    *notify.Service // опционально — для уведомлений студентам
+	store       *repo.Store
+	audit       *audit.Service
+	changelog   *changelog.Service
+	notify      *notify.Service // опционально — для уведомлений студентам
 	gradeSender GradeSender
 }
 
