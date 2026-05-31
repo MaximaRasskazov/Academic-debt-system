@@ -8,6 +8,7 @@ import { retakeRequestsApi } from '../api/retakeRequests'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
+import { debtsApi } from '../api/debts'
 
 const sidebarOpen = ref(false)
 
@@ -206,23 +207,29 @@ function createFieldRows(req) {
   return rows
 }
 
+let usersLoaded = false
+let usersLoadPromise = null
+
 async function loadUsers() {
-  try {
-    const res = await usersApi.getAll({ limit: 500 })
-    const list = res.data.items ?? res.data ?? []
-    list.forEach((u) => {
-      const fio = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email
-      userMap.value[u.id] = fio
-      userMap.value[`${u.id}__email`] = u.email
-    })
-  } catch { /* ФИО не критично — покажем id-обрезок */ }
+  if (usersLoaded) return
+  if (usersLoadPromise) return usersLoadPromise
+  usersLoadPromise = (async () => {
+    try {
+      const res = await usersApi.getAll({ limit: 500 })
+      const list = res.data.items ?? res.data ?? []
+      list.forEach((u) => {
+        const fio = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email
+        userMap.value[u.id] = fio
+        userMap.value[`${u.id}__email`] = u.email
+      })
+      usersLoaded = true
+    } catch { /* ФИО не критично — покажем id-обрезок */ }
+  })()
+  return usersLoadPromise
 }
 
 onMounted(async () => {
-  // Юзеры нужны для ФИО в обоих табах — грузим один раз.
   await loadUsers()
-  // Параллельно тянем обе вкладки — badge'и должны быть видны сразу,
-  // даже если активен только один таб.
   loadRoleTab()
   loadChangeTab()
   loadCreateTab()
@@ -319,6 +326,107 @@ const rejectSubtitle = computed(() => {
   }
   return `${disciplineName(r.retake_id)} · ${userFio(r.requested_by)}`
 })
+
+// ── Detail modal ──────────────────────────────────────────────
+const detailModal = ref(null)
+const studentsExpanded = ref(false)
+
+const STUDENTS_PREVIEW = 5
+
+function openDetailRole(r) {
+  detailModal.value = {
+    kind:    'role',
+    title:   userFio(r.requested_by),
+    fields:  [
+      { label: 'Пользователь', value: userFio(r.requested_by) },
+      { label: 'Email',        value: userEmail(r.requested_by) || '—' },
+      { label: 'Подана',       value: fmtDate(r.created_at) },
+      { label: 'Мотивация',    value: r.reason || '—' },
+    ],
+    teachers: [],
+    students: [],
+    _raw: r,
+  }
+}
+
+async function openDetailChange(r) {
+  const retake = retakeMap.value[r.retake_id] || {}
+  detailModal.value = {
+    kind:        'change',
+    title:       disciplineName(r.retake_id),
+    fields: [
+      { label: 'Преподаватель', value: userFio(r.requested_by) },
+      { label: 'Подана',        value: fmtDate(r.created_at) },
+      { label: 'Текущее время', value: fmtDateTime(retake.scheduled_at) },
+      { label: 'Корпус / ауд.', value: `${retake.building || '—'} / ${retake.room || '—'}` },
+    ],
+    changes:      changeFieldRows(r),
+    reason:       r.reason || '',
+    teachers:     [],
+    students:     [],
+    loadingParts: true,
+    _raw: r,
+  }
+  // Подгружаем участников пересдачи
+  try {
+    await loadUsers()
+    const res = await retakesApi.getParticipants(r.retake_id)
+    const parts = res.data.items ?? res.data ?? []
+    if (detailModal.value) {
+      detailModal.value.teachers = parts
+        .filter(p => p.kind === 'teacher' || p.kind === 'commission_member')
+        .map(p => userFio(p.user_id))
+      detailModal.value.students = parts
+        .filter(p => p.kind === 'student')
+        .map(p => userFio(p.user_id))
+    }
+  } catch { /* участники не критичны */ } finally {
+    if (detailModal.value) detailModal.value.loadingParts = false
+  }
+}
+
+async function openDetailCreate(r) {
+  const p = r.payload || {}
+  detailModal.value = {
+    kind:  'create',
+    title: discMap.value[p.discipline_id] || 'Дисциплина',
+    fields: [
+      { label: 'Преподаватель', value: userFio(r.requested_by) },
+      { label: 'Тип',           value: p.kind === 'commission' ? 'С комиссией' : 'Обычная' },
+      { label: 'Дата и время',  value: p.scheduled_at ? fmtDateTime(p.scheduled_at) : '—' },
+      { label: 'Длительность',  value: p.duration_minutes ? `${p.duration_minutes} мин` : '—' },
+      { label: 'Место',         value: [p.building && `корп. ${p.building}`, p.room && `ауд. ${p.room}`].filter(Boolean).join(', ') || '—' },
+      { label: 'Подана',        value: fmtDate(r.created_at) },
+    ],
+    reason:       p.reason || p.notes || '',
+    teachers:     (p.teacher_ids || []).map(id => userFio(id)),
+    students:     [],
+    loadingParts: !!(p.student_debt_ids?.length),
+    teacherCount: (p.teacher_ids || []).length,
+    studentCount: (p.student_debt_ids || []).length,
+    _raw: r,
+  }
+  // Подгружаем имена студентов: для каждого debt_id запрашиваем сам долг
+  // чтобы получить student_id, затем ищем ФИО в userMap.
+  if (p.student_debt_ids?.length) {
+    try {
+      await loadUsers()
+      const debtResults = await Promise.allSettled(
+        p.student_debt_ids.map(dId => debtsApi.getById(dId))
+      )
+      if (detailModal.value) {
+        detailModal.value.students = debtResults
+          .filter(r => r.status === 'fulfilled')
+          .map(r => userFio((r.value.data ?? r.value).student_id))
+          .filter(Boolean)
+      }
+    } catch { /* не критично */ } finally {
+      if (detailModal.value) detailModal.value.loadingParts = false
+    }
+  }
+}
+
+function closeDetail() { detailModal.value = null; studentsExpanded.value = false }
 </script>
 
 <template>
@@ -371,7 +479,6 @@ const rejectSubtitle = computed(() => {
                 <h2 class="section-title">Заявки на роль преподавателя</h2>
                 <span class="count-badge">{{ roleCount }}</span>
               </div>
-              <p class="subtitle">Студенты подают заявку на получение роли teacher. После одобрения роль выдаётся автоматически.</p>
             </div>
 
             <div v-if="roleLoading" class="state-center">
@@ -398,8 +505,6 @@ const rejectSubtitle = computed(() => {
                   <tr class="head-row">
                     <th>№</th>
                     <th>Пользователь</th>
-                    <th>Email</th>
-                    <th>Мотивация</th>
                     <th>Подана</th>
                     <th>Действия</th>
                   </tr>
@@ -408,11 +513,10 @@ const rejectSubtitle = computed(() => {
                   <tr v-for="(r, i) in roleRequests" :key="r.id">
                     <td class="td-num">{{ i + 1 }}</td>
                     <td class="td-subject">{{ userFio(r.requested_by) }}</td>
-                    <td class="td-soft">{{ userEmail(r.requested_by) || '—' }}</td>
-                    <td class="td-reason">{{ r.reason || '—' }}</td>
                     <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
                     <td>
                       <div class="action-btns">
+                        <button class="btn-sm btn-detail" @click="openDetailRole(r)">Подробнее</button>
                         <button class="btn-sm btn-approve-sm"
                                 :disabled="approving === r.id"
                                 @click="approveRole(r)">
@@ -438,7 +542,6 @@ const rejectSubtitle = computed(() => {
                 <h2 class="section-title">Заявки на изменение пересдач</h2>
                 <span class="count-badge">{{ changeCount }}</span>
               </div>
-              <p class="subtitle">Преподаватели просят изменить дату/аудиторию/длительность уже назначенной пересдачи.</p>
             </div>
 
             <div v-if="changeLoading" class="state-center">
@@ -460,47 +563,53 @@ const rejectSubtitle = computed(() => {
               <p>Когда преподаватели подадут заявку — она появится здесь</p>
             </div>
 
-            <div v-else class="change-cards">
-              <div v-for="r in changeRequests" :key="r.id" class="change-card">
-                <div class="cc-head">
-                  <div class="cc-title">
-                    <strong>{{ disciplineName(r.retake_id) }}</strong>
-                    <span class="cc-author">от {{ userFio(r.requested_by) }}</span>
-                  </div>
-                  <span class="cc-date">{{ fmtDate(r.created_at) }}</span>
-                </div>
-
-                <div class="cc-diff">
-                  <div v-for="row in changeFieldRows(r)" :key="row.label" class="cc-diff-row">
-                    <span class="cc-diff-label">{{ row.label }}</span>
-                    <span class="cc-diff-from">{{ row.from }}</span>
-                    <svg class="cc-diff-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-                    </svg>
-                    <span class="cc-diff-to">{{ row.to }}</span>
-                  </div>
-                  <div v-if="changeFieldRows(r).length === 0" class="cc-diff-empty">
-                    Изменения не указаны
-                  </div>
-                </div>
-
-                <div v-if="r.reason" class="cc-reason">
-                  <span class="cc-reason-label">Причина:</span> {{ r.reason }}
-                </div>
-
-                <div class="cc-actions">
-                  <button class="btn-sm btn-approve-sm"
-                          :disabled="approving === r.id"
-                          @click="approveChange(r)">
-                    {{ approving === r.id ? '…' : 'Одобрить' }}
-                  </button>
-                  <button class="btn-sm btn-reject-sm"
-                          :disabled="approving === r.id"
-                          @click="openReject(r, 'change')">
-                    Отклонить
-                  </button>
-                </div>
-              </div>
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr class="head-row">
+                    <th>№</th>
+                    <th>Дисциплина</th>
+                    <th>Преподаватель</th>
+                    <th>Изменения</th>
+                    <th>Подана</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(r, i) in changeRequests" :key="r.id">
+                    <td class="td-num">{{ i + 1 }}</td>
+                    <td class="td-subject">{{ disciplineName(r.retake_id) }}</td>
+                    <td class="td-soft">{{ userFio(r.requested_by) }}</td>
+                    <td class="td-diff">
+                      <div v-for="row in changeFieldRows(r)" :key="row.label" class="inline-diff">
+                        <span class="inline-diff-label">{{ row.label }}:</span>
+                        <span class="inline-diff-from">{{ row.from }}</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="inline-arrow">
+                          <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                        </svg>
+                        <span class="inline-diff-to">{{ row.to }}</span>
+                      </div>
+                      <span v-if="changeFieldRows(r).length === 0" class="td-soft">—</span>
+                    </td>
+                    <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
+                    <td>
+                      <div class="action-btns">
+                        <button class="btn-sm btn-detail" @click="openDetailChange(r)">Подробнее</button>
+                        <button class="btn-sm btn-approve-sm"
+                                :disabled="approving === r.id"
+                                @click="approveChange(r)">
+                          {{ approving === r.id ? '…' : 'Одобрить' }}
+                        </button>
+                        <button class="btn-sm btn-reject-sm"
+                                :disabled="approving === r.id"
+                                @click="openReject(r, 'change')">
+                          Отклонить
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -511,7 +620,6 @@ const rejectSubtitle = computed(() => {
                 <h2 class="section-title">Заявки на создание пересдач</h2>
                 <span class="count-badge">{{ createCount }}</span>
               </div>
-              <p class="subtitle">Преподаватели просят организовать новую пересдачу. После одобрения пересдача создаётся автоматически с участниками из заявки.</p>
             </div>
 
             <div v-if="createLoading" class="state-center">
@@ -531,46 +639,157 @@ const rejectSubtitle = computed(() => {
               <p>Когда преподаватели подадут заявку на пересдачу — она появится здесь</p>
             </div>
 
-            <div v-else class="change-cards">
-              <div v-for="r in createRequests" :key="r.id" class="change-card">
-                <div class="cc-head">
-                  <div class="cc-title">
-                    <strong>{{ discMap[r.payload?.discipline_id] || 'Дисциплина' }}</strong>
-                    <span class="cc-author">от {{ userFio(r.requested_by) }}</span>
-                  </div>
-                  <span class="cc-date">{{ fmtDate(r.created_at) }}</span>
-                </div>
-
-                <div class="cc-diff">
-                  <div v-for="row in createFieldRows(r)" :key="row.label" class="cc-create-row">
-                    <span class="cc-diff-label">{{ row.label }}</span>
-                    <span class="cc-diff-to">{{ row.value }}</span>
-                  </div>
-                </div>
-
-                <div v-if="r.payload?.reason" class="cc-reason">
-                  <span class="cc-reason-label">Причина:</span> {{ r.payload.reason }}
-                </div>
-
-                <div class="cc-actions">
-                  <button class="btn-sm btn-approve-sm"
-                          :disabled="approving === r.id"
-                          @click="approveCreate(r)">
-                    {{ approving === r.id ? '…' : 'Одобрить и создать' }}
-                  </button>
-                  <button class="btn-sm btn-reject-sm"
-                          :disabled="approving === r.id"
-                          @click="openReject(r, 'create')">
-                    Отклонить
-                  </button>
-                </div>
-              </div>
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr class="head-row">
+                    <th>№</th>
+                    <th>Дисциплина</th>
+                    <th>Преподаватель</th>
+                    <th>Дата и время</th>
+                    <th>Участники</th>
+                    <th>Подана</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(r, i) in createRequests" :key="r.id">
+                    <td class="td-num">{{ i + 1 }}</td>
+                    <td class="td-subject">{{ discMap[r.payload?.discipline_id] || '—' }}</td>
+                    <td class="td-soft">{{ userFio(r.requested_by) }}</td>
+                    <td class="td-nowrap td-soft">{{ r.payload?.scheduled_at ? fmtDateTime(r.payload.scheduled_at) : '—' }}</td>
+                    <td class="td-soft td-nowrap">
+                      {{ (r.payload?.teacher_ids?.length || 0) }} пр. / {{ (r.payload?.student_debt_ids?.length || 0) }} ст.
+                    </td>
+                    <td class="td-nowrap td-soft">{{ fmtDate(r.created_at) }}</td>
+                    <td>
+                      <div class="action-btns">
+                        <button class="btn-sm btn-detail" @click="openDetailCreate(r)">Подробнее</button>
+                        <button class="btn-sm btn-approve-sm"
+                                :disabled="approving === r.id"
+                                @click="approveCreate(r)">
+                          {{ approving === r.id ? '…' : 'Одобрить' }}
+                        </button>
+                        <button class="btn-sm btn-reject-sm"
+                                :disabled="approving === r.id"
+                                @click="openReject(r, 'create')">
+                          Отклонить
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
         </div>
       </main>
     </div>
+
+    <!-- ── Detail modal ── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="detailModal" class="modal-overlay" @click.self="closeDetail">
+          <div class="modal modal--detail">
+
+            <div class="modal-head">
+              <span class="modal-title">{{ detailModal.title }}</span>
+              <button class="modal-close" @click="closeDetail" aria-label="Закрыть">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="modal-body">
+
+              <!-- Поля -->
+              <div class="detail-info-grid">
+                <div v-for="f in detailModal.fields" :key="f.label" class="detail-info-cell">
+                  <span class="dil">{{ f.label }}</span>
+                  <span class="div">{{ f.value }}</span>
+                </div>
+              </div>
+
+              <!-- Изменения (только для change) -->
+              <template v-if="detailModal.kind === 'change' && detailModal.changes?.length">
+                <div class="detail-section-label">Запрашиваемые изменения</div>
+                <div class="detail-diff-block">
+                  <div v-for="row in detailModal.changes" :key="row.label" class="detail-diff-row">
+                    <span class="dil">{{ row.label }}</span>
+                    <span class="diff-from">{{ row.from }}</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="diff-arrow">
+                      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                    </svg>
+                    <span class="diff-to">{{ row.to }}</span>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Участники (для change и create) -->
+              <template v-if="detailModal.kind === 'change' || detailModal.kind === 'create'">
+                <div v-if="detailModal.loadingParts" class="parts-loading">
+                  <div class="spinner-sm" /><span>Загрузка участников…</span>
+                </div>
+                <div v-else class="detail-people">
+                  <div class="detail-people-col">
+                    <span class="dil">Преподаватели</span>
+                    <div class="detail-tags">
+                      <span v-for="t in detailModal.teachers" :key="t" class="dtag">{{ t }}</span>
+                      <span v-if="!detailModal.teachers.length" class="div">—</span>
+                    </div>
+                  </div>
+                  <div class="detail-people-col">
+                    <span class="dil">Студенты ({{ detailModal.students.length }})</span>
+                    <div class="detail-tags">
+                      <template v-if="detailModal.students.length">
+                        <span
+                          v-for="s in (studentsExpanded ? detailModal.students : detailModal.students.slice(0, STUDENTS_PREVIEW))"
+                          :key="s" class="dtag dtag--student"
+                        >{{ s }}</span>
+                        <button
+                          v-if="detailModal.students.length > STUDENTS_PREVIEW"
+                          class="dtag-more"
+                          @click="studentsExpanded = !studentsExpanded"
+                        >
+                          {{ studentsExpanded ? 'Скрыть' : `+ ещё ${detailModal.students.length - STUDENTS_PREVIEW}` }}
+                        </button>
+                      </template>
+                      <span v-else class="div">—</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Причина/заметки -->
+              <div v-if="detailModal.reason" class="detail-reason">
+                <span class="dil">{{ detailModal.kind === 'role' ? 'Мотивация' : 'Причина' }}</span>
+                <p class="div">{{ detailModal.reason }}</p>
+              </div>
+
+            </div>
+
+            <div class="modal-foot">
+              <button class="btn-outline" @click="closeDetail">Закрыть</button>
+              <template v-if="detailModal.kind === 'role'">
+                <button class="btn-reject-confirm" @click="openReject(detailModal._raw, 'role'); closeDetail()">Отклонить</button>
+                <button class="btn-approve-confirm" :disabled="approving === detailModal._raw.id" @click="approveRole(detailModal._raw); closeDetail()">Одобрить</button>
+              </template>
+              <template v-else-if="detailModal.kind === 'change'">
+                <button class="btn-reject-confirm" @click="openReject(detailModal._raw, 'change'); closeDetail()">Отклонить</button>
+                <button class="btn-approve-confirm" :disabled="approving === detailModal._raw.id" @click="approveChange(detailModal._raw); closeDetail()">Одобрить</button>
+              </template>
+              <template v-else-if="detailModal.kind === 'create'">
+                <button class="btn-reject-confirm" @click="openReject(detailModal._raw, 'create'); closeDetail()">Отклонить</button>
+                <button class="btn-approve-confirm" :disabled="approving === detailModal._raw.id" @click="approveCreate(detailModal._raw); closeDetail()">Одобрить</button>
+              </template>
+            </div>
+
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- ── Reject modal ── -->
     <Teleport to="body">
@@ -642,7 +861,7 @@ const rejectSubtitle = computed(() => {
 
 .page-wrap    { min-height: 100dvh; background: var(--bg); display: flex; flex-direction: column; }
 .main         { flex: 1; padding: 24px; }
-.content-wrap { max-width: 1200px; display: flex; flex-direction: column; gap: 20px; }
+.content-wrap { display: flex; flex-direction: column; gap: 20px; }
 
 /* ── Tabs ── */
 .page-tabs {
@@ -726,62 +945,45 @@ const rejectSubtitle = computed(() => {
 }
 .data-table tbody tr { transition: background .12s; }
 .data-table tbody tr:hover { background: rgba(59,63,224,.03); }
-.data-table td { padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.data-table td { padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; text-align: left; font-family: 'Inter', system-ui, sans-serif; }
 .data-table tbody tr:last-child td { border-bottom: none; }
-.td-num     { color: var(--ink-soft); width: 36px; }
+.td-num     { color: var(--ink-soft); width: 36px; font-family: 'Inter', system-ui, sans-serif; }
 .td-subject { font-weight: 600; min-width: 140px; }
 .td-nowrap  { white-space: nowrap; }
 .td-soft    { color: var(--ink-soft); }
-.td-reason  { max-width: 280px; font-size: 12px; color: var(--ink-soft); }
 
-/* ── Change-request cards (Tab 2) ── */
-.change-cards { display: flex; flex-direction: column; gap: 14px; }
-.change-card {
-  border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 16px 18px; background: #fff;
-  display: flex; flex-direction: column; gap: 12px;
+/* ── Inline diff (Tab 2 таблица) ── */
+.td-diff { min-width: 220px; }
+.inline-diff {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font: 12px/1.5 'Inter', sans-serif; margin-bottom: 2px;
 }
-.cc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.cc-title { display: flex; flex-direction: column; gap: 2px; }
-.cc-title strong { font: 600 14px/1.3 'Inter', sans-serif; color: var(--ink); }
-.cc-author { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
-.cc-date { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
-
-.cc-diff { display: flex; flex-direction: column; gap: 6px; background: var(--bg); padding: 10px 12px; border-radius: 8px; }
-.cc-diff-row {
-  display: grid;
-  grid-template-columns: 100px 1fr auto 1fr;
-  align-items: center; gap: 10px;
-  font: 12px/1.4 'Inter', sans-serif;
-}
-.cc-diff-label { color: var(--ink-soft); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
-.cc-diff-from { color: var(--ink-soft); text-decoration: line-through; opacity: .7; }
-.cc-diff-arrow { width: 14px; height: 14px; color: var(--brand); flex-shrink: 0; }
-.cc-diff-to { color: var(--brand-ink); font-weight: 600; }
-.cc-diff-empty { color: var(--ink-soft); font: italic 12px/1 'Inter', sans-serif; }
-
-/* Tab 3: одиночное значение (не diff) — label слева, value справа. */
-.cc-create-row {
-  display: grid; grid-template-columns: 130px 1fr;
-  align-items: center; gap: 10px;
-  font: 12px/1.4 'Inter', sans-serif;
-}
-
-.cc-reason { font: 13px/1.5 'Inter', sans-serif; color: var(--ink); padding: 0 2px; }
-.cc-reason-label { color: var(--ink-soft); font-weight: 600; }
-
-.cc-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.inline-diff:last-child { margin-bottom: 0; }
+.inline-diff-label { color: var(--ink-soft); font-weight: 600; font-size: 11px; white-space: nowrap; }
+.inline-diff-from { color: var(--ink-soft); text-decoration: line-through; opacity: .7; white-space: nowrap; }
+.inline-arrow { width: 12px; height: 12px; color: var(--brand); flex-shrink: 0; }
+.inline-diff-to { color: var(--brand-ink); font-weight: 600; white-space: nowrap; }
 
 /* ── Action buttons ── */
-.action-btns { display: flex; gap: 6px; }
-.btn-sm { height: 30px; padding: 0 12px; border-radius: 8px; font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap; border: none; transition: opacity .15s, transform .1s; }
+.action-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-sm {
+  height: 30px; padding: 0 12px; border-radius: 8px;
+  font: 600 12px/1 'Inter', system-ui, sans-serif;
+  cursor: pointer; white-space: nowrap; border: 1.5px solid transparent;
+  transition: background .15s, border-color .15s, color .15s;
+}
 .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
 
-.btn-approve-sm { background: rgba(16,185,129,.12); color: #065f46; }
-.btn-approve-sm:hover:not(:disabled) { background: rgba(16,185,129,.2); }
+.btn-detail {
+  background: #fff; border-color: var(--line); color: var(--ink-soft);
+}
+.btn-detail:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
 
-.btn-reject-sm { background: rgba(220,38,38,.08); color: #b91c1c; }
-.btn-reject-sm:hover:not(:disabled) { background: rgba(220,38,38,.15); }
+.btn-approve-sm { background: #fff; border-color: var(--brand); color: var(--brand); }
+.btn-approve-sm:hover:not(:disabled) { background: rgba(59,63,224,.06); }
+
+.btn-reject-sm { background: #fff; border-color: var(--line); color: var(--ink-soft); }
+.btn-reject-sm:hover:not(:disabled) { border-color: #c0c2cc; color: var(--ink); }
 
 /* ── Tab 3 stub ── */
 .todo-stub {
@@ -800,6 +1002,89 @@ const rejectSubtitle = computed(() => {
 }
 .todo-note { color: #9ca3af; font-size: 12px; margin-top: 6px; }
 .todo-link { color: var(--brand); text-decoration: underline; }
+
+/* ── Detail modal content ── */
+.detail-info-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0; border: 1px solid var(--line); border-radius: 10px;
+  overflow: hidden; margin-bottom: 16px;
+}
+.detail-info-cell {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.detail-info-cell:nth-child(2n) { border-right: none; }
+.detail-info-cell:nth-last-child(-n+2) { border-bottom: none; }
+
+.detail-section-label {
+  font: 600 11px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: 8px;
+}
+.detail-diff-block {
+  background: var(--bg); border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;
+}
+.detail-diff-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font: 12px/1.4 'Inter', sans-serif;
+}
+.diff-from { color: var(--ink-soft); text-decoration: line-through; opacity: .7; }
+.diff-arrow { width: 13px; height: 13px; color: var(--brand); flex-shrink: 0; }
+.diff-to { color: var(--brand-ink); font-weight: 600; }
+
+.parts-loading {
+  display: flex; align-items: center; gap: 8px;
+  font: 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  padding: 4px 0; margin-bottom: 16px;
+}
+.spinner-sm {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite; flex-shrink: 0;
+}
+.detail-people {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; margin-bottom: 16px;
+}
+.detail-people-col { display: flex; flex-direction: column; gap: 8px; }
+.detail-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.dtag {
+  display: inline-flex; align-items: center; padding: 4px 10px;
+  background: rgba(59,63,224,.08); color: var(--brand-ink);
+  border-radius: 20px; font: 500 12px/1.4 'Inter', sans-serif;
+}
+.dtag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.dtag-more {
+  display: inline-flex; align-items: center; padding: 4px 10px;
+  background: none; border: 1.5px dashed var(--line); border-radius: 20px;
+  color: var(--ink-soft); font: 500 12px/1.4 'Inter', sans-serif;
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+.dtag-more:hover { border-color: var(--brand); color: var(--brand); }
+
+.detail-reason {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; background: var(--bg); border-radius: 10px;
+}
+.detail-reason .div { margin: 0; white-space: pre-wrap; }
+
+.dil {
+  font: 600 11px/1 'Inter', sans-serif;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em;
+}
+.div { font: 13px/1.5 'Inter', sans-serif; color: var(--ink); }
+
+.btn-approve-confirm {
+  padding: 0 20px; height: 40px;
+  border: 1.5px solid var(--brand); border-radius: var(--radius);
+  background: #fff; color: var(--brand);
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.btn-approve-confirm:hover:not(:disabled) { background: rgba(59,63,224,.07); }
+.btn-approve-confirm:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Modal ── */
 .modal-overlay {
@@ -820,8 +1105,9 @@ const rejectSubtitle = computed(() => {
 .modal {
   background: var(--card); border-radius: 16px; width: 100%; max-width: 440px;
   box-shadow: 0 24px 64px -12px rgba(10,12,30,.3);
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; max-height: 90vh; overflow: hidden;
 }
+.modal--detail { max-width: 540px; }
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 20px; border-bottom: 1px solid var(--line);
@@ -839,7 +1125,9 @@ const rejectSubtitle = computed(() => {
 .modal-close:hover { background: var(--bg); }
 .modal-close svg { width: 16px; height: 16px; }
 
-.modal-body   { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal-body   { padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; flex: 1; }
+.modal-body::-webkit-scrollbar { width: 4px; }
+.modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 .modal-disc   { font: 600 13px/1.4 'Inter', sans-serif; color: var(--ink); }
 
 .field        { display: flex; flex-direction: column; gap: 6px; }
@@ -870,14 +1158,14 @@ const rejectSubtitle = computed(() => {
 .btn-outline:hover { border-color: var(--brand); color: var(--brand); }
 
 .btn-reject-confirm {
-  padding: 0 20px; height: 40px; border: none; border-radius: var(--radius);
-  background: linear-gradient(135deg, #dc2626, #b91c1c);
-  color: #fff; font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
-  box-shadow: 0 4px 14px -4px rgba(185,28,28,.5);
-  transition: transform .15s var(--ease);
+  padding: 0 20px; height: 40px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; color: var(--ink-soft);
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: border-color .15s, color .15s;
 }
-.btn-reject-confirm:hover:not(:disabled) { transform: scale(1.03); }
-.btn-reject-confirm:disabled { opacity: .6; cursor: not-allowed; }
+.btn-reject-confirm:hover:not(:disabled) { border-color: #c0c2cc; color: var(--ink); }
+.btn-reject-confirm:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Modal transition ── */
 .modal-enter-active { transition: opacity .2s var(--ease); }

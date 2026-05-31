@@ -8,6 +8,7 @@ import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
 import { debtsApi } from '../api/debts'
 import { changeRequestsApi } from '../api/changeRequests'
+import { directoryApi } from '../api/directory'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 
@@ -15,9 +16,10 @@ const auth = useAuthStore()
 const sidebarOpen = ref(false)
 
 // ── Data ──────────────────────────────────────────────────
-const retakes  = ref([])
-const discMap  = ref({})
-const loading  = ref(true)
+const retakes   = ref([])
+const discMap   = ref({})
+const loading   = ref(true)
+const userNames = ref({}) // id → ФИО
 const loadErr  = ref('')
 
 // ── Filters ───────────────────────────────────────────────
@@ -119,22 +121,56 @@ const reqChangeForm   = reactive({
   notes:       '',
   reason:      '',
 })
-const reqChangeSaving  = ref(false)
-const reqChangeError   = ref('')
-const reqChangeSuccess = ref(false)
+const reqChangeSaving    = ref(false)
+const reqChangeError     = ref('')
+const reqChangeSuccess   = ref(false)
+const reqChangeTeachers  = ref([])
+const reqChangeStudents  = ref([])
+const reqChangePartsLoading = ref(false)
 
-function openRequestChange(retake) {
+async function openRequestChange(retake) {
   reqChangeTarget.value = retake
-  // НИЧЕГО не префилим — пустые поля означают "не менять". Препод
-  // заполняет только то, что хочет изменить. Так бизнес-логика
-  // соответствует семантике "requested_changes": каждое поле опционально.
   Object.assign(reqChangeForm, {
     scheduledAt: '', hour: '', minute: '',
     duration: '', building: '', room: '', notes: '', reason: '',
   })
   reqChangeError.value = ''
   reqChangeSuccess.value = false
+  reqChangeTeachers.value = []
+  reqChangeStudents.value = []
   reqChangeOpen.value = true
+
+  if (!auth.isDean) return
+
+  reqChangePartsLoading.value = true
+  try {
+    const [partsRes, usersRes] = await Promise.allSettled([
+      retakesApi.getParticipants(retake.id),
+      usersApi.getAll({ limit: 500 }),
+    ])
+
+    const nameMap = {}
+    if (usersRes.status === 'fulfilled') {
+      const list = usersRes.value.data.items ?? usersRes.value.data ?? []
+      list.forEach(u => {
+        nameMap[u.id] = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ')
+      })
+    }
+
+    if (partsRes.status === 'fulfilled') {
+      const parts = partsRes.value.data.items ?? partsRes.value.data ?? []
+      reqChangeTeachers.value = parts
+        .filter(p => p.kind === 'teacher' || p.kind === 'commission_member')
+        .map(p => nameMap[p.user_id])
+        .filter(Boolean)
+      reqChangeStudents.value = parts
+        .filter(p => p.kind === 'student')
+        .map(p => nameMap[p.user_id])
+        .filter(Boolean)
+    }
+  } catch { /* не критично */ } finally {
+    reqChangePartsLoading.value = false
+  }
 }
 function closeRequestChange() {
   reqChangeOpen.value = false
@@ -148,6 +184,9 @@ async function submitRequestChange() {
   const changes = {}
   const f = reqChangeForm
 
+  const BUILDING_RE_CH = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+  const ROOM_RE_CH     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+
   // Дата+время: если указана дата ИЛИ часы/минуты — собираем полный ISO.
   // Если только дата без времени — берём 00:00; если только время — ошибка.
   if (f.scheduledAt || f.hour || f.minute) {
@@ -157,14 +196,17 @@ async function submitRequestChange() {
     }
     const hh = String(f.hour || '00').padStart(2, '0')
     const mm = String(f.minute || '00').padStart(2, '0')
-    // scheduledAt format dd.MM.yyyy → нужен ISO. VueDatePicker model-type="format"
     const [d, mo, y] = f.scheduledAt.split('.')
     if (!d || !mo || !y) {
       reqChangeError.value = 'Дата в формате дд.мм.гггг'
       return
     }
-    const iso = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`).toISOString()
-    changes.scheduled_at = iso
+    const newDt = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`)
+    if (newDt <= new Date()) {
+      reqChangeError.value = 'Новая дата и время должны быть в будущем'
+      return
+    }
+    changes.scheduled_at = newDt.toISOString()
   }
 
   if (f.duration !== '' && f.duration != null) {
@@ -176,8 +218,20 @@ async function submitRequestChange() {
     changes.duration_minutes = d
   }
 
-  if (f.building.trim() !== '') changes.building = f.building.trim()
-  if (f.room.trim()     !== '') changes.room     = f.room.trim()
+  if (f.building.trim() !== '') {
+    if (!BUILDING_RE_CH.test(f.building.trim())) {
+      reqChangeError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'
+      return
+    }
+    changes.building = f.building.trim()
+  }
+  if (f.room.trim() !== '') {
+    if (!ROOM_RE_CH.test(f.room.trim())) {
+      reqChangeError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'
+      return
+    }
+    changes.room = f.room.trim()
+  }
   if (f.notes.trim()    !== '') changes.notes    = f.notes.trim()
 
   if (Object.keys(changes).length === 0) {
@@ -513,8 +567,8 @@ async function saveEdit() {
             <div class="card-foot">
               <span class="kind-tag">{{ KIND_LABELS[r.kind] || r.kind }}</span>
               <div class="card-actions">
-                <!-- Teacher: запросить изменения (POST /api/retake-change-requests) -->
-                <button v-if="auth.isTeacher && r.status !== 'completed' && r.status !== 'cancelled'"
+                <!-- Teacher: запросить изменения — только для запланированных -->
+                <button v-if="auth.isTeacher && r.status === 'scheduled'"
                         class="btn-action" @click="openRequestChange(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
@@ -522,8 +576,9 @@ async function saveEdit() {
                   </svg>
                   Запросить изменения
                 </button>
-                <!-- Dean: direct edit -->
-                <button v-if="auth.isDean" class="btn-action" @click="openEdit(r)">
+                <!-- Dean: edit — только для запланированных и идущих -->
+                <button v-if="auth.isDean && (r.status === 'scheduled' || r.status === 'in_progress')"
+                        class="btn-action" @click="openEdit(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -693,7 +748,7 @@ async function saveEdit() {
     <Teleport to="body">
       <Transition name="modal">
         <div v-if="reqChangeOpen" class="modal-overlay" @click.self="closeRequestChange">
-          <div class="modal modal--edit">
+          <div class="modal modal--wide">
 
             <div class="modal-head">
               <span class="modal-title">Запросить изменения пересдачи</span>
@@ -703,24 +758,44 @@ async function saveEdit() {
             </div>
 
             <div class="modal-body modal-body--form">
-              <p class="hint-info">
-                Заполните только те поля, которые хотите изменить. Пустые поля останутся прежними.
-                Декан рассмотрит заявку и одобрит или отклонит её.
-              </p>
 
+              <!-- Текущие значения -->
               <div v-if="reqChangeTarget" class="current-info">
-                <div class="ci-row"><span class="ci-key">Сейчас:</span></div>
                 <div class="ci-row">
                   <span class="ci-key">Дата и время</span>
                   <span class="ci-val">{{ fmtDate(reqChangeTarget.scheduled_at) }} в {{ fmtTime(reqChangeTarget.scheduled_at) }}</span>
                 </div>
                 <div class="ci-row">
                   <span class="ci-key">Место</span>
-                  <span class="ci-val">{{ reqChangeTarget.building || '—' }} / {{ reqChangeTarget.room || '—' }}</span>
+                  <span class="ci-val">корп. {{ reqChangeTarget.building || '—' }}, ауд. {{ reqChangeTarget.room || '—' }}</span>
                 </div>
                 <div class="ci-row">
                   <span class="ci-key">Длительность</span>
                   <span class="ci-val">{{ reqChangeTarget.duration_minutes }} мин</span>
+                </div>
+              </div>
+
+              <!-- Участники (только просмотр) — доступно только декану -->
+              <div v-if="auth.isDean" class="req-participants">
+                <div class="req-parts-col">
+                  <span class="req-parts-label">Преподаватели</span>
+                  <div v-if="reqChangePartsLoading" class="req-parts-loading">
+                    <div class="spinner-sm" />
+                  </div>
+                  <div v-else class="req-parts-tags">
+                    <span v-for="t in reqChangeTeachers" :key="t" class="rptag">{{ t }}</span>
+                    <span v-if="!reqChangeTeachers.length" class="req-parts-empty">—</span>
+                  </div>
+                </div>
+                <div class="req-parts-col">
+                  <span class="req-parts-label">Студенты</span>
+                  <div v-if="reqChangePartsLoading" class="req-parts-loading">
+                    <div class="spinner-sm" />
+                  </div>
+                  <div v-else class="req-parts-tags">
+                    <span v-for="s in reqChangeStudents" :key="s" class="rptag rptag--student">{{ s }}</span>
+                    <span v-if="!reqChangeStudents.length" class="req-parts-empty">—</span>
+                  </div>
                 </div>
               </div>
 
@@ -730,18 +805,17 @@ async function saveEdit() {
                     <label>Новая дата</label>
                     <VueDatePicker v-model="reqChangeForm.scheduledAt" locale="ru"
                                    format="dd.MM.yyyy" model-type="format"
-                                   :enable-time-picker="false" auto-apply
-                                   placeholder="дд.мм.гггг" />
+                                   :enable-time-picker="false" auto-apply />
                   </div>
                   <div class="field">
                     <label>Новое время</label>
                     <div class="time-picker">
                       <input class="time-input" type="text" inputmode="numeric"
-                             v-model="reqChangeForm.hour" maxlength="2" placeholder="чч"
+                             v-model="reqChangeForm.hour" maxlength="2"
                              @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
                       <span class="time-colon">:</span>
                       <input class="time-input" type="text" inputmode="numeric"
-                             v-model="reqChangeForm.minute" maxlength="2" placeholder="мм"
+                             v-model="reqChangeForm.minute" maxlength="2"
                              @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
                     </div>
                   </div>
@@ -750,32 +824,33 @@ async function saveEdit() {
                 <div class="form-row">
                   <div class="field">
                     <label>Длительность (мин)</label>
-                    <input class="input" type="number" min="15" max="480"
-                           v-model="reqChangeForm.duration" placeholder="напр. 90" />
+                    <div class="stepper">
+                      <button type="button" class="stepper-btn"
+                              @click="reqChangeForm.duration = Math.max(15, (Number(reqChangeForm.duration) || 90) - 5)"
+                              :disabled="(Number(reqChangeForm.duration) || 90) <= 15">−</button>
+                      <input class="stepper-input" type="number"
+                             :value="reqChangeForm.duration || ''"
+                             @input="reqChangeForm.duration = $event.target.value"
+                             min="15" max="480" />
+                      <button type="button" class="stepper-btn"
+                              @click="reqChangeForm.duration = Math.min(480, (Number(reqChangeForm.duration) || 90) + 5)"
+                              :disabled="(Number(reqChangeForm.duration) || 90) >= 480">+</button>
+                    </div>
                   </div>
                   <div class="field">
                     <label>Корпус</label>
-                    <input class="input" v-model="reqChangeForm.building" placeholder="напр. 1" />
+                    <input class="input" v-model="reqChangeForm.building" />
                   </div>
                   <div class="field">
                     <label>Аудитория</label>
-                    <input class="input" v-model="reqChangeForm.room" placeholder="напр. 204" />
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="field field--full">
-                    <label>Дополнительные заметки</label>
-                    <input class="input" v-model="reqChangeForm.notes" placeholder="опционально" />
+                    <input class="input" v-model="reqChangeForm.room" />
                   </div>
                 </div>
 
                 <div class="form-row">
                   <div class="field field--full">
                     <label>Причина изменения</label>
-                    <textarea class="input textarea" rows="3"
-                              v-model="reqChangeForm.reason"
-                              placeholder="Объясните декану, почему нужны изменения — это поможет ему быстрее одобрить заявку" />
+                    <textarea class="input textarea" rows="3" v-model="reqChangeForm.reason" />
                   </div>
                 </div>
 
@@ -998,6 +1073,8 @@ async function saveEdit() {
   display: flex; flex-direction: column; max-height: 90vh; overflow: hidden;
   border: 1px solid #e5e7eb;
 }
+:global(.modal--wide) { max-width: 720px;
+}
 
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1084,14 +1161,28 @@ async function saveEdit() {
 /* Request-change modal helpers */
 .req-form { display: flex; flex-direction: column; gap: 14px; }
 
-.hint-info {
-  background: rgba(59,63,224,.06);
-  border: 1px solid rgba(59,63,224,.18);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  font: 13px/1.45 'Inter', sans-serif;
-  color: var(--brand-ink);
-  margin: 0 0 16px;
+.req-participants {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  background: var(--bg); border-radius: var(--radius); padding: 14px 16px;
+}
+.req-parts-col { display: flex; flex-direction: column; gap: 8px; }
+.req-parts-label {
+  font: 600 11px/1 'Inter', sans-serif;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em;
+}
+.req-parts-loading { display: flex; align-items: center; height: 24px; }
+.req-parts-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.req-parts-empty { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.rptag {
+  display: inline-flex; align-items: center; padding: 4px 10px;
+  background: rgba(59,63,224,.08); color: var(--brand-ink);
+  border-radius: 20px; font: 500 12px/1.4 'Inter', sans-serif;
+}
+.rptag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.spinner-sm {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite;
 }
 
 .current-info {

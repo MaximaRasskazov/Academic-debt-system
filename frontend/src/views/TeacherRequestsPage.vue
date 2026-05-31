@@ -7,6 +7,7 @@ import AppSidebar from '../components/AppSidebar.vue'
 import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
 import { retakeRequestsApi } from '../api/retakeRequests'
+import { debtsApi } from '../api/debts'
 
 const sidebarOpen = ref(false)
 
@@ -20,7 +21,7 @@ const typeOptions = [
 ]
 const DURATION_STEP = 5, DURATION_MIN = 15, DURATION_MAX = 480
 const STATUS_LABELS = { pending: 'Ожидает', approved: 'Одобрена', rejected: 'Отклонена' }
-const TYPE_LABELS   = { normal: 'Обычная', commission: 'С комиссией' }
+const TYPE_LABELS   = { normal: 'Обычная', regular: 'Обычная', commission: 'С комиссией' }
 
 function clamp(val, min, max) { return Math.max(min, Math.min(max, val || min)) }
 
@@ -110,6 +111,17 @@ const teacherOpen         = ref(false)
 const groupSelect         = ref('')
 const groupDropOpen       = ref(false)
 let sBlur = null, tBlur = null
+
+function onTeacherFocus() {
+  clearTimeout(tBlur)
+  studentOpen.value = false
+  teacherOpen.value = true
+}
+function onStudentFocus() {
+  clearTimeout(sBlur)
+  teacherOpen.value = false
+  studentOpen.value = true
+}
 
 const selectedStudentIds = computed(() => new Set(selectedStudents.value.map(s => s.id)))
 const selectedTeacherIds = computed(() => new Set(selectedTeachers.value.map(t => t.id)))
@@ -255,14 +267,26 @@ function resetForm() {
   formError.value = ''
 }
 
+const BUILDING_RE = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+const ROOM_RE     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+
 async function submitForm() {
   formError.value = ''
   if (!disciplineId.value)  { formError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)    { formError.value = 'Укажите дату'; return }
-  if (!teacherCountOk.value) { formError.value = `Минимум ${minTeachers.value} преподавател${minTeachers.value > 1 ? 'я' : 'ь'}`; return }
 
   const [day, month, year] = retakeDate.value.split('.')
-  const scheduledAt = new Date(`${year}-${month}-${day}T${hourDisplay.value}:${minuteDisplay.value}:00`).toISOString()
+  const scheduledDt = new Date(`${year}-${month}-${day}T${hourDisplay.value}:${minuteDisplay.value}:00`)
+  if (scheduledDt <= new Date()) { formError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+
+  const bld = building.value.trim()
+  const rm  = room.value.trim()
+  if (bld && !BUILDING_RE.test(bld)) { formError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'; return }
+  if (rm  && !ROOM_RE.test(rm))      { formError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'; return }
+
+  if (!teacherCountOk.value) { formError.value = `Минимум ${minTeachers.value} преподавател${minTeachers.value > 1 ? 'я' : 'ь'}`; return }
+
+  const scheduledAt = scheduledDt.toISOString()
 
   formSubmitting.value = true
   try {
@@ -298,8 +322,77 @@ async function submitForm() {
 
 // ── Detail modal ──────────────────────────────────────────
 const detailModal = ref(null)
-function openDetail(r)  { detailModal.value = r }
-function closeDetail()  { detailModal.value = null }
+const studentsExpanded = ref(false)
+
+async function openDetail(r) {
+  const p = r.payload || {}
+  const d = p.scheduled_at ? new Date(p.scheduled_at) : null
+  const pad = (n) => String(n).padStart(2, '0')
+  detailModal.value = {
+    subject:      discMapMy.value[p.discipline_id] || 'Дисциплина',
+    status:       r.status,
+    submittedAt:  r.created_at
+      ? new Date(r.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })
+      : '—',
+    type:         p.kind || 'regular',
+    date:         d ? d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—',
+    time:         d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '—',
+    duration:     p.duration_minutes ?? '—',
+    building:     p.building || '',
+    room:         p.room || '',
+    group:        '',
+    teachers:     [],
+    students:     [],
+    loadingParts: true,
+    description:  p.notes || '',
+    rejectReason: r.decision_reason || '',
+    _raw:         r,
+  }
+
+  try {
+    // Загружаем преподавателей и должников по дисциплине параллельно
+    const [teachersRes, debtorsRes, ...debtResults] = await Promise.allSettled([
+      directoryApi.listTeachers(),
+      directoryApi.listDebtors(p.discipline_id),
+      ...(p.student_debt_ids || []).map(dId => debtsApi.getById(dId)),
+    ])
+
+    if (!detailModal.value) return
+
+    // Преподаватели: карта id → ФИО
+    if (teachersRes.status === 'fulfilled') {
+      const tList = teachersRes.value.data.items ?? teachersRes.value.data ?? []
+      const tMap = {}
+      tList.forEach(t => {
+        tMap[t.id] = [t.last_name, t.first_name, t.middle_name].filter(Boolean).join(' ')
+      })
+      detailModal.value.teachers = (p.teacher_ids || [])
+        .map(id => tMap[id])
+        .filter(Boolean)
+    }
+
+    // Студенты: из listDebtors получаем ФИО по student_id
+    // debtResults содержат {student_id} — резолвим через карту должников
+    const studentMap = {}
+    if (debtorsRes.status === 'fulfilled') {
+      const dList = debtorsRes.value.data.items ?? debtorsRes.value.data ?? []
+      dList.forEach(d => {
+        studentMap[d.student_id] = [d.last_name, d.first_name, d.middle_name].filter(Boolean).join(' ')
+      })
+    }
+    detailModal.value.students = debtResults
+      .filter(r => r.status === 'fulfilled')
+      .map(r => {
+        const debt = r.value.data ?? r.value
+        return studentMap[debt.student_id] || null
+      })
+      .filter(Boolean)
+  } catch { /* не критично */ } finally {
+    if (detailModal.value) detailModal.value.loadingParts = false
+  }
+}
+
+function closeDetail() { detailModal.value = null; studentsExpanded.value = false }
 </script>
 
 <template>
@@ -469,7 +562,8 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field field--full picker-wrap">
                   <label>{{ isCommission ? 'Преподаватели комиссии (мин. 3)' : 'Преподаватель' }}</label>
-                  <div class="token-input" :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }">
+                  <div class="token-input" :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()">
                     <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
                       <span class="token-chip-text">{{ t.name }}</span>
                       <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
@@ -478,7 +572,7 @@ function closeDetail()  { detailModal.value = null }
                       v-model="teacherSearch"
                       :placeholder="selectedTeachers.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
-                      @focus="teacherOpen = true" @blur="tBlur = setTimeout(() => teacherOpen = false, 200)"
+                      @focus="onTeacherFocus" @blur="tBlur = setTimeout(() => teacherOpen = false, 200)"
                       @keydown.enter.prevent="onTeacherEnter"
                     />
                   </div>
@@ -494,7 +588,8 @@ function closeDetail()  { detailModal.value = null }
               <div class="form-row">
                 <div class="field picker-wrap">
                   <label>Студенты</label>
-                  <div class="token-input" :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }">
+                  <div class="token-input" :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()">
                     <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
                       <span class="token-chip-text">{{ s.name }}</span>
                       <span v-if="s.group" class="token-group">· {{ s.group }}</span>
@@ -504,7 +599,7 @@ function closeDetail()  { detailModal.value = null }
                       v-model="studentSearch"
                       :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
-                      @focus="studentOpen = true" @blur="sBlur = setTimeout(() => studentOpen = false, 200)"
+                      @focus="onStudentFocus" @blur="sBlur = setTimeout(() => studentOpen = false, 200)"
                       @keydown.enter.prevent="onStudentEnter"
                     />
                   </div>
@@ -625,7 +720,10 @@ function closeDetail()  { detailModal.value = null }
               </div>
 
               <!-- People -->
-              <div class="detail-people">
+              <div v-if="detailModal.loadingParts" class="parts-loading">
+                <div class="spinner-sm" /><span>Загрузка участников…</span>
+              </div>
+              <div v-else class="detail-people">
                 <div class="detail-people-col">
                   <span class="dil">{{ detailModal.type === 'commission' ? 'Преподаватели' : 'Преподаватель' }}</span>
                   <div class="detail-tags">
@@ -634,10 +732,20 @@ function closeDetail()  { detailModal.value = null }
                   </div>
                 </div>
                 <div class="detail-people-col">
-                  <span class="dil">Студенты</span>
+                  <span class="dil">Студенты ({{ detailModal.students.length }})</span>
                   <div class="detail-tags">
-                    <span v-for="s in detailModal.students" :key="s" class="tag tag--student">{{ s }}</span>
-                    <span v-if="!detailModal.students.length" class="div">—</span>
+                    <template v-if="detailModal.students.length">
+                      <span
+                        v-for="s in (studentsExpanded ? detailModal.students : detailModal.students.slice(0, 5))"
+                        :key="s" class="tag tag--student"
+                      >{{ s }}</span>
+                      <button
+                        v-if="detailModal.students.length > 5"
+                        class="tag-more"
+                        @click="studentsExpanded = !studentsExpanded"
+                      >{{ studentsExpanded ? 'Скрыть' : `+ ещё ${detailModal.students.length - 5}` }}</button>
+                    </template>
+                    <span v-else class="div">—</span>
                   </div>
                 </div>
               </div>
@@ -1151,6 +1259,25 @@ function closeDetail()  { detailModal.value = null }
 .modal-enter-active .modal { transition: transform .25s var(--ease); }
 .modal-leave-active  .modal { transition: transform .2s  var(--ease); }
 .modal-enter-from .modal, .modal-leave-to .modal { transform: scale(.96) translateY(12px); }
+
+/* ── Participants loading / expand ── */
+.parts-loading {
+  display: flex; align-items: center; gap: 8px;
+  font: 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  padding: 4px 0; margin-bottom: 16px;
+}
+.spinner-sm {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite; flex-shrink: 0;
+}
+.tag-more {
+  display: inline-flex; align-items: center; padding: 4px 10px;
+  background: none; border: 1.5px dashed var(--line); border-radius: 20px;
+  color: var(--ink-soft); font: 500 12px/1.4 'Inter', sans-serif;
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+.tag-more:hover { border-color: var(--brand); color: var(--brand); }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {

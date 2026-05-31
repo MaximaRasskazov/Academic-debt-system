@@ -1,4 +1,5 @@
 <script setup>
+import iconClipboard from '../assets/icons/Clipboard.svg'
 defineProps({
   retakes: { type: Array, default: () => [] },
 })
@@ -12,12 +13,16 @@ function formatDayLabel(r) {
 <template>
   <div class="section-card">
     <h2 class="section-title">Ближайшие пересдачи</h2>
-    <ul class="notif-list">
+    <div v-if="retakes.length === 0" class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+      </svg>
+      <span>Нет запланированных пересдач</span>
+    </div>
+    <ul v-else class="notif-list">
       <li v-for="r in retakes" :key="r.id" class="notif-item">
         <div class="notif-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
-          </svg>
+          <img :src="iconClipboard" class="clipboard-icon" alt="" />
         </div>
         <div class="notif-body">
           <div class="notif-subject">{{ r.subject }}</div>
@@ -42,6 +47,13 @@ function formatDayLabel(r) {
 </template>
 
 <style scoped>
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 24px 0;
+  font: 500 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); text-align: center;
+}
+.empty-state svg { width: 32px; height: 32px; opacity: .35; }
+
 .section-card {
   background: var(--card); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 24px; margin-bottom: 20px;
@@ -61,11 +73,11 @@ function formatDayLabel(r) {
 .notif-item:first-child { padding-top: 0; }
 
 .notif-icon {
-  width: 38px; height: 38px; border-radius: 50%;
+  width: 42px; height: 42px; border-radius: 12px;
   display: grid; place-items: center; flex-shrink: 0;
-  background: rgba(59,63,224,.1); color: var(--brand);
+  background: rgba(110,114,200,.12);
 }
-.notif-icon svg { width: 18px; height: 18px; }
+.clipboard-icon { width: 26px; height: 26px; object-fit: contain; display: block; }
 
 .notif-body { flex: 1; min-width: 0; }
 .notif-subject {

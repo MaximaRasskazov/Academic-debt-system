@@ -9,6 +9,7 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { notificationsApi } from '../api/notifications'
+import { notifMeta, notifTitle, notifBody, timeAgo } from '../utils/notifFormat'
 
 const auth = useAuthStore()
 const sidebarOpen = ref(false)
@@ -27,41 +28,17 @@ const feed        = ref([])
 const feedLoading = ref(true)
 const unreadCount = ref(0)
 
-const NOTIF_ICONS = {
-  retake_assigned:  'calendar',
-  retake_updated:   'edit',
-  retake_cancelled: 'x-circle',
-  grade_set:        'award',
-  request_approved: 'check',
-  request_rejected: 'x-circle',
-  default:          'bell',
-}
-
-function notifIcon(type) { return NOTIF_ICONS[type] || NOTIF_ICONS.default }
-
-function timeAgo(iso) {
-  if (!iso) return ''
-  const diff = Date.now() - new Date(iso).getTime()
-  const m = Math.floor(diff / 60000)
-  if (m < 1)  return 'только что'
-  if (m < 60) return `${m} мин назад`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} ч назад`
-  const d = Math.floor(h / 24)
-  if (d < 7)  return `${d} д назад`
-  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
-}
 
 async function markRead(n) {
-  if (n.is_read) return
-  n.is_read = true
+  if (n.read_at) return
+  n.read_at = new Date().toISOString()
   unreadCount.value = Math.max(0, unreadCount.value - 1)
   try { await notificationsApi.markRead(n.id) } catch { /* silent */ }
 }
 
 async function markAllRead() {
-  const unread = feed.value.filter(n => !n.is_read)
-  unread.forEach(n => { n.is_read = true })
+  const unread = feed.value.filter(n => !n.read_at)
+  unread.forEach(n => { n.read_at = new Date().toISOString() })
   unreadCount.value = 0
   await Promise.allSettled(unread.map(n => notificationsApi.markRead(n.id)))
 }
@@ -77,7 +54,7 @@ function connectWS() {
       try {
         const n = JSON.parse(e.data)
         feed.value.unshift(n)
-        if (!n.is_read) unreadCount.value++
+        if (!n.read_at) unreadCount.value++
       } catch { /* ignore */ }
     }
     ws.onerror = () => {}
@@ -88,18 +65,23 @@ function connectWS() {
 onMounted(async () => {
   connectWS()
 
-  const [myDiscRes, debtsRes, retakesRes, notifsRes] = await Promise.allSettled([
+  const [myDiscRes, allDiscRes, debtsRes, retakesRes, notifsRes] = await Promise.allSettled([
     disciplinesApi.myAsTeacher(),
+    disciplinesApi.getAll({ limit: 500 }),
     debtsApi.getByDiscipline(),
     retakesApi.getMy(),
     notificationsApi.getAll({ limit: 30 }),
   ])
 
   const discMap = {}
+  const allDiscs = allDiscRes.status === 'fulfilled'
+    ? (allDiscRes.value.data.items ?? allDiscRes.value.data ?? [])
+    : []
+  allDiscs.forEach(d => { discMap[d.id] = d.name || d.code })
+
   const myDiscs = myDiscRes.status === 'fulfilled'
     ? (myDiscRes.value.data.items ?? myDiscRes.value.data ?? [])
     : []
-  myDiscs.forEach(d => { discMap[d.id] = d.name || d.code })
 
   const activeDebts = debtsRes.status === 'fulfilled'
     ? (debtsRes.value.data.total ?? (debtsRes.value.data.items ?? []).length)
@@ -132,7 +114,7 @@ onMounted(async () => {
 
   if (notifsRes.status === 'fulfilled') {
     feed.value = notifsRes.value.data.items ?? notifsRes.value.data ?? []
-    unreadCount.value = feed.value.filter(n => !n.is_read).length
+    unreadCount.value = feed.value.filter(n => !n.read_at).length
   }
   feedLoading.value = false
 
@@ -157,20 +139,21 @@ onUnmounted(() => { ws?.close() })
 
       <main class="main">
 
-        <!-- ── Stats row ── -->
-        <section class="stats-row">
-          <div v-for="s in stats" :key="s.label" class="stat-card">
-            <div class="stat-accent" :style="{ background: s.accent }" />
-            <div class="stat-value">{{ s.value }}</div>
-            <div class="stat-label">{{ s.label }}</div>
-          </div>
-        </section>
-
         <!-- ── Content columns ── -->
         <section class="content-cols">
 
-          <!-- News feed -->
+          <!-- Left: stats + feed -->
           <div class="feed-col">
+
+            <!-- Stats -->
+            <div class="stats-row">
+              <div v-for="s in stats" :key="s.label" class="stat-card">
+                <div class="stat-accent" :style="{ background: s.accent }" />
+                <div class="stat-value">{{ s.value }}</div>
+                <div class="stat-label">{{ s.label }}</div>
+              </div>
+            </div>
+
             <div class="feed-card">
               <div class="feed-head">
                 <div class="feed-title-row">
@@ -198,36 +181,24 @@ onUnmounted(() => { ws?.close() })
                 <li
                   v-for="n in feed" :key="n.id"
                   class="feed-item"
-                  :class="{ unread: !n.is_read }"
+                  :class="{ unread: !n.read_at }"
                   @click="markRead(n)"
                 >
-                  <div class="notif-icon-wrap" :class="'icon-' + notifIcon(n.type)">
-                    <svg v-if="notifIcon(n.type) === 'calendar'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-                    </svg>
-                    <svg v-else-if="notifIcon(n.type) === 'edit'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                    </svg>
-                    <svg v-else-if="notifIcon(n.type) === 'x-circle'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <div class="notif-icon-wrap" :style="{ background: notifMeta(n.kind ?? n.type).bg }">
+                    <img v-if="notifMeta(n.kind ?? n.type).img" :src="notifMeta(n.kind ?? n.type).img" class="notif-icon-img" alt="" />
+                    <svg v-else-if="notifMeta(n.kind ?? n.type).label === 'cancelled'" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2" stroke-linecap="round" class="notif-icon-svg">
                       <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
                     </svg>
-                    <svg v-else-if="notifIcon(n.type) === 'award'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/>
-                    </svg>
-                    <svg v-else-if="notifIcon(n.type) === 'check'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
-                    </svg>
-                    <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="notif-icon-svg">
                       <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
                     </svg>
                   </div>
                   <div class="notif-body">
-                    <div class="notif-title">{{ n.title || 'Уведомление' }}</div>
-                    <div v-if="n.body" class="notif-text">{{ n.body }}</div>
+                    <div class="notif-title">{{ notifTitle(n) }}</div>
+                    <div class="notif-text">{{ notifBody(n) }}</div>
                     <div class="notif-time">{{ timeAgo(n.created_at) }}</div>
                   </div>
-                  <div v-if="!n.is_read" class="unread-dot" />
+                  <div v-if="!n.read_at" class="unread-dot" />
                 </li>
               </ul>
             </div>
@@ -274,6 +245,17 @@ onUnmounted(() => { ws?.close() })
 
 .main { flex: 1; display: flex; flex-direction: column; gap: 20px; padding: 24px; }
 
+/* ── Content columns ── */
+.content-cols {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+/* ── Feed col (stats + feed) ── */
+.feed-col { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+
 /* ── Stats row ── */
 .stats-row {
   display: grid;
@@ -289,17 +271,6 @@ onUnmounted(() => { ws?.close() })
 .stat-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
 .stat-value  { font-size: 34px; font-weight: 700; line-height: 1; margin-bottom: 8px; }
 .stat-label  { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
-
-/* ── Content columns ── */
-.content-cols {
-  display: grid;
-  grid-template-columns: 1fr 300px;
-  gap: 20px;
-  align-items: start;
-}
-
-/* ── Feed ── */
-.feed-col { min-width: 0; }
 .feed-card {
   background: var(--card); border-radius: var(--radius);
   box-shadow: var(--shadow); overflow: hidden;
@@ -354,25 +325,19 @@ onUnmounted(() => { ws?.close() })
 .feed-item.unread { background: rgba(59,63,224,.03); }
 
 .notif-icon-wrap {
-  width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+  width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0;
   display: grid; place-items: center;
 }
-.notif-icon-wrap svg { width: 18px; height: 18px; }
+.notif-icon-img { width: 26px; height: 26px; object-fit: contain; display: block; }
+.notif-icon-svg { width: 20px; height: 20px; }
 
-.icon-calendar   { background: rgba(59,63,224,.1);   color: var(--brand); }
-.icon-edit       { background: rgba(245,158,11,.1);  color: #b45309; }
-.icon-x-circle   { background: rgba(220,38,38,.08);  color: #b91c1c; }
-.icon-award      { background: rgba(16,185,129,.1);  color: #065f46; }
-.icon-check      { background: rgba(16,185,129,.1);  color: #065f46; }
-.icon-bell       { background: rgba(107,114,128,.1); color: var(--ink-soft); }
-
-.notif-body { flex: 1; min-width: 0; }
+.notif-body { flex: 1; min-width: 0; text-align: left; }
 .notif-title {
-  font: 600 13px/1.4 'Inter', sans-serif; color: var(--ink);
+  font: 600 13px/1.4 'Inter', sans-serif; color: var(--ink); text-align: left;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .notif-text {
-  font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft);
+  font: 13px/1.4 'Inter', sans-serif; color: var(--ink-soft); text-align: left;
   margin-top: 3px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }

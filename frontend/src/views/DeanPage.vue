@@ -78,10 +78,22 @@ const filteredTeachers = computed(() => {
 
 let teacherBlurTimer = null
 let studentBlurTimer = null
-function onTeacherBlur() { teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200) }
-function onStudentBlur() { studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200) }
-function onTeacherFocus() { clearTimeout(teacherBlurTimer); teacherOpen.value = true }
-function onStudentFocus() { clearTimeout(studentBlurTimer); studentOpen.value = true }
+function onTeacherFocus() {
+  clearTimeout(teacherBlurTimer)
+  studentOpen.value = false  // закрываем студентов
+  teacherOpen.value = true
+}
+function onTeacherBlur() {
+  teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200)
+}
+function onStudentFocus() {
+  clearTimeout(studentBlurTimer)
+  teacherOpen.value = false  // закрываем преподавателей
+  studentOpen.value = true
+}
+function onStudentBlur() {
+  studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200)
+}
 
 watch(disciplineId, async (id) => {
   availableStudents.value = []
@@ -225,12 +237,25 @@ const submitting  = ref(false)
 const submitError   = ref('')
 const submitSuccess = ref(false)
 
+const BUILDING_RE = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+const ROOM_RE     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+
 async function submitRetake() {
   submitError.value = ''
   if (!disciplineId.value)   { submitError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)      { submitError.value = 'Укажите дату'; return }
-  if (!building.value.trim()) { submitError.value = 'Укажите корпус'; return }
-  if (!room.value.trim())     { submitError.value = 'Укажите аудиторию'; return }
+
+  const [day, month, year] = retakeDate.value.split('.')
+  const scheduledAt = new Date(`${year}-${month}-${day}T${timeString.value}:00`)
+  if (scheduledAt <= new Date()) { submitError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+
+  const bld = building.value.trim()
+  const rm  = room.value.trim()
+  if (!bld) { submitError.value = 'Укажите корпус'; return }
+  if (!BUILDING_RE.test(bld)) { submitError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'; return }
+  if (!rm) { submitError.value = 'Укажите аудиторию'; return }
+  if (!ROOM_RE.test(rm)) { submitError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'; return }
+
   if (!teacherCountOk.value)  {
     submitError.value = isCommission.value
       ? 'Для комиссии нужно минимум 3 преподавателя'
@@ -238,17 +263,16 @@ async function submitRetake() {
     return
   }
 
-  const [day, month, year] = retakeDate.value.split('.')
-  const scheduledAt = new Date(`${year}-${month}-${day}T${timeString.value}:00`).toISOString()
+  const scheduledAtIso = scheduledAt.toISOString()
 
   submitting.value = true
   try {
     const { data: retake } = await retakesApi.create({
       discipline_id: disciplineId.value,
       kind: isCommission.value ? 'commission' : 'regular',
-      building: building.value,
-      room: room.value,
-      scheduled_at: scheduledAt,
+      building: bld,
+      room: rm,
+      scheduled_at: scheduledAtIso,
       duration_minutes: duration.value,
     })
 
@@ -461,7 +485,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                   <div
                     class="token-input"
                     :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
-                    @click="$el.querySelector('.token-field').focus()"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
                   >
                     <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
                       <span class="token-chip-text">{{ t.name }}</span>
@@ -502,7 +526,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                   <div
                     class="token-input"
                     :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
-                    @click="$el.querySelector('.token-field-s').focus()"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
                   >
                     <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
                       <span class="token-chip-text">{{ s.name }}</span>
