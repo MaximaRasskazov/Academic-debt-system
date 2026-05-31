@@ -346,9 +346,7 @@ var ErrAuthInvalid = fmt.Errorf("emulator: неверные учётные да�
 // ErrAuthInvalid при 401, или сетевую/прочую ошибку если эмулятор
 // недоступен (auth-слой трактует это как «сервис деканата лёг»).
 func (c *Client) AuthCheck(ctx context.Context, email, password string) (string, error) {
-	// Пароль отправляется намеренно — это proxy-login: спрашиваем эмулятор
-	// «верны ли учётные данные». Не утечка секрета, поэтому глушим gosec.
-	body, err := json.Marshal(authCheckRequest{Email: email, Password: password}) // #nosec G117
+	body, err := json.Marshal(authCheckRequest{Email: email, Password: password}) //nolint:gosec // G117: пароль намеренно передаётся эмулятору для верификации
 	if err != nil {
 		return "", fmt.Errorf("marshal auth check: %w", err)
 	}
