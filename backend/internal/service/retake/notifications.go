@@ -16,21 +16,26 @@ import (
 // scheduled_at; остальные ключи добавляют конкретные методы.
 type retakePayload = map[string]any
 
-// notifyStudent шлёт одно уведомление конкретному студенту. Используется
-// для AddStudent и GradeStudent. Ошибка только логируется — нотификация
-// не должна валить успешно прошедшую мутацию (БД-инвариант уже соблюдён).
-func (s *Service) notifyStudent(ctx context.Context, studentID uuid.UUID, kind string, payload retakePayload) {
+// notifyUser шлёт одно уведомление конкретному пользователю. Ошибка только
+// логируется — нотификация не должна валить успешно прошедшую мутацию
+// (БД-инвариант уже соблюдён).
+func (s *Service) notifyUser(ctx context.Context, userID uuid.UUID, kind string, payload retakePayload) {
 	if s.notify == nil {
 		return
 	}
 	if err := s.notify.Notify(ctx, notify.Event{
-		UserID:  studentID,
+		UserID:  userID,
 		Kind:    kind,
 		Payload: payload,
 	}); err != nil {
 		slog.Warn("retake: не удалось отправить уведомление",
-			"kind", kind, "user_id", studentID.String(), "err", err)
+			"kind", kind, "user_id", userID.String(), "err", err)
 	}
+}
+
+// notifyStudent оставляем как читаемую обёртку для студентских событий.
+func (s *Service) notifyStudent(ctx context.Context, studentID uuid.UUID, kind string, payload retakePayload) {
+	s.notifyUser(ctx, studentID, kind, payload)
 }
 
 // notifyAllStudents рассылает событие всем студентам-участникам retake.
