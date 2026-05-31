@@ -346,7 +346,9 @@ var ErrAuthInvalid = fmt.Errorf("emulator: неверные учётные да�
 // ErrAuthInvalid при 401, или сетевую/прочую ошибку если эмулятор
 // недоступен (auth-слой трактует это как «сервис деканата лёг»).
 func (c *Client) AuthCheck(ctx context.Context, email, password string) (string, error) {
-	body, err := json.Marshal(authCheckRequest{Email: email, Password: password})
+	// Пароль отправляется намеренно — это proxy-login: спрашиваем эмулятор
+	// «верны ли учётные данные». Не утечка секрета, поэтому глушим gosec.
+	body, err := json.Marshal(authCheckRequest{Email: email, Password: password}) // #nosec G117
 	if err != nil {
 		return "", fmt.Errorf("marshal auth check: %w", err)
 	}
@@ -435,12 +437,12 @@ func (c *Client) PatchDebtGrade(ctx context.Context, debtExternalID string, grad
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		return nil
-	case resp.StatusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		return ErrNotFound
-	case resp.StatusCode == http.StatusUnprocessableEntity:
+	case http.StatusUnprocessableEntity:
 		// 422 — валидация; вытаскиваем reason в обёртку для лога.
 		reason := readErrorReason(resp.Body)
 		if reason != "" {
