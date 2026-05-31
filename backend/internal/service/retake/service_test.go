@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -372,4 +373,48 @@ func TestRetake_ListForUser_OnlyOwn(t *testing.T) {
 	rowsB, err := f.svc.ListForUser(context.Background(), studentB)
 	require.NoError(t, err)
 	require.Empty(t, rowsB)
+}
+
+type mockGradeSender struct {
+	calls []struct {
+		extID string
+		grade emulator.Grade
+		idem  string
+	}
+}
+
+func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
+	m.calls = append(m.calls, struct {
+		extID string
+		grade emulator.Grade
+		idem  string
+	}{debtExternalID, grade, idempotencyKey})
+	return nil
+}
+
+func TestRetake_GradeStudent_SyncsToEmulator(t *testing.T) {
+	f := setup(t)
+	teacher := seedUser(t, f.store, "tr-gsync")
+	student := seedUser(t, f.store, "st-gsync")
+	dean := seedUser(t, f.store, "dean-gsync")
+	discID := seedDiscipline(t, f, "GSYNC", teacher, student)
+
+	sender := &mockGradeSender{}
+	f.svc.SetGradeSender(sender)
+
+	extID := "ext-retake-debt-777"
+	debtRow, err := f.debt.Create(context.Background(), debt.CreateInput{
+		StudentID: student, DisciplineID: discID, ExternalID: &extID,
+	}, teacher)
+	require.NoError(t, err)
+
+	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
+	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, pgutil.UUID(debtRow.ID), dean))
+	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 3, teacher))
+
+	require.Len(t, sender.calls, 1, "PatchDebtGrade должен быть вызван при выставлении оценки через пересдачу")
+	require.Equal(t, "ext-retake-debt-777", sender.calls[0].extID)
+	require.Equal(t, "numeric", sender.calls[0].grade.Type)
+	require.Equal(t, 3, sender.calls[0].grade.Value)
+	require.NotEmpty(t, sender.calls[0].idem)
 }

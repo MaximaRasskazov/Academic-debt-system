@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -100,5 +101,79 @@ func TestGet_404ReturnsNotFound(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("404 не должен ретраиться, попыток: %d", got)
+	}
+}
+
+func TestPatchDebtGrade_Success(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/debts/ext-123/grade" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var body struct {
+			Grade          Grade   `json:"grade"`
+			Comment        *string `json:"comment"`
+			IdempotencyKey string  `json:"idempotency_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode error: %v", err)
+		}
+		if body.Grade.Type != "numeric" {
+			t.Errorf("expected grade.type numeric, got %q", body.Grade.Type)
+		}
+		if int(body.Grade.Value.(float64)) != 4 {
+			t.Errorf("expected grade.value 4, got %v", body.Grade.Value)
+		}
+		if body.IdempotencyKey == "" {
+			t.Error("expected non-empty idempotency_key")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-key")
+	err := c.PatchDebtGrade(context.Background(), "ext-123",
+		Grade{Type: "numeric", Value: 4}, nil, "key-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestPatchDebtGrade_Rejected422(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":{"code":"validation_error","details":{"field":"grade.type","reason":"допустимы numeric и pass_fail"}}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-key")
+	err := c.PatchDebtGrade(context.Background(), "ext-123",
+		Grade{Type: "numeric", Value: 4}, nil, "key-1")
+	if !errors.Is(err, ErrGradeRejected) {
+		t.Fatalf("expected ErrGradeRejected, got: %v", err)
+	}
+}
+
+func TestPatchDebtGrade_EmulatorError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-key")
+	err := c.PatchDebtGrade(context.Background(), "ext-123",
+		Grade{Type: "numeric", Value: 4}, nil, "key-1")
+	if err == nil {
+		t.Fatal("expected error on 500 response, got nil")
+	}
+	if errors.Is(err, ErrGradeRejected) {
+		t.Fatal("500 must not map to ErrGradeRejected")
 	}
 }

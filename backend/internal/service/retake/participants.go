@@ -233,6 +233,7 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		return ErrStudentNeedsDebt
 	}
 
+	var closedDebt queries.Debt
 	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		// 1. Оценка участнику. SQL содержит AND grade IS NULL — при гонке
 		// второй UPDATE вернёт ErrNoRows: возвращаем ErrAlreadyHasGrade,
@@ -252,7 +253,7 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		// 2. Закрытие связанного долга. WHERE status='open' защищает
 		// от двойного закрытия — если долг уже graded/cancelled,
 		// q.GradeDebt вернёт ErrNoRows, откатит транзакцию.
-		_, err = q.GradeDebt(ctx, queries.GradeDebtParams{
+		closedDebt, err = q.GradeDebt(ctx, queries.GradeDebtParams{
 			ID:         participant.DebtID,
 			FinalGrade: &grade,
 			GradedBy:   pgutil.PgUUID(gradedBy),
@@ -278,6 +279,10 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 	}); err != nil {
 		return err
 	}
+
+	// Обратный sync оценки в эмулятор — best-effort, вне транзакции.
+	s.sendGradeToEmulator(ctx, closedDebt.ExternalID,
+		pgutil.UUID(closedDebt.ID).String(), grade)
 
 	// Студент должен узнать оценку сразу, не дожидаясь email-дайджеста
 	// или ручного refresh. Payload минимальный — фронт сам подтянет

@@ -17,10 +17,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -65,6 +67,13 @@ var (
 	ErrAlreadyHasGrade   = errors.New("retake: оценка уже выставлена")
 )
 
+// GradeSender инкапсулирует отправку оценки во внешнюю систему (деканат).
+// Узкий интерфейс развязывает зависимость от *emulator.Client и
+// упрощает тесты. nil = обратный sync отключён.
+type GradeSender interface {
+	PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error
+}
+
 // Service инкапсулирует операции с пересдачами и их участниками.
 //
 // При выставлении оценки на пересдаче связанный долг закрывается в
@@ -77,12 +86,38 @@ type Service struct {
 	audit     *audit.Service
 	changelog *changelog.Service
 	notify    *notify.Service // опционально — для уведомлений студентам
+	gradeSender GradeSender
 }
 
 // New собирает Service. notifySvc может быть nil — тогда уведомления
 // не шлются (удобно в юнит-тестах, где notify-инфраструктура не нужна).
 func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service, notifySvc *notify.Service) *Service {
 	return &Service{store: store, audit: auditSvc, changelog: changelogSvc, notify: notifySvc}
+}
+
+// SetGradeSender позволяет подключить внешнюю систему для синхронизации
+// после инициализации сервиса.
+func (s *Service) SetGradeSender(sender GradeSender) {
+	s.gradeSender = sender
+}
+
+// sendGradeToEmulator отправляет числовую оценку (2..5) в эмулятор,
+// если write-back подключён и у долга есть external_id. Любая ошибка —
+// WARN в лог и проглатывается: обратный sync вспомогательный, оценка
+// на пересдаче у нас уже выставлена и долг закрыт.
+func (s *Service) sendGradeToEmulator(ctx context.Context, externalID *string, debtID string, grade int32) {
+	if s.gradeSender == nil || externalID == nil {
+		return
+	}
+	g := emulator.Grade{Type: "numeric", Value: int(grade)}
+	idemKey := fmt.Sprintf("debt-grade-%s-%d", *externalID, grade)
+
+	if err := s.gradeSender.PatchDebtGrade(ctx, *externalID, g, nil, idemKey); err != nil {
+		slog.Warn("retake: не удалось отправить оценку в эмулятор (best-effort)",
+			"debt_id", debtID,
+			"external_id", *externalID,
+			"err", err)
+	}
 }
 
 // CreateInput — параметры создания пересдачи.

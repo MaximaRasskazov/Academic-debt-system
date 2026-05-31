@@ -108,6 +108,14 @@ func run() error {
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 
+	// Обратный sync оценок в эмулятор (write-back). Подключаем тот же
+	// клиент, что и для proxy-login/sync. Если EMULATOR_URL пуст —
+	// emulatorClient == nil, и сервисы оставляют write-back выключенным.
+	if emulatorClient != nil {
+		debtSvc.SetGradeSender(emulatorClient)
+		retakeSvc.SetGradeSender(emulatorClient)
+	}
+
 	// Шедулер автопереходов retake-статусов крутится параллельно
 	// HTTP-серверу. Останавливаем его через schedCancel перед
 	// shutdown, чтобы не словить race на повисшем UPDATE при закрытии

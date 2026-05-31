@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -299,4 +300,46 @@ func TestDebt_ListForTeacher_NoDisciplines_ReturnsEmpty(t *testing.T) {
 	rows, err := f.svc.ListForTeacher(context.Background(), teacher, 50, 0)
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+type mockGradeSender struct {
+	calls []struct {
+		extID  string
+		grade  emulator.Grade
+		idem   string
+	}
+}
+
+func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
+	m.calls = append(m.calls, struct {
+		extID  string
+		grade  emulator.Grade
+		idem   string
+	}{debtExternalID, grade, idempotencyKey})
+	return nil
+}
+
+func TestDebt_Grade_SyncsToEmulator(t *testing.T) {
+	f := setup(t)
+	teacher := seedUser(t, f.store, "teacher-sync")
+	student := seedUser(t, f.store, "student-sync")
+	discID := seedDiscipline(t, f, "SYNC", teacher, student)
+
+	sender := &mockGradeSender{}
+	f.svc.SetGradeSender(sender)
+
+	extID := "ext-debt-999"
+	d, err := f.svc.Create(context.Background(), debt.CreateInput{
+		StudentID: student, DisciplineID: discID, ExternalID: &extID,
+	}, teacher)
+	require.NoError(t, err)
+
+	_, err = f.svc.Grade(context.Background(), pgutil.UUID(d.ID), 5, teacher)
+	require.NoError(t, err)
+
+	require.Len(t, sender.calls, 1, "PatchDebtGrade должен быть вызван ровно 1 раз")
+	require.Equal(t, "ext-debt-999", sender.calls[0].extID)
+	require.Equal(t, "numeric", sender.calls[0].grade.Type)
+	require.Equal(t, 5, sender.calls[0].grade.Value)
+	require.NotEmpty(t, sender.calls[0].idem, "idempotency-ключ должен быть задан")
 }
