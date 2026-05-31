@@ -463,6 +463,39 @@ func (q *Queries) ListDebtsForStudent(ctx context.Context, studentID pgtype.UUID
 	return items, nil
 }
 
+const listDisciplineIDsByIssuer = `-- name: ListDisciplineIDsByIssuer :many
+SELECT DISTINCT discipline_id
+FROM debts
+WHERE issued_by = $1
+  AND deleted_at IS NULL
+`
+
+// "Свои предметы" преподавателя = дисциплины, по которым ОН ставил долги
+// (debts.issued_by). Эмулятор не отдаёт явную связь teacher↔discipline,
+// но в каждом долге есть issued_by (= TeacherID из эмулятора, "препод,
+// поставивший долг" по ТЗ). Поэтому дисциплины препода выводим отсюда.
+// Используется в debt.Service.ListForTeacher как замена пустой
+// teacher_disciplines.
+func (q *Queries) ListDisciplineIDsByIssuer(ctx context.Context, issuedBy pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listDisciplineIDsByIssuer, issuedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var discipline_id pgtype.UUID
+		if err := rows.Scan(&discipline_id); err != nil {
+			return nil, err
+		}
+		items = append(items, discipline_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteDebt = `-- name: SoftDeleteDebt :exec
 UPDATE debts
 SET deleted_at = NOW(),

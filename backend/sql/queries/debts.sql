@@ -46,6 +46,18 @@ WHERE discipline_id = ANY(sqlc.arg('discipline_ids')::uuid[])
 ORDER BY created_at DESC
 LIMIT sqlc.arg('lim') OFFSET sqlc.arg('off');
 
+-- name: ListDisciplineIDsByIssuer :many
+-- "Свои предметы" преподавателя = дисциплины, по которым ОН ставил долги
+-- (debts.issued_by). Эмулятор не отдаёт явную связь teacher↔discipline,
+-- но в каждом долге есть issued_by (= TeacherID из эмулятора, "препод,
+-- поставивший долг" по ТЗ). Поэтому дисциплины препода выводим отсюда.
+-- Используется в debt.Service.ListForTeacher как замена пустой
+-- teacher_disciplines.
+SELECT DISTINCT discipline_id
+FROM debts
+WHERE issued_by = $1
+  AND deleted_at IS NULL;
+
 -- name: ListDebtorsByDiscipline :many
 -- Преподаватель видит должников по конкретной дисциплине с ФИО+группой —
 -- нужно для формы заявки на пересдачу (выбрать кого записывать).

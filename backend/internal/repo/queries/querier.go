@@ -144,6 +144,13 @@ type Querier interface {
 	ListDebtsByDisciplines(ctx context.Context, arg ListDebtsByDisciplinesParams) ([]Debt, error)
 	// Студент видит свои долги (permission debts.view.own).
 	ListDebtsForStudent(ctx context.Context, studentID pgtype.UUID) ([]Debt, error)
+	// "Свои предметы" преподавателя = дисциплины, по которым ОН ставил долги
+	// (debts.issued_by). Эмулятор не отдаёт явную связь teacher↔discipline,
+	// но в каждом долге есть issued_by (= TeacherID из эмулятора, "препод,
+	// поставивший долг" по ТЗ). Поэтому дисциплины препода выводим отсюда.
+	// Используется в debt.Service.ListForTeacher как замена пустой
+	// teacher_disciplines.
+	ListDisciplineIDsByIssuer(ctx context.Context, issuedBy pgtype.UUID) ([]pgtype.UUID, error)
 	ListDisciplines(ctx context.Context, arg ListDisciplinesParams) ([]Discipline, error)
 	// Батч-выборка дисциплин по списку ID. Используется в report.Service
 	// вместо N одиночных GetDisciplineByID.
