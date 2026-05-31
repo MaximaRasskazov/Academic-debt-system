@@ -398,7 +398,7 @@ async function openDetailCreate(r) {
       { label: 'Место',         value: [p.building && `корп. ${p.building}`, p.room && `ауд. ${p.room}`].filter(Boolean).join(', ') || '—' },
       { label: 'Подана',        value: fmtDate(r.created_at) },
     ],
-    reason:       p.reason || p.notes || '',
+    reason:       p.notes || '',
     teachers:     (p.teacher_ids || []).map(id => userFio(id)),
     students:     [],
     loadingParts: !!(p.student_debt_ids?.length),

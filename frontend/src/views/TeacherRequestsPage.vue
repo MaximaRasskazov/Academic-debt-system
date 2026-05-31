@@ -189,7 +189,7 @@ function addStudent(s) {
   clearTimeout(sBlur)
   if (!selectedStudentIds.value.has(s.id)) selectedStudents.value.push(s)
   studentSearch.value = ''
-  // студентов всегда можно добавлять много — НЕ закрываем
+  studentOpen.value = true
 }
 // При удалении токена возможно дропдаун был закрыт (например, regular
 // teacher после выбора единственного — мы закрыли список). Снимая
@@ -208,9 +208,7 @@ function addTeacher(t) {
   if (!isCommission.value && selectedTeachers.value.length >= 1) return
   selectedTeachers.value.push(t)
   teacherSearch.value = ''
-  // Для regular уже выбрали единственного — закрываем (больше нечего).
-  // Для commission юзер собирает 3+ человек подряд, дропдаун оставляем.
-  if (!isCommission.value) teacherOpen.value = false
+  teacherOpen.value = isCommission.value
 }
 function removeTeacher(id) {
   selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id)
@@ -1278,6 +1276,15 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
   cursor: pointer; transition: border-color .15s, color .15s;
 }
 .tag-more:hover { border-color: var(--brand); color: var(--brand); }
+
+.btn-add-group {
+  height: 38px; padding: 0 14px; flex-shrink: 0;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 600 13px/1 'Inter', sans-serif; color: var(--ink-soft);
+  cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.btn-add-group:hover { border-color: #10b981; color: #065f46; background: rgba(16,185,129,.07); }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {

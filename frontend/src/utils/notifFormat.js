@@ -8,7 +8,6 @@ export function notifMeta(kind) {
     case 'teacher_request_approved':
       return { img: iconAppointed,   bg: 'rgba(110,114,200,.12)', label: 'appointed' }
     case 'retake_change_approved':
-      return { img: iconAppointed,   bg: 'rgba(110,114,200,.12)', label: 'appointed' }
     case 'retake_updated':
       return { img: iconChanged,     bg: 'rgba(59,63,224,.10)',   label: 'changed'   }
     case 'retake_cancelled':
@@ -39,7 +38,10 @@ export function notifTitle(n) {
 
 function fmtDate(iso) {
   if (!iso) return ''
-  const d = new Date(iso)
+  // Бэк присылает "2026-05-31 17:00" без timezone — добавляем T чтобы
+  // браузер не интерпретировал как UTC (иначе getHours даёт UTC+offset)
+  const normalized = iso.includes('T') ? iso : iso.replace(' ', 'T')
+  const d = new Date(normalized)
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
     + ' в ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
 }

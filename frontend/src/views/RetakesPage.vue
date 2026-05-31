@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
@@ -13,6 +14,7 @@ import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 
 const auth = useAuthStore()
+const route = useRoute()
 const sidebarOpen = ref(false)
 
 // ── Data ──────────────────────────────────────────────────
@@ -82,6 +84,11 @@ onMounted(async () => {
       retakes.value = retakesRes.value.data.items ?? retakesRes.value.data ?? []
     } else {
       loadErr.value = 'Не удалось загрузить пересдачи'
+    }
+    // Открываем модалку если в URL передан retake_id
+    if (route.query.retake_id) {
+      const target = retakes.value.find(r => r.id === route.query.retake_id)
+      if (target) openEdit(target)
     }
   } finally {
     loading.value = false
@@ -600,8 +607,7 @@ async function saveEdit() {
         <div v-if="editOpen" class="modal-overlay" @click.self="closeEdit">
           <div class="modal">
 
-            <div class="modal-head">
-              <span class="modal-title">Редактировать пересдачу</span>
+            <div class="modal-head modal-head--close-only">
               <button class="modal-close" @click="closeEdit" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                   <path d="M18 6L6 18M6 6l12 12"/>
@@ -729,15 +735,6 @@ async function saveEdit() {
               <p v-if="editError" class="form-error">{{ editError }}</p>
             </div>
 
-            <div class="modal-foot">
-              <button class="btn-cancel" @click="closeEdit">Закрыть</button>
-              <button class="btn-save" :disabled="editSaving" @click="saveEdit">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-                {{ editSaving ? 'Сохранение…' : 'Сохранить' }}
-              </button>
-            </div>
 
           </div>
         </div>
@@ -1079,6 +1076,11 @@ async function saveEdit() {
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.modal-head--close-only {
+  justify-content: flex-end;
+  padding: 12px 14px;
+  border-bottom: none;
 }
 .modal-title {
   font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;

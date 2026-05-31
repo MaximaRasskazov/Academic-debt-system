@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
@@ -12,7 +13,15 @@ import { notificationsApi } from '../api/notifications'
 import { notifMeta, notifTitle, notifBody, timeAgo } from '../utils/notifFormat'
 
 const auth = useAuthStore()
+const router = useRouter()
 const sidebarOpen = ref(false)
+
+function goToRetake(n) {
+  const retakeId = n.payload?.retake_id
+  if (!retakeId) return
+  markRead(n)
+  router.push({ path: '/retakes', query: { retake_id: retakeId } })
+}
 
 // ── Stats ─────────────────────────────────────────────────
 const upcomingRetakes = ref([])
@@ -196,7 +205,10 @@ onUnmounted(() => { ws?.close() })
                   <div class="notif-body">
                     <div class="notif-title">{{ notifTitle(n) }}</div>
                     <div class="notif-text">{{ notifBody(n) }}</div>
-                    <div class="notif-time">{{ timeAgo(n.created_at) }}</div>
+                    <div class="notif-footer">
+                      <span class="notif-time">{{ timeAgo(n.created_at) }}</span>
+                      <button v-if="n.payload?.retake_id" class="notif-link" @click.stop="goToRetake(n)">Подробнее</button>
+                    </div>
                   </div>
                   <div v-if="!n.read_at" class="unread-dot" />
                 </li>
@@ -341,7 +353,14 @@ onUnmounted(() => { ws?.close() })
   margin-top: 3px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.notif-time { font: 11px/1 'Inter', sans-serif; color: #9ca3af; margin-top: 5px; }
+.notif-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+.notif-time { font: 11px/1 'Inter', sans-serif; color: #9ca3af; }
+.notif-link {
+  background: none; border: none; cursor: pointer; padding: 0;
+  font: 500 13px/1 'Inter', sans-serif; color: var(--brand);
+  transition: opacity .15s;
+}
+.notif-link:hover { opacity: .7; }
 
 .unread-dot {
   width: 8px; height: 8px; border-radius: 50%;
