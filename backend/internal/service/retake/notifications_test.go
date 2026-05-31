@@ -103,6 +103,22 @@ func TestNotify_RetakeScheduled_OnAddStudent(t *testing.T) {
 		"студент должен получить retake_scheduled при добавлении в пересдачу")
 }
 
+func TestNotify_RetakeScheduled_OnAddTeacher(t *testing.T) {
+	f := setupWithNotify(t)
+	teacher := seedUser(t, f.store, "t-sched-teacher")
+	student := seedUser(t, f.store, "s-sched-teacher")
+	dean := seedUser(t, f.store, "dean-sched-teacher")
+	disc := seedDiscipline(t, f.fixture, "NTSCH", teacher, student)
+	r := createScheduledRetake(t, f.fixture, disc, dean, retake.KindRegular)
+
+	require.NoError(t, f.svc.AddTeacher(context.Background(),
+		pgutil.UUID(r.ID), teacher, dean))
+
+	require.True(t,
+		hasUnreadKind(t, f.store, f.notifySvc, teacher.String(), notify.KindRetakeScheduled),
+		"преподаватель должен получить retake_scheduled при добавлении в пересдачу")
+}
+
 func TestNotify_RetakeUpdated_OnScheduleChange(t *testing.T) {
 	f := setupWithNotify(t)
 	teacher := seedUser(t, f.store, "t-upd")

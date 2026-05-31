@@ -99,7 +99,20 @@ func (s *Service) AddTeacher(ctx context.Context, retakeID, teacherID, actorID u
 	if current.Kind == KindCommission {
 		kind = ParticipantCommissionMember
 	}
-	return s.addParticipant(ctx, current, teacherID, kind, nil, actorID, actionTeacherAdded)
+	if err := s.addParticipant(ctx, current, teacherID, kind, nil, actorID, actionTeacherAdded); err != nil {
+		return err
+	}
+
+	// Преподаватель должен увидеть назначенную пересдачу в своей ленте так же,
+	// как студент: иначе он узнаёт только о статусе заявки, но не о назначении.
+	s.notifyUser(ctx, teacherID, notify.KindRetakeScheduled,
+		retakeBasePayload(
+			pgutil.UUID(current.ID),
+			pgutil.UUID(current.DisciplineID),
+			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
+			current.Building, current.Room,
+		))
+	return nil
 }
 
 // addParticipant — общий внутренний метод для AddStudent/AddTeacher.
