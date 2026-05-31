@@ -7,6 +7,7 @@ import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { partsInTZ } from '../utils/datetime'
 
 const route = useRoute()
 const sidebarOpen = ref(false)
@@ -51,16 +52,17 @@ onMounted(async () => {
 
       if (retakeRes.status === 'fulfilled') {
         const r = retakeRes.value.data
-        const s = r.scheduled_at ? new Date(r.scheduled_at) : null
+        // Предзаполняем форму временем вуза (Ханты, UTC+5), а не зоной устройства.
+        const p = r.scheduled_at ? partsInTZ(r.scheduled_at) : null
         form.subject  = discMap[r.discipline_id] || ''
         form.type     = r.kind === 'commission' ? 'commission' : 'normal'
-        form.date     = s ? s.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : null
+        form.date     = p ? `${p.day}.${p.month}.${p.year}` : null
         form.duration = r.duration_minutes || 90
         form.building = r.building || ''
         form.room     = r.room     || ''
-        if (s) {
-          hourDisplay.value   = String(s.getHours()).padStart(2, '0')
-          minuteDisplay.value = String(s.getMinutes()).padStart(2, '0')
+        if (p) {
+          hourDisplay.value   = p.hour
+          minuteDisplay.value = p.minute
         }
       }
     } catch { /* ignore prefill errors */ }

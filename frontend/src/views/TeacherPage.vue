@@ -9,6 +9,7 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { notificationsApi } from '../api/notifications'
+import { partsInTZ } from '../utils/datetime'
 
 const auth = useAuthStore()
 const sidebarOpen = ref(false)
@@ -119,12 +120,13 @@ onMounted(async () => {
       .filter(r => r.status === 'scheduled')
       .slice(0, 10)
       .map(r => {
-        const d = new Date(r.scheduled_at)
+        // Время вуза (Ханты, UTC+5), а не зона устройства.
+        const p = partsInTZ(r.scheduled_at)
         return {
           id: r.id,
           subject: discMap[r.discipline_id] || 'Дисциплина',
-          day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
-          time: `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`,
+          day: Number(p.day), month: Number(p.month), year: Number(p.year),
+          time: `${p.hour}:${p.minute}`,
           building: r.building, room: r.room,
         }
       })
