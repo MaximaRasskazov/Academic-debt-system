@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -101,23 +102,33 @@ func (s *Service) SetGradeSender(sender GradeSender) {
 	s.gradeSender = sender
 }
 
+// emulatorSendTimeout — потолок на фоновую отправку оценки в эмулятор.
+const emulatorSendTimeout = 30 * time.Second
+
 // sendGradeToEmulator отправляет числовую оценку (2..5) в эмулятор,
-// если write-back подключён и у долга есть external_id. Любая ошибка —
-// WARN в лог и проглатывается: обратный sync вспомогательный, оценка
-// на пересдаче у нас уже выставлена и долг закрыт.
-func (s *Service) sendGradeToEmulator(ctx context.Context, externalID *string, debtID string, grade int32) {
+// если write-back подключён и у долга есть external_id. Запускается в
+// отдельной горутине со своим context.Background()+таймаутом, чтобы
+// отправка не отменялась вместе с request-контекстом и не блокировала
+// ответ пользователю. Любая ошибка — WARN и проглатывается: обратный
+// sync вспомогательный, оценка на пересдаче у нас уже выставлена.
+func (s *Service) sendGradeToEmulator(externalID *string, debtID string, grade int32) {
 	if s.gradeSender == nil || externalID == nil {
 		return
 	}
+	extID := *externalID
 	g := emulator.Grade{Type: "numeric", Value: int(grade)}
-	idemKey := fmt.Sprintf("debt-grade-%s-%d", *externalID, grade)
+	idemKey := fmt.Sprintf("debt-grade-%s-%d", extID, grade)
 
-	if err := s.gradeSender.PatchDebtGrade(ctx, *externalID, g, nil, idemKey); err != nil {
-		slog.Warn("retake: не удалось отправить оценку в эмулятор (best-effort)",
-			"debt_id", debtID,
-			"external_id", *externalID,
-			"err", err)
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), emulatorSendTimeout)
+		defer cancel()
+		if err := s.gradeSender.PatchDebtGrade(ctx, extID, g, nil, idemKey); err != nil {
+			slog.Warn("retake: не удалось отправить оценку в эмулятор (best-effort)",
+				"debt_id", debtID,
+				"external_id", extID,
+				"err", err)
+		}
+	}()
 }
 
 // CreateInput — параметры создания пересдачи.

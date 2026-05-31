@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -267,33 +268,45 @@ func (s *Service) Grade(ctx context.Context, id uuid.UUID, grade int32, gradedBy
 	}
 
 	// Обратный sync оценки в эмулятор деканата — best-effort.
-	// Выполняется вне транзакции: долг у нас уже закрыт (источник истины),
-	// сетевой сбой эмулятора не должен откатывать локальное сохранение и
-	// не должен падать пользователю — только WARN в лог.
-	sendGradeToEmulator(ctx, s.gradeSender, updated.ExternalID,
+	// Долг у нас уже закрыт (источник истины); отправка идёт в фоне со
+	// своим контекстом, чтобы не блокировать ответ пользователю и не
+	// отменяться вместе с request-контекстом при возврате ответа.
+	sendGradeToEmulator(s.gradeSender, updated.ExternalID,
 		pgutil.UUID(updated.ID).String(), grade, "debt")
 
 	return updated, nil
 }
 
+// emulatorSendTimeout — потолок на фоновую отправку оценки в эмулятор.
+// Эмулятор отвечает за ~1с; запас даём на медленный TLS-handshake.
+const emulatorSendTimeout = 30 * time.Second
+
 // sendGradeToEmulator отправляет числовую оценку (2..5) в эмулятор,
-// если write-back подключён и у долга есть external_id. Любая ошибка
-// логируется как WARN и проглатывается — обратный sync вспомогательный.
+// если write-back подключён и у долга есть external_id. Запускается в
+// отдельной горутине с собственным context.Background()+таймаутом:
+// request-контекст к моменту отправки уже может быть отменён (ответ
+// пользователю вернулся), а обратный sync должен дойти независимо.
+// Любая ошибка логируется как WARN и проглатывается — sync вспомогательный.
 // logScope — префикс лога ("debt"/"retake") для различения источника.
-func sendGradeToEmulator(ctx context.Context, sender GradeSender, externalID *string, debtID string, grade int32, logScope string) {
+func sendGradeToEmulator(sender GradeSender, externalID *string, debtID string, grade int32, logScope string) {
 	if sender == nil || externalID == nil {
 		return
 	}
+	extID := *externalID
 	g := emulator.Grade{Type: "numeric", Value: int(grade)}
 	// Детерминированный ключ: повтор той же операции не задвоит оценку.
-	idemKey := fmt.Sprintf("debt-grade-%s-%d", *externalID, grade)
+	idemKey := fmt.Sprintf("debt-grade-%s-%d", extID, grade)
 
-	if err := sender.PatchDebtGrade(ctx, *externalID, g, nil, idemKey); err != nil {
-		slog.Warn(logScope+": не удалось отправить оценку в эмулятор (best-effort)",
-			"debt_id", debtID,
-			"external_id", *externalID,
-			"err", err)
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), emulatorSendTimeout)
+		defer cancel()
+		if err := sender.PatchDebtGrade(ctx, extID, g, nil, idemKey); err != nil {
+			slog.Warn(logScope+": не удалось отправить оценку в эмулятор (best-effort)",
+				"debt_id", debtID,
+				"external_id", extID,
+				"err", err)
+		}
+	}()
 }
 
 // Cancel переводит open → cancelled. По ТЗ это право деканата

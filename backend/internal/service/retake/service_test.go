@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,21 +376,38 @@ func TestRetake_ListForUser_OnlyOwn(t *testing.T) {
 	require.Empty(t, rowsB)
 }
 
+type gradeCall struct {
+	extID string
+	grade emulator.Grade
+	idem  string
+}
+
+// mockGradeSender потокобезопасен: write-back идёт в фоновой горутине.
 type mockGradeSender struct {
-	calls []struct {
-		extID string
-		grade emulator.Grade
-		idem  string
-	}
+	mu    sync.Mutex
+	calls []gradeCall
 }
 
 func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
-	m.calls = append(m.calls, struct {
-		extID string
-		grade emulator.Grade
-		idem  string
-	}{debtExternalID, grade, idempotencyKey})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, gradeCall{debtExternalID, grade, idempotencyKey})
 	return nil
+}
+
+// waitCalls ждёт n вызовов фоновой отправки и возвращает их копию.
+func (m *mockGradeSender) waitCalls(t *testing.T, n int) []gradeCall {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.calls) >= n
+	}, 2*time.Second, 10*time.Millisecond, "ожидали %d вызовов PatchDebtGrade", n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]gradeCall, len(m.calls))
+	copy(out, m.calls)
+	return out
 }
 
 func TestRetake_GradeStudent_SyncsToEmulator(t *testing.T) {
@@ -412,9 +430,10 @@ func TestRetake_GradeStudent_SyncsToEmulator(t *testing.T) {
 	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, pgutil.UUID(debtRow.ID), dean))
 	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 3, teacher))
 
-	require.Len(t, sender.calls, 1, "PatchDebtGrade должен быть вызван при выставлении оценки через пересдачу")
-	require.Equal(t, "ext-retake-debt-777", sender.calls[0].extID)
-	require.Equal(t, "numeric", sender.calls[0].grade.Type)
-	require.Equal(t, 3, sender.calls[0].grade.Value)
-	require.NotEmpty(t, sender.calls[0].idem)
+	calls := sender.waitCalls(t, 1)
+	require.Len(t, calls, 1, "PatchDebtGrade должен быть вызван при выставлении оценки через пересдачу")
+	require.Equal(t, "ext-retake-debt-777", calls[0].extID)
+	require.Equal(t, "numeric", calls[0].grade.Type)
+	require.Equal(t, 3, calls[0].grade.Value)
+	require.NotEmpty(t, calls[0].idem)
 }

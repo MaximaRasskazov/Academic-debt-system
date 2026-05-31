@@ -280,8 +280,8 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		return err
 	}
 
-	// Обратный sync оценки в эмулятор — best-effort, вне транзакции.
-	s.sendGradeToEmulator(ctx, closedDebt.ExternalID,
+	// Обратный sync оценки в эмулятор — best-effort, в фоне.
+	s.sendGradeToEmulator(closedDebt.ExternalID,
 		pgutil.UUID(closedDebt.ID).String(), grade)
 
 	// Студент должен узнать оценку сразу, не дожидаясь email-дайджеста

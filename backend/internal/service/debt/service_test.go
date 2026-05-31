@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -302,21 +303,41 @@ func TestDebt_ListForTeacher_NoDisciplines_ReturnsEmpty(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+type gradeCall struct {
+	extID string
+	grade emulator.Grade
+	idem  string
+}
+
+// mockGradeSender потокобезопасен: write-back теперь идёт в отдельной
+// горутине, поэтому доступ к calls защищён мьютексом, а тест ждёт
+// вызова через waitCalls.
 type mockGradeSender struct {
-	calls []struct {
-		extID  string
-		grade  emulator.Grade
-		idem   string
-	}
+	mu    sync.Mutex
+	calls []gradeCall
 }
 
 func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
-	m.calls = append(m.calls, struct {
-		extID  string
-		grade  emulator.Grade
-		idem   string
-	}{debtExternalID, grade, idempotencyKey})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, gradeCall{debtExternalID, grade, idempotencyKey})
 	return nil
+}
+
+// waitCalls ждёт, пока накопится n вызовов (фоновая горутина write-back),
+// и возвращает их копию. Падает по таймауту, если вызовов меньше.
+func (m *mockGradeSender) waitCalls(t *testing.T, n int) []gradeCall {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.calls) >= n
+	}, 2*time.Second, 10*time.Millisecond, "ожидали %d вызовов PatchDebtGrade", n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]gradeCall, len(m.calls))
+	copy(out, m.calls)
+	return out
 }
 
 func TestDebt_Grade_SyncsToEmulator(t *testing.T) {
@@ -337,9 +358,10 @@ func TestDebt_Grade_SyncsToEmulator(t *testing.T) {
 	_, err = f.svc.Grade(context.Background(), pgutil.UUID(d.ID), 5, teacher)
 	require.NoError(t, err)
 
-	require.Len(t, sender.calls, 1, "PatchDebtGrade должен быть вызван ровно 1 раз")
-	require.Equal(t, "ext-debt-999", sender.calls[0].extID)
-	require.Equal(t, "numeric", sender.calls[0].grade.Type)
-	require.Equal(t, 5, sender.calls[0].grade.Value)
-	require.NotEmpty(t, sender.calls[0].idem, "idempotency-ключ должен быть задан")
+	calls := sender.waitCalls(t, 1)
+	require.Len(t, calls, 1, "PatchDebtGrade должен быть вызван ровно 1 раз")
+	require.Equal(t, "ext-debt-999", calls[0].extID)
+	require.Equal(t, "numeric", calls[0].grade.Type)
+	require.Equal(t, 5, calls[0].grade.Value)
+	require.NotEmpty(t, calls[0].idem, "idempotency-ключ должен быть задан")
 }
