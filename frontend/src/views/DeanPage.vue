@@ -11,6 +11,8 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
+import { directoryApi } from '../api/directory'
+import { exportExcel, exportWord } from '../utils/exportTable'
 
 const sidebarOpen = ref(false)
 
@@ -22,6 +24,91 @@ const stats = ref([
   { label: 'Проводится сейчас',    value: '—', accent: '#f59e0b' },
   { label: 'Завершено в месяце',   value: '—', accent: '#10b981' },
 ])
+
+// ── Debt summary table (панель декана) ────────────────────────
+const debtTableOpen    = ref(false)
+const debtTableLoading = ref(false)
+const debtTableRows    = ref([])   // [{discipline, disciplineCode, student, group, teacher, status}]
+const debtTableSearch  = ref('')
+
+const filteredDebtRows = computed(() => {
+  const q = debtTableSearch.value.toLowerCase()
+  if (!q) return debtTableRows.value
+  return debtTableRows.value.filter(r =>
+    r.discipline.toLowerCase().includes(q) ||
+    r.student.toLowerCase().includes(q) ||
+    r.teacher.toLowerCase().includes(q) ||
+    (r.group || '').toLowerCase().includes(q)
+  )
+})
+
+async function toggleDebtTable() {
+  debtTableOpen.value = !debtTableOpen.value
+  if (debtTableOpen.value && debtTableRows.value.length === 0) await loadDebtTable()
+}
+
+async function loadDebtTable() {
+  debtTableLoading.value = true
+  try {
+    const [debtsRes, usersRes, discsRes] = await Promise.allSettled([
+      debtsApi.getAll({ limit: 500 }),
+      usersApi.getAll({ limit: 1000 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+
+    const userMap = {}
+    if (usersRes.status === 'fulfilled') {
+      for (const u of usersRes.value.data.items ?? []) {
+        userMap[u.id] = {
+          name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email,
+          group: u.group_name || '',
+        }
+      }
+    }
+
+    const discMapLocal = {}
+    if (discsRes.status === 'fulfilled') {
+      for (const d of discsRes.value.data.items ?? []) {
+        discMapLocal[d.id] = { name: d.name, code: d.code }
+      }
+    }
+
+    const rows = []
+    if (debtsRes.status === 'fulfilled') {
+      for (const d of debtsRes.value.data.items ?? []) {
+        if (d.deleted_at) continue
+        const disc    = discMapLocal[d.discipline_id] ?? { name: d.discipline_id, code: '' }
+        const student = userMap[d.student_id] ?? { name: d.student_id, group: '' }
+        const teacher = userMap[d.issued_by]  ?? { name: d.issued_by, group: '' }
+        rows.push({
+          discipline:     disc.name,
+          disciplineCode: disc.code,
+          student:        student.name,
+          group:          student.group,
+          teacher:        teacher.name,
+          status:         d.status,
+        })
+      }
+    }
+    rows.sort((a, b) => a.discipline.localeCompare(b.discipline, 'ru') || a.student.localeCompare(b.student, 'ru'))
+    debtTableRows.value = rows
+  } finally {
+    debtTableLoading.value = false
+  }
+}
+
+const STATUS_LABEL = { open: 'Открыт', graded: 'Закрыт', cancelled: 'Отменён' }
+
+function doExportExcel() {
+  const headers = ['Дисциплина', 'Код', 'Студент', 'Группа', 'Преподаватель', 'Статус']
+  const rows = filteredDebtRows.value.map(r => [r.discipline, r.disciplineCode, r.student, r.group, r.teacher, STATUS_LABEL[r.status] ?? r.status])
+  exportExcel('Сводная таблица долгов', headers, rows, 'dolgi_dean')
+}
+function doExportWord() {
+  const headers = ['Дисциплина', 'Код', 'Студент', 'Группа', 'Преподаватель', 'Статус']
+  const rows = filteredDebtRows.value.map(r => [r.discipline, r.disciplineCode, r.student, r.group, r.teacher, STATUS_LABEL[r.status] ?? r.status])
+  exportWord('Сводная таблица долгов', headers, rows, 'dolgi_dean')
+}
 
 // ── Disciplines ───────────────────────────────────────────────
 const disciplines = ref([])
@@ -381,12 +468,75 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
         <section class="col-left">
 
           <div class="stats-grid">
-            <div v-for="s in stats" :key="s.label" class="stat-card">
+            <div
+              v-for="(s, i) in stats" :key="s.label"
+              :class="['stat-card', i === 0 && 'stat-card--clickable', i === 0 && debtTableOpen && 'stat-card--active']"
+              @click="i === 0 && toggleDebtTable()"
+            >
               <div class="stat-accent" :style="{ background: s.accent }" />
               <div class="stat-value">{{ s.value }}</div>
               <div class="stat-label">{{ s.label }}</div>
+              <div v-if="i === 0" class="stat-hint">{{ debtTableOpen ? 'Скрыть ↑' : 'Сводная таблица →' }}</div>
             </div>
           </div>
+
+          <!-- Сводная таблица долгов -->
+          <Transition name="panel">
+            <div v-if="debtTableOpen" class="debt-table-card">
+              <div class="debt-table-head">
+                <h3 class="debt-table-title">Сводная таблица долгов</h3>
+                <div class="debt-table-actions">
+                  <input v-model="debtTableSearch" class="table-search" placeholder="Поиск по таблице…" />
+                  <button class="btn-export btn-export--excel" @click="doExportExcel" :disabled="debtTableLoading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Excel
+                  </button>
+                  <button class="btn-export btn-export--word" @click="doExportWord" :disabled="debtTableLoading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Word
+                  </button>
+                  <button class="debt-table-close" @click="debtTableOpen = false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="debtTableLoading" class="debt-table-state">
+                <div class="spinner" /><span>Загрузка данных…</span>
+              </div>
+              <div v-else-if="filteredDebtRows.length === 0" class="debt-table-state">
+                Нет данных
+              </div>
+              <div v-else class="debt-table-wrap">
+                <table class="debt-table">
+                  <thead>
+                    <tr>
+                      <th>Дисциплина</th>
+                      <th>Студент</th>
+                      <th>Группа</th>
+                      <th>Преподаватель</th>
+                      <th>Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, i) in filteredDebtRows" :key="i">
+                      <td>
+                        <div class="td-disc-name">{{ r.discipline }}</div>
+                        <div v-if="r.disciplineCode" class="td-disc-code">{{ r.disciplineCode }}</div>
+                      </td>
+                      <td>{{ r.student }}</td>
+                      <td>{{ r.group || '—' }}</td>
+                      <td>{{ r.teacher }}</td>
+                      <td><span :class="['tbl-badge', 'tbl-badge--' + r.status]">{{ STATUS_LABEL[r.status] ?? r.status }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-if="!debtTableLoading && filteredDebtRows.length > 0" class="debt-table-foot">
+                Показано {{ filteredDebtRows.length }} из {{ debtTableRows.length }} записей
+              </div>
+            </div>
+          </Transition>
 
           <div class="section-card">
             <h2 class="section-title">Назначить пересдачу</h2>
@@ -933,6 +1083,97 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .btn-primary:hover:not(:disabled) { transform: scale(1.03); box-shadow: 0 4px 10px -5px rgba(91,59,217,.7); }
 .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Stat card clickable ── */
+.stat-card { transition: box-shadow .18s var(--ease), transform .18s var(--ease); }
+.stat-card--clickable { cursor: pointer; }
+.stat-card--clickable:hover { box-shadow: 0 4px 18px rgba(20,22,60,.13); transform: translateY(-2px); }
+.stat-card--active   { box-shadow: 0 0 0 2px var(--brand), 0 4px 18px rgba(59,63,224,.15); transform: translateY(-2px); }
+.stat-hint { font-size: 11px; color: var(--brand); margin-top: 6px; font-weight: 500; }
+
+/* ── Panel transition ── */
+.panel-enter-active { transition: opacity .2s var(--ease), transform .2s var(--ease); }
+.panel-leave-active { transition: opacity .15s var(--ease), transform .15s var(--ease); }
+.panel-enter-from, .panel-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* ── Debt table card ── */
+.debt-table-card {
+  background: var(--card); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden;
+  border: 1.5px solid rgba(59,63,224,.15); margin-bottom: 24px;
+}
+.debt-table-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
+  gap: 10px; flex-wrap: wrap;
+}
+.debt-table-title {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 14px; font-weight: 700; color: #3C38B6; margin: 0; white-space: nowrap;
+}
+.debt-table-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-search {
+  height: 32px; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 0 10px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  outline: none; background: #fff; width: 200px;
+  transition: border-color .2s;
+}
+.table-search:focus { border-color: var(--brand); }
+
+.btn-export {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 32px; padding: 0 12px; border-radius: 8px; border: 1.5px solid var(--line);
+  font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.btn-export svg { width: 13px; height: 13px; flex-shrink: 0; }
+.btn-export:disabled { opacity: .4; cursor: not-allowed; }
+.btn-export--excel { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.btn-export--excel:hover:not(:disabled) { background: #dcfce7; border-color: #86efac; }
+.btn-export--word  { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+.btn-export--word:hover:not(:disabled)  { background: #dbeafe; border-color: #93c5fd; }
+
+.debt-table-close {
+  width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+  background: none; border: none; cursor: pointer;
+  display: grid; place-items: center; color: var(--ink-soft);
+  transition: background .15s;
+}
+.debt-table-close:hover { background: var(--bg); color: var(--ink); }
+.debt-table-close svg { width: 14px; height: 14px; }
+
+.debt-table-state {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 32px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft);
+}
+
+.debt-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+.debt-table-wrap::-webkit-scrollbar { width: 4px; height: 4px; }
+.debt-table-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+.debt-table { width: 100%; border-collapse: collapse; font: 13px/1.4 'Inter', sans-serif; }
+.debt-table thead tr { position: sticky; top: 0; z-index: 2; }
+.debt-table th {
+  background: #f8f9fb; padding: 9px 14px;
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line);
+}
+.debt-table td { padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.debt-table tbody tr:last-child td { border-bottom: none; }
+.debt-table tbody tr:hover td { background: rgba(59,63,224,.025); }
+
+.td-disc-name { font-weight: 500; }
+.td-disc-code { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+.tbl-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font: 600 11px/1.4 'Inter', sans-serif; white-space: nowrap; }
+.tbl-badge--open      { background: #fef3c7; color: #92400e; }
+.tbl-badge--graded    { background: #d1fae5; color: #065f46; }
+.tbl-badge--cancelled { background: #e5e7eb; color: #374151; }
+
+.debt-table-foot {
+  padding: 8px 20px; border-top: 1px solid var(--line);
+  font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-align: right;
+}
 
 /* ── Responsive ── */
 @media (max-width: 1280px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
