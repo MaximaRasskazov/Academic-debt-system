@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
@@ -236,16 +236,22 @@ const editFilteredTeachers = computed(() => {
     .slice(0, 8)
 })
 
-// Status change
-const STATUS_TRANSITIONS = {
-  scheduled:   [{ value: 'in_progress', label: 'Начать пересдачу' }, { value: 'cancelled', label: 'Отменить' }],
-  in_progress: [{ value: 'completed',   label: 'Завершить' },         { value: 'cancelled', label: 'Отменить' }],
+// Status change — select-дропдаун
+const STATUS_NEXT_LABEL = {
+  in_progress: 'Начать пересдачу',
+  completed:   'Завершить',
+  cancelled:   'Отменить',
 }
-const availableStatuses = computed(() => STATUS_TRANSITIONS[editTarget.value?.status] ?? [])
+const STATUS_TRANSITIONS = {
+  scheduled:   ['in_progress', 'cancelled'],
+  in_progress: ['completed',   'cancelled'],
+}
+const availableNextStatuses = computed(() => STATUS_TRANSITIONS[editTarget.value?.status] ?? [])
+const editStatusSelect = ref('')   // текущее значение select
 const statusSaving = ref(false)
 
 async function changeStatus(newStatus) {
-  if (!editTarget.value) return
+  if (!editTarget.value || newStatus === editTarget.value.status) return
   statusSaving.value = true
   editError.value = ''
   try {
@@ -255,8 +261,10 @@ async function changeStatus(newStatus) {
     const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
     if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: newStatus }
     editTarget.value = { ...editTarget.value, status: newStatus }
+    editStatusSelect.value = newStatus
   } catch {
     editError.value = 'Ошибка при изменении статуса'
+    editStatusSelect.value = editTarget.value.status  // откат
   } finally {
     statusSaving.value = false
   }
@@ -267,6 +275,7 @@ function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v || mn)) }
 
 async function openEdit(r) {
   editTarget.value = r
+  editStatusSelect.value = r.status
   editForm.building = r.building || ''
   editForm.room     = r.room     || ''
   editForm.duration = r.duration_minutes || 90
@@ -289,13 +298,26 @@ async function openEdit(r) {
       usersApi.getAll({ role: 'teacher', limit: 200 }),
       debtsApi.getAll({ limit: 500 }),
     ])
+
+    // Строим карту user_id → имя из загруженных пользователей
+    const userNameMap = {}
+    if (studRes.status === 'fulfilled')
+      for (const u of studRes.value.data.items ?? [])
+        userNameMap[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email, group: u.group_name ?? '' }
+    if (teachRes.status === 'fulfilled')
+      for (const u of teachRes.value.data.items ?? [])
+        userNameMap[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email, group: '' }
+
     if (partRes.status === 'fulfilled') {
       const parts = partRes.value.data ?? []
+      // Обогащаем участников именами из userNameMap
+      const enrich = (p) => ({ ...p, name: userNameMap[p.user_id]?.name || '—', group: userNameMap[p.user_id]?.group || '' })
       editParticipants.value = {
-        teachers: parts.filter(p => p.kind === 'teacher' || p.kind === 'commission_member'),
-        students: parts.filter(p => p.kind === 'student'),
+        teachers: parts.filter(p => p.kind === 'teacher' || p.kind === 'commission_member').map(enrich),
+        students: parts.filter(p => p.kind === 'student').map(enrich),
       }
     }
+
     const debtMap = {}
     if (debtsRes.status === 'fulfilled') {
       for (const d of debtsRes.value.data.items ?? []) {
@@ -303,13 +325,16 @@ async function openEdit(r) {
       }
     }
     if (studRes.status === 'fulfilled') {
+      const enrolledIds = new Set(editParticipants.value.students.map(p => p.user_id))
       editAllStudents.value = (studRes.value.data.items ?? [])
-        .filter(u => debtMap[u.id])
-        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' '), group: u.group_name ?? '', debtId: debtMap[u.id] }))
+        .filter(u => debtMap[u.id] && !enrolledIds.has(u.id))
+        .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email, group: u.group_name ?? '', debtId: debtMap[u.id] }))
     }
     if (teachRes.status === 'fulfilled') {
+      const enrolledIds = new Set(editParticipants.value.teachers.map(p => p.user_id))
       editAllTeachers.value = (teachRes.value.data.items ?? [])
-        .map(u => ({ id: u.id, name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') }))
+        .filter(u => !enrolledIds.has(u.id))
+        .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email }))
     }
   } finally {
     editLoadingPart.value = false
@@ -317,6 +342,15 @@ async function openEdit(r) {
 }
 
 function closeEdit() { editOpen.value = false; editTarget.value = null }
+
+function handleModalOutsideClick(e) {
+  if (!e.target.closest('.picker-wrap-modal')) {
+    editTeacherOpen.value = false
+    editStudentOpen.value = false
+  }
+}
+onMounted(() => document.addEventListener('mousedown', handleModalOutsideClick))
+onUnmounted(() => document.removeEventListener('mousedown', handleModalOutsideClick))
 
 function onHourBlur()   { editForm.hour   = String(clamp(parseInt(editForm.hour,   10), 0, 23)).padStart(2, '0') }
 function onMinuteBlur() { editForm.minute = String(clamp(parseInt(editForm.minute, 10), 0, 59)).padStart(2, '0') }
@@ -524,18 +558,25 @@ async function saveEdit() {
               <div class="modal-disc">{{ discMap[editTarget?.discipline_id] || 'Дисциплина' }}</div>
 
               <!-- Изменение статуса -->
-              <div v-if="availableStatuses.length" class="modal-section">
-                <div class="section-label">Статус</div>
-                <div class="status-current">
-                  Сейчас: <span class="status-chip" :class="'s-' + editTarget?.status">{{ STATUS_LABELS[editTarget?.status] }}</span>
-                </div>
-                <div class="status-actions">
-                  <button
-                    v-for="s in availableStatuses" :key="s.value"
-                    class="btn-status" :class="'btn-status--' + s.value"
-                    :disabled="statusSaving"
-                    @click="changeStatus(s.value)"
-                  >{{ s.label }}</button>
+              <div class="form-row">
+                <div class="field">
+                  <label>Статус</label>
+                  <div class="status-select-wrap">
+                    <select
+                      class="input status-select"
+                      v-model="editStatusSelect"
+                      :disabled="statusSaving || !availableNextStatuses.length"
+                      @change="changeStatus(editStatusSelect)"
+                    >
+                      <option :value="editTarget?.status">
+                        {{ STATUS_LABELS[editTarget?.status] }}{{ !availableNextStatuses.length ? ' (финальный)' : ' (текущий)' }}
+                      </option>
+                      <option v-for="s in availableNextStatuses" :key="s" :value="s">
+                        {{ STATUS_NEXT_LABEL[s] }}
+                      </option>
+                    </select>
+                    <span v-if="statusSaving" class="status-saving-hint">Сохранение…</span>
+                  </div>
                 </div>
               </div>
 
@@ -1074,18 +1115,13 @@ async function saveEdit() {
 }
 .section-label { font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
 .status-current { font: 13px/1.4 'Inter', sans-serif; color: var(--ink); display: flex; align-items: center; gap: 8px; }
-.status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.btn-status {
-  padding: 6px 14px; border-radius: 8px; font: 600 12px/1 'Inter', sans-serif;
-  cursor: pointer; border: 1.5px solid transparent; transition: all .15s;
+.status-select-wrap { display: flex; align-items: center; gap: 10px; }
+.status-select {
+  appearance: auto;
+  cursor: pointer;
 }
-.btn-status--in_progress { background: rgba(59,130,246,.1); color: #1d4ed8; border-color: rgba(59,130,246,.3); }
-.btn-status--in_progress:hover { background: rgba(59,130,246,.2); }
-.btn-status--completed   { background: rgba(16,185,129,.1); color: #065f46; border-color: rgba(16,185,129,.3); }
-.btn-status--completed:hover { background: rgba(16,185,129,.2); }
-.btn-status--cancelled   { background: rgba(239,68,68,.1); color: #991b1b; border-color: rgba(239,68,68,.3); }
-.btn-status--cancelled:hover { background: rgba(239,68,68,.2); }
-.btn-status:disabled { opacity: .5; cursor: not-allowed; }
+.status-select:disabled { opacity: .6; cursor: not-allowed; }
+.status-saving-hint { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
 
 .part-loading { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .part-tags { display: flex; flex-wrap: wrap; gap: 6px; }
