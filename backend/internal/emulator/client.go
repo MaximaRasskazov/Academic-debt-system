@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -380,4 +381,98 @@ func (c *Client) AuthCheck(ctx context.Context, email, password string) (string,
 		return "", ErrAuthInvalid
 	}
 	return out.Account.ExternalID, nil
+}
+
+// Grade — оценка для отправки в эмулятор.
+// Type: "numeric" (Value — int) или "pass_fail" (Value — "passed"/"failed").
+type Grade struct {
+	Type  string `json:"type"`
+	Value any    `json:"value"`
+}
+
+// ErrGradeRejected возвращается, когда эмулятор ответил 422 —
+// валидация тела не прошла. Это сигнал о баге маппинга на нашей
+// стороне, а не «эмулятор недоступен», поэтому ошибка отдельная.
+var ErrGradeRejected = fmt.Errorf("emulator: оценка отклонена валидацией")
+
+// debtGradeRequest — тело PATCH /api/v1/debts/{id}/grade.
+type debtGradeRequest struct {
+	Grade          Grade   `json:"grade"`
+	Comment        *string `json:"comment"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+// PatchDebtGrade закрывает долг в эмуляторе, проставляя оценку.
+// debtExternalID — идентификатор долга на стороне эмулятора (UUID,
+// который sync сохранил в debts.external_id). idempotencyKey —
+// стабильный ключ для защиты от двойной отправки.
+//
+// Ответы: 200 → nil; 422 → ErrGradeRejected (с reason в тексте для
+// лога); 404 → ErrNotFound; иной код/сетевой сбой → обычная ошибка
+// (трактуется вызывающим как «эмулятор недоступен»).
+func (c *Client) PatchDebtGrade(ctx context.Context, debtExternalID string, grade Grade, comment *string, idempotencyKey string) error {
+	body, err := json.Marshal(debtGradeRequest{
+		Grade:          grade,
+		Comment:        comment,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal grade request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		c.base+"/api/v1/debts/"+url.PathEscape(debtExternalID)+"/grade", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build patch grade request: %w", err)
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("do patch grade: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return ErrNotFound
+	case http.StatusUnprocessableEntity:
+		// 422 — валидация; вытаскиваем reason в обёртку для лога.
+		reason := readErrorReason(resp.Body)
+		if reason != "" {
+			return fmt.Errorf("%w: %s", ErrGradeRejected, reason)
+		}
+		return ErrGradeRejected
+	default:
+		return fmt.Errorf("patch grade: эмулятор ответил %d", resp.StatusCode)
+	}
+}
+
+// readErrorReason пытается достать человекочитаемую причину из тела
+// ошибки эмулятора ({"error":{"details":{"reason":"..."}}}). Любая
+// проблема разбора — пустая строка (для лога это не критично).
+func readErrorReason(body io.Reader) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+			Details struct {
+				Field  string `json:"field"`
+				Reason string `json:"reason"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(body).Decode(&e); err != nil {
+		return ""
+	}
+	if e.Error.Details.Reason != "" {
+		if e.Error.Details.Field != "" {
+			return e.Error.Details.Field + ": " + e.Error.Details.Reason
+		}
+		return e.Error.Details.Reason
+	}
+	return e.Error.Message
 }

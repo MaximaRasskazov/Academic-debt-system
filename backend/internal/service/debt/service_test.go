@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -299,4 +301,67 @@ func TestDebt_ListForTeacher_NoDisciplines_ReturnsEmpty(t *testing.T) {
 	rows, err := f.svc.ListForTeacher(context.Background(), teacher, 50, 0)
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+type gradeCall struct {
+	extID string
+	grade emulator.Grade
+	idem  string
+}
+
+// mockGradeSender потокобезопасен: write-back теперь идёт в отдельной
+// горутине, поэтому доступ к calls защищён мьютексом, а тест ждёт
+// вызова через waitCalls.
+type mockGradeSender struct {
+	mu    sync.Mutex
+	calls []gradeCall
+}
+
+func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, gradeCall{debtExternalID, grade, idempotencyKey})
+	return nil
+}
+
+// waitCalls ждёт, пока накопится n вызовов (фоновая горутина write-back),
+// и возвращает их копию. Падает по таймауту, если вызовов меньше.
+func (m *mockGradeSender) waitCalls(t *testing.T, n int) []gradeCall {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.calls) >= n
+	}, 2*time.Second, 10*time.Millisecond, "ожидали %d вызовов PatchDebtGrade", n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]gradeCall, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func TestDebt_Grade_SyncsToEmulator(t *testing.T) {
+	f := setup(t)
+	teacher := seedUser(t, f.store, "teacher-sync")
+	student := seedUser(t, f.store, "student-sync")
+	discID := seedDiscipline(t, f, "SYNC", teacher, student)
+
+	sender := &mockGradeSender{}
+	f.svc.SetGradeSender(sender)
+
+	extID := "ext-debt-999"
+	d, err := f.svc.Create(context.Background(), debt.CreateInput{
+		StudentID: student, DisciplineID: discID, ExternalID: &extID,
+	}, teacher)
+	require.NoError(t, err)
+
+	_, err = f.svc.Grade(context.Background(), pgutil.UUID(d.ID), 5, teacher)
+	require.NoError(t, err)
+
+	calls := sender.waitCalls(t, 1)
+	require.Len(t, calls, 1, "PatchDebtGrade должен быть вызван ровно 1 раз")
+	require.Equal(t, "ext-debt-999", calls[0].extID)
+	require.Equal(t, "numeric", calls[0].grade.Type)
+	require.Equal(t, 5, calls[0].grade.Value)
+	require.NotEmpty(t, calls[0].idem, "idempotency-ключ должен быть задан")
 }
