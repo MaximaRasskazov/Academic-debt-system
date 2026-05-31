@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -15,6 +16,20 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 )
+
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if dsn := os.Getenv("TEST_DATABASE_URL"); dsn != "" {
+		if pool, err := pgxpool.New(context.Background(), dsn); err == nil {
+			_ = repo.CleanupAllTestUsers(context.Background(), pool)
+			pool.Close()
+		}
+	}
+	os.Exit(code)
+}
 
 var secret = []byte("test-secret-must-be-at-least-32-bytes!!")
 
@@ -48,10 +63,10 @@ func uniqueRegisterInput(prefix string) auth.RegisterInput {
 	}
 }
 
-func cleanupUser(t *testing.T, store *repo.Store, userID interface{}) {
+func cleanupUser(t *testing.T, store *repo.Store, userID pgtype.UUID) {
 	t.Helper()
 	t.Cleanup(func() {
-		_, _ = store.Pool().Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+		_ = repo.CleanupUser(context.Background(), store.Pool(), userID)
 	})
 }
 
