@@ -25,7 +25,10 @@ beforeEach(() => {
     _message: (data) => wsMock.onmessage?.({ data: JSON.stringify(data) }),
     _close:   () => wsMock.onclose?.(),
   }
-  WsMockCtor = vi.fn(() => wsMock)
+  // Обычная функция (не стрелка): её можно вызвать через `new WebSocket(...)`.
+  // Стрелочную функцию vitest конструировать не умеет (Reflect.construct →
+  // "is not a constructor"). Возврат объекта из конструктора подменяет this.
+  WsMockCtor = vi.fn(function () { return wsMock })
   vi.stubGlobal('WebSocket', WsMockCtor)
 
   notificationsApi.unreadCount.mockResolvedValue({ count: 5 })
