@@ -1,10 +1,13 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
 import UpcomingRetakes from '../components/UpcomingRetakes.vue'
+import StatCard from '../components/StatCard.vue'
+import EmptyPlate from '../components/EmptyPlate.vue'
+import FilterSelect from '../components/FilterSelect.vue'
 import { useAuthStore } from '../stores/auth'
 import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
@@ -52,6 +55,38 @@ function togglePanel(key) {
   activePanel.value = key
   if (key === 'debts' && debtors.value.length === 0) loadDebtors()
 }
+
+// ── Фильтры должников: предмет / группа ───────────────────────
+const filterDisc  = ref('')   // discipline_id
+const filterGroup = ref('')
+
+const debtorGroups = computed(() =>
+  [...new Set(debtors.value.map(s => s.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
+)
+// Опции фильтра по предмету: только дисциплины с должниками.
+const debtorDiscOptions = computed(() =>
+  myDiscs.value
+    .filter(d => debtorsByDisc.value[d.id])
+    .map(d => ({ value: d.id, label: d.name || discMap.value[d.id] || d.id }))
+)
+const hasDebtorFilters = computed(() => !!(filterDisc.value || filterGroup.value))
+function resetDebtorFilters() {
+  filterDisc.value = ''
+  filterGroup.value = ''
+}
+
+// Дисциплины с должниками, отфильтрованные по предмету и группе.
+// Возвращает [{ disc, students }] (только непустые группы).
+const filteredDebtorGroups = computed(() =>
+  myDiscs.value
+    .filter(d => debtorsByDisc.value[d.id])
+    .filter(d => !filterDisc.value || d.id === filterDisc.value)
+    .map(d => ({
+      disc: d,
+      students: debtorsByDisc.value[d.id].filter(s => !filterGroup.value || s.group === filterGroup.value),
+    }))
+    .filter(g => g.students.length > 0)
+)
 
 async function loadDebtors() {
   debtorsLoading.value = true
@@ -227,18 +262,14 @@ onUnmounted(() => { ws?.close() })
 
             <!-- Stats -->
             <div class="stats-row">
-              <div
+              <StatCard
                 v-for="s in stats" :key="s.key"
-                :class="['stat-card', (s.key === 'discs' || s.key === 'debts') && 'stat-card--clickable', activePanel === s.key && 'stat-card--active']"
+                :label="s.label"
+                :value="s.value"
+                :clickable="s.key === 'discs' || s.key === 'debts'"
+                :active="activePanel === s.key"
                 @click="togglePanel(s.key)"
-              >
-                <div class="stat-accent" :style="{ background: s.accent }" />
-                <div class="stat-value">{{ s.value }}</div>
-                <div class="stat-label">{{ s.label }}</div>
-                <div v-if="s.key === 'discs' || s.key === 'debts'" class="stat-hint">
-                  {{ activePanel === s.key ? 'Скрыть ↑' : 'Подробнее →' }}
-                </div>
-              </div>
+              />
             </div>
 
             <!-- Panel: Мои предметы -->
@@ -247,12 +278,12 @@ onUnmounted(() => { ws?.close() })
                 <div class="panel-head">
                   <h3 class="panel-title">Мои предметы</h3>
                   <div class="panel-head-actions">
-                    <button class="btn-export btn-export--excel" @click="exportDiscs('excel')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp excel" @click="exportDiscs('excel')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
                       Excel
                     </button>
-                    <button class="btn-export btn-export--word" @click="exportDiscs('word')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp word" @click="exportDiscs('word')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13l2 4 2-4 2 4"/></svg>
                       Word
                     </button>
                     <button class="panel-close" @click="activePanel = null">
@@ -281,12 +312,12 @@ onUnmounted(() => { ws?.close() })
                 <div class="panel-head">
                   <h3 class="panel-title">Должники по моим предметам</h3>
                   <div class="panel-head-actions">
-                    <button class="btn-export btn-export--excel" :disabled="debtorsLoading || Object.keys(debtorsByDisc).length === 0" @click="exportDebtors('excel')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp excel" :disabled="debtorsLoading || Object.keys(debtorsByDisc).length === 0" @click="exportDebtors('excel')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
                       Excel
                     </button>
-                    <button class="btn-export btn-export--word" :disabled="debtorsLoading || Object.keys(debtorsByDisc).length === 0" @click="exportDebtors('word')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp word" :disabled="debtorsLoading || Object.keys(debtorsByDisc).length === 0" @click="exportDebtors('word')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13l2 4 2-4 2 4"/></svg>
                       Word
                     </button>
                     <button class="panel-close" @click="activePanel = null">
@@ -295,22 +326,31 @@ onUnmounted(() => { ws?.close() })
                   </div>
                 </div>
 
+                <!-- Фильтры: предмет / группа -->
+                <div v-if="!debtorsLoading && Object.keys(debtorsByDisc).length > 0" class="filters-bar">
+                  <FilterSelect v-model="filterDisc" :options="debtorDiscOptions" placeholder="Все предметы" />
+                  <FilterSelect v-model="filterGroup" :options="debtorGroups" placeholder="Все группы" />
+                  <button class="btn-reset" :disabled="!hasDebtorFilters" @click="resetDebtorFilters">Сбросить фильтры</button>
+                </div>
+
                 <div v-if="debtorsLoading" class="panel-loading">
                   <div class="spinner-sm" /><span>Загрузка…</span>
                 </div>
 
-                <div v-else-if="Object.keys(debtorsByDisc).length === 0" class="panel-empty">
-                  Должников нет
-                </div>
+                <EmptyPlate
+                  v-else-if="filteredDebtorGroups.length === 0"
+                  icon="check"
+                  :text="hasDebtorFilters ? 'По выбранным фильтрам должников нет' : 'Должников нет'"
+                />
 
                 <div v-else class="debtors-body">
-                  <div v-for="disc in myDiscs.filter(d => debtorsByDisc[d.id])" :key="disc.id" class="debtors-group">
+                  <div v-for="g in filteredDebtorGroups" :key="g.disc.id" class="debtors-group">
                     <div class="debtors-group-head">
-                      <span class="debtors-disc-name">{{ disc.name || discMap[disc.id] || disc.id }}</span>
-                      <span class="debtors-count">{{ debtorsByDisc[disc.id].length }}</span>
+                      <span class="debtors-disc-name">{{ g.disc.name || discMap[g.disc.id] || g.disc.id }}</span>
+                      <span class="debtors-count">{{ g.students.length }}</span>
                     </div>
                     <ul class="panel-list">
-                      <li v-for="s in debtorsByDisc[disc.id]" :key="s.id" class="panel-row panel-row--student">
+                      <li v-for="s in g.students" :key="s.id" class="panel-row panel-row--student">
                         <div class="student-avatar">{{ s.name.charAt(0) }}</div>
                         <div class="student-body">
                           <span class="student-name">{{ s.name }}</span>
@@ -436,25 +476,20 @@ onUnmounted(() => { ws?.close() })
   gap: 16px;
 }
 
-.stat-card {
-  background: var(--card); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 20px 20px 16px 24px;
-  position: relative; overflow: hidden;
-  transition: box-shadow .18s var(--ease), transform .18s var(--ease);
+/* ── Filters bar ── */
+.filters-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 20px; border-bottom: 1px solid var(--line); background: #fafbfc;
 }
-.stat-card--clickable { cursor: pointer; }
-.stat-card--clickable:hover {
-  box-shadow: 0 4px 18px rgba(20,22,60,.13);
-  transform: translateY(-2px);
+.btn-reset {
+  height: 36px; padding: 0 14px; flex-shrink: 0;
+  border: 1.5px solid var(--line); border-radius: 8px;
+  background: #fff; font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s, background .15s;
 }
-.stat-card--active {
-  box-shadow: 0 0 0 2px var(--brand), 0 4px 18px rgba(59,63,224,.15);
-  transform: translateY(-2px);
-}
-.stat-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.stat-value  { font-size: 34px; font-weight: 700; line-height: 1; margin-bottom: 8px; }
-.stat-label  { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
-.stat-hint   { font-size: 11px; color: var(--brand); margin-top: 6px; font-weight: 500; }
+.btn-reset:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
+.btn-reset:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Panel card ── */
 .panel-card {
@@ -480,19 +515,19 @@ onUnmounted(() => { ws?.close() })
 .panel-close:hover { background: var(--bg); color: var(--ink); }
 .panel-close svg { width: 14px; height: 14px; }
 
-/* ── Export buttons ── */
-.btn-export {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 28px; padding: 0 10px; border-radius: 7px; border: 1.5px solid var(--line);
-  font: 600 11px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
-  transition: border-color .15s, background .15s, color .15s;
+/* ── Export buttons (как в ведомости) ── */
+.btn-exp {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 8px;
+  font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  background: #fff; transition: background .15s, border-color .15s;
 }
-.btn-export svg { width: 12px; height: 12px; flex-shrink: 0; }
-.btn-export:disabled { opacity: .4; cursor: not-allowed; }
-.btn-export--excel { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
-.btn-export--excel:hover:not(:disabled) { background: #dcfce7; border-color: #86efac; }
-.btn-export--word  { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
-.btn-export--word:hover:not(:disabled)  { background: #dbeafe; border-color: #93c5fd; }
+.btn-exp svg { width: 13px; height: 13px; flex-shrink: 0; }
+.btn-exp:disabled { opacity: .4; cursor: not-allowed; }
+.btn-exp.excel { border: 1.5px solid #1a7340; color: #1a7340; }
+.btn-exp.excel:hover:not(:disabled) { background: rgba(26,115,64,.07); }
+.btn-exp.word  { border: 1.5px solid #1a56a0; color: #1a56a0; }
+.btn-exp.word:hover:not(:disabled)  { background: rgba(26,86,160,.07); }
 
 .panel-empty {
   padding: 28px 20px; text-align: center;
@@ -561,7 +596,7 @@ onUnmounted(() => { ws?.close() })
 }
 .student-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .student-name  { font: 500 13px/1.4 'Inter', sans-serif; color: var(--ink); }
-.student-group { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.student-group { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-align: left;}
 
 /* ── Panel transition ── */
 .panel-enter-active { transition: opacity .2s var(--ease), transform .2s var(--ease); }

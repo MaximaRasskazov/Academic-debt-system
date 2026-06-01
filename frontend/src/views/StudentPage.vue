@@ -1,10 +1,12 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import CalendarWidget from '../components/CalendarWidget.vue'
 import UpcomingRetakes from '../components/UpcomingRetakes.vue'
+import StatCard from '../components/StatCard.vue'
+import EmptyPlate from '../components/EmptyPlate.vue'
 import { useAuthStore } from '../stores/auth'
 import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
@@ -29,24 +31,35 @@ function goToRetake(n) {
 const upcomingRetakes = ref([])
 
 // Сырые данные для панелей
-const myDebts    = ref([])
+const myDebts    = ref([])   // все долги
+const myDiscs    = ref([])   // [{id, name, code}]
 const myRetakes  = ref([])
 const discMap    = ref({})
 
 const stats = ref([
-  { key: 'debts',   label: 'Моих долгов',        value: '—', accent: '#e63c5a' },
-  { key: 'discs',   label: 'Дисциплин',           value: '—', accent: '#3b3fe0' },
+  { key: 'debts',   label: 'Мои долги',           value: '—', accent: '#e63c5a' },
+  { key: 'discs',   label: 'Мои дисциплины',      value: '—', accent: '#3b3fe0' },
   { key: 'retakes', label: 'Назначено пересдач',  value: '—', accent: '#f59e0b' },
-  { key: 'done',    label: 'Завершено',            value: '—', accent: '#10b981' },
+  { key: 'done',    label: 'Завершённые пересдачи', value: '—', accent: '#10b981' },
 ])
 
 // ── Active panel ──────────────────────────────────────────
-const activePanel = ref(null) // 'debts' | 'retakes' | null
+// Раскрываемые панели: долги / дисциплины / назначенные / завершённые пересдачи
+const PANEL_KEYS = ['debts', 'discs', 'retakes', 'done']
+const activePanel = ref(null)
 
 function togglePanel(key) {
-  if (key !== 'debts' && key !== 'retakes') return
+  if (!PANEL_KEYS.includes(key)) return
   activePanel.value = activePanel.value === key ? null : key
 }
+
+// ── Производные списки для панелей ────────────────────────
+// Долги: без закрытых (graded). Показываем актуальные/отменённые.
+const openDebtsList = computed(() => myDebts.value.filter(d => d.status !== 'graded'))
+// Назначенные пересдачи: без завершённых.
+const scheduledRetakesList = computed(() => myRetakes.value.filter(r => r.status === 'scheduled' || r.status === 'in_progress'))
+// Завершённые пересдачи.
+const completedRetakesList = computed(() => myRetakes.value.filter(r => r.status === 'completed'))
 
 // ── Feed ──────────────────────────────────────────────────
 const feed         = ref([])
@@ -113,10 +126,10 @@ onMounted(async () => {
     notificationsApi.getAll({ limit: 30 }),
   ])
 
-  const myDiscs = discRes.status === 'fulfilled'
+  myDiscs.value = discRes.status === 'fulfilled'
     ? (discRes.value.data.items ?? discRes.value.data ?? [])
     : []
-  myDiscs.forEach(d => { discMap.value[d.id] = d.name || d.code })
+  myDiscs.value.forEach(d => { discMap.value[d.id] = d.name || d.code })
 
   myDebts.value = debtsRes.status === 'fulfilled'
     ? (debtsRes.value.data.items ?? debtsRes.value.data ?? [])
@@ -152,16 +165,16 @@ onMounted(async () => {
   feedLoading.value = false
 
   stats.value = [
-    { key: 'debts',   label: 'Моих долгов',        value: openDebts,       accent: '#e63c5a' },
-    { key: 'discs',   label: 'Дисциплин',           value: myDiscs.length,  accent: '#3b3fe0' },
-    { key: 'retakes', label: 'Назначено пересдач',  value: scheduledCount,  accent: '#f59e0b' },
-    { key: 'done',    label: 'Завершено',            value: completedCount,  accent: '#10b981' },
+    { key: 'debts',   label: 'Мои долги',            value: openDebts,           accent: '#e63c5a' },
+    { key: 'discs',   label: 'Мои дисциплины',       value: myDiscs.value.length, accent: '#3b3fe0' },
+    { key: 'retakes', label: 'Назначено пересдач',   value: scheduledCount,      accent: '#f59e0b' },
+    { key: 'done',    label: 'Завершённые пересдачи', value: completedCount,     accent: '#10b981' },
   ]
 })
 
 function exportDebts(fmt) {
   const headers = ['Дисциплина', 'Статус', 'Оценка', 'Дата создания']
-  const rows = myDebts.value.map(d => [
+  const rows = openDebtsList.value.map(d => [
     discMap.value[d.discipline_id] || d.discipline_id,
     statusLabel(d.status),
     d.final_grade ?? '—',
@@ -197,32 +210,28 @@ onUnmounted(() => { ws?.close() })
 
             <!-- Stats -->
             <div class="stats-row">
-              <div
+              <StatCard
                 v-for="s in stats" :key="s.key"
-                :class="['stat-card', (s.key === 'debts' || s.key === 'retakes') && 'stat-card--clickable', activePanel === s.key && 'stat-card--active']"
+                :label="s.label"
+                :value="s.value"
+                clickable
+                :active="activePanel === s.key"
                 @click="togglePanel(s.key)"
-              >
-                <div class="stat-accent" :style="{ background: s.accent }" />
-                <div class="stat-value">{{ s.value }}</div>
-                <div class="stat-label">{{ s.label }}</div>
-                <div v-if="s.key === 'debts' || s.key === 'retakes'" class="stat-hint">
-                  {{ activePanel === s.key ? 'Скрыть ↑' : 'Подробнее →' }}
-                </div>
-              </div>
+              />
             </div>
 
-            <!-- Panel: Мои долги -->
+            <!-- Panel: Мои долги (без закрытых) -->
             <Transition name="panel">
               <div v-if="activePanel === 'debts'" class="panel-card">
                 <div class="panel-head">
                   <h3 class="panel-title">Мои долги</h3>
                   <div class="panel-head-actions">
-                    <button class="btn-export btn-export--excel" :disabled="myDebts.length === 0" @click="exportDebts('excel')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp excel" :disabled="openDebtsList.length === 0" @click="exportDebts('excel')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
                       Excel
                     </button>
-                    <button class="btn-export btn-export--word" :disabled="myDebts.length === 0" @click="exportDebts('word')">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <button class="btn-exp word" :disabled="openDebtsList.length === 0" @click="exportDebts('word')">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13l2 4 2-4 2 4"/></svg>
                       Word
                     </button>
                     <button class="panel-close" @click="activePanel = null">
@@ -230,9 +239,9 @@ onUnmounted(() => { ws?.close() })
                     </button>
                   </div>
                 </div>
-                <div v-if="myDebts.length === 0" class="panel-empty">Долгов нет</div>
+                <EmptyPlate v-if="openDebtsList.length === 0" icon="check" text="Долгов нет" />
                 <ul v-else class="panel-list">
-                  <li v-for="d in myDebts" :key="d.id" :class="['panel-row', `row-${d.status}`]">
+                  <li v-for="d in openDebtsList" :key="d.id" :class="['panel-row', `row-${d.status}`]">
                     <div class="panel-row-main">
                       <span class="panel-disc">{{ discMap[d.discipline_id] || d.discipline_id }}</span>
                       <span :class="['panel-badge', `badge-${d.status}`]">{{ statusLabel(d.status) }}</span>
@@ -246,21 +255,70 @@ onUnmounted(() => { ws?.close() })
               </div>
             </Transition>
 
-            <!-- Panel: Мои пересдачи -->
+            <!-- Panel: Мои дисциплины (здесь можно показывать статус «Закрыт») -->
             <Transition name="panel">
-              <div v-if="activePanel === 'retakes'" class="panel-card">
+              <div v-if="activePanel === 'discs'" class="panel-card">
                 <div class="panel-head">
-                  <h3 class="panel-title">Мои пересдачи</h3>
+                  <h3 class="panel-title">Мои дисциплины</h3>
                   <button class="panel-close" @click="activePanel = null">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
                   </button>
                 </div>
-                <div v-if="myRetakes.length === 0" class="panel-empty">Пересдач нет</div>
+                <EmptyPlate v-if="myDiscs.length === 0" icon="book" text="Дисциплин нет" />
                 <ul v-else class="panel-list">
-                  <li v-for="r in myRetakes" :key="r.id" :class="['panel-row', `row-retake-${r.status}`]">
+                  <li v-for="d in myDiscs" :key="d.id" class="panel-row panel-row--disc">
+                    <div class="disc-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+                    </div>
+                    <div class="disc-body">
+                      <span class="disc-name">{{ d.name }}</span>
+                      <span v-if="d.code" class="disc-code">{{ d.code }}</span>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </Transition>
+
+            <!-- Panel: Назначенные пересдачи (без завершённых) -->
+            <Transition name="panel">
+              <div v-if="activePanel === 'retakes'" class="panel-card">
+                <div class="panel-head">
+                  <h3 class="panel-title">Назначенные пересдачи</h3>
+                  <button class="panel-close" @click="activePanel = null">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+                <EmptyPlate v-if="scheduledRetakesList.length === 0" icon="calendar" text="Назначенных пересдач нет" />
+                <ul v-else class="panel-list">
+                  <li v-for="r in scheduledRetakesList" :key="r.id" :class="['panel-row', `row-retake-${r.status}`]">
                     <div class="panel-row-main">
                       <span class="panel-disc">{{ discMap[r.discipline_id] || r.discipline_id }}</span>
                       <span :class="['panel-badge', `badge-retake-${r.status}`]">{{ retakeStatusLabel(r.status) }}</span>
+                    </div>
+                    <div class="panel-row-meta">
+                      <span class="panel-date">{{ fmtDate(r.scheduled_at) }} {{ fmtTime(r.scheduled_at) }}</span>
+                      <span v-if="r.building || r.room" class="panel-room">{{ r.building ? `корп. ${r.building}` : '' }}{{ r.room ? ` ауд. ${r.room}` : '' }}</span>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </Transition>
+
+            <!-- Panel: Завершённые пересдачи -->
+            <Transition name="panel">
+              <div v-if="activePanel === 'done'" class="panel-card">
+                <div class="panel-head">
+                  <h3 class="panel-title">Завершённые пересдачи</h3>
+                  <button class="panel-close" @click="activePanel = null">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+                <EmptyPlate v-if="completedRetakesList.length === 0" icon="calendar" text="Завершённых пересдач нет" />
+                <ul v-else class="panel-list">
+                  <li v-for="r in completedRetakesList" :key="r.id" class="panel-row row-retake-completed">
+                    <div class="panel-row-main">
+                      <span class="panel-disc">{{ discMap[r.discipline_id] || r.discipline_id }}</span>
+                      <span class="panel-badge badge-retake-completed">{{ retakeStatusLabel(r.status) }}</span>
                     </div>
                     <div class="panel-row-meta">
                       <span class="panel-date">{{ fmtDate(r.scheduled_at) }} {{ fmtTime(r.scheduled_at) }}</span>
@@ -384,28 +442,6 @@ onUnmounted(() => { ws?.close() })
   gap: 16px;
 }
 
-.stat-card {
-  background: var(--card); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 20px 20px 16px 24px;
-  position: relative; overflow: hidden;
-  transition: box-shadow .18s var(--ease), transform .18s var(--ease);
-}
-.stat-card--clickable {
-  cursor: pointer;
-}
-.stat-card--clickable:hover {
-  box-shadow: 0 4px 18px rgba(20,22,60,.13);
-  transform: translateY(-2px);
-}
-.stat-card--active {
-  box-shadow: 0 0 0 2px var(--brand), 0 4px 18px rgba(59,63,224,.15);
-  transform: translateY(-2px);
-}
-.stat-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.stat-value  { font-size: 34px; font-weight: 700; line-height: 1; margin-bottom: 8px; }
-.stat-label  { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
-.stat-hint   { font-size: 11px; color: var(--brand); margin-top: 6px; font-weight: 500; }
-
 /* ── Detail panel ── */
 .panel-card {
   background: var(--card); border-radius: var(--radius);
@@ -431,18 +467,18 @@ onUnmounted(() => { ws?.close() })
 .panel-close svg { width: 14px; height: 14px; }
 
 /* ── Export buttons ── */
-.btn-export {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 28px; padding: 0 10px; border-radius: 7px; border: 1.5px solid var(--line);
-  font: 600 11px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
-  transition: border-color .15s, background .15s, color .15s;
+.btn-exp {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 8px;
+  font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  background: #fff; transition: background .15s, border-color .15s;
 }
-.btn-export svg { width: 12px; height: 12px; flex-shrink: 0; }
-.btn-export:disabled { opacity: .4; cursor: not-allowed; }
-.btn-export--excel { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
-.btn-export--excel:hover:not(:disabled) { background: #dcfce7; border-color: #86efac; }
-.btn-export--word  { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
-.btn-export--word:hover:not(:disabled)  { background: #dbeafe; border-color: #93c5fd; }
+.btn-exp svg { width: 13px; height: 13px; flex-shrink: 0; }
+.btn-exp:disabled { opacity: .4; cursor: not-allowed; }
+.btn-exp.excel { border: 1.5px solid #1a7340; color: #1a7340; }
+.btn-exp.excel:hover:not(:disabled) { background: rgba(26,115,64,.07); }
+.btn-exp.word  { border: 1.5px solid #1a56a0; color: #1a56a0; }
+.btn-exp.word:hover:not(:disabled)  { background: rgba(26,86,160,.07); }
 
 .panel-empty {
   padding: 28px 20px; text-align: center;
@@ -463,6 +499,20 @@ onUnmounted(() => { ws?.close() })
 .panel-date { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .panel-room { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .panel-grade { font: 600 12px/1 'Inter', sans-serif; color: #2e7d32; }
+
+/* ── Discipline rows (панель «Мои дисциплины») ── */
+.panel-row--disc {
+  flex-direction: row; align-items: center; gap: 12px;
+}
+.disc-icon {
+  width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+  background: rgba(59,63,224,.08); display: grid; place-items: center;
+  color: var(--brand);
+}
+.disc-icon svg { width: 16px; height: 16px; }
+.disc-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; text-align: left; }
+.disc-name { font: 500 13px/1.4 'Inter', sans-serif; color: var(--ink); text-align: left; }
+.disc-code { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-align: left; }
 
 .panel-badge {
   flex-shrink: 0; padding: 2px 8px; border-radius: 6px;
