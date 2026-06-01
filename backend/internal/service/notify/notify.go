@@ -20,10 +20,10 @@ import (
 const (
 	KindDebtCreated = "debt_created"
 
-	KindRetakeScheduled        = "retake_scheduled"
-	KindRetakeUpdated          = "retake_updated"
-	KindRetakeCancelled        = "retake_cancelled"
-	KindRetakeGradeReceived    = "retake_grade_received"
+	KindRetakeScheduled     = "retake_scheduled"
+	KindRetakeUpdated       = "retake_updated"
+	KindRetakeCancelled     = "retake_cancelled"
+	KindRetakeGradeReceived = "retake_grade_received"
 
 	KindRetakeScheduledTeacher = "retake_scheduled_teacher"
 	KindRetakeUpdatedTeacher   = "retake_updated_teacher"
