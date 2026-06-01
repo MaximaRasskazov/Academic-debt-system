@@ -11,6 +11,7 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
+import { toUtcISO, partsInTZ } from '../utils/datetime'
 
 const sidebarOpen = ref(false)
 
@@ -227,7 +228,9 @@ async function submitRetake() {
   }
 
   const [day, month, year] = retakeDate.value.split('.')
-  const scheduledAt = new Date(`${year}-${month}-${day}T${timeString.value}:00`).toISOString()
+  // Введённые дата и время — это время вуза (Ханты, UTC+5). Конвертируем
+  // в UTC явно, не полагаясь на зону устройства (иначе время «уезжало»).
+  const scheduledAt = toUtcISO(`${year}-${month}-${day}`, timeString.value)
 
   submitting.value = true
   try {
@@ -310,12 +313,13 @@ onMounted(async () => {
 
   if (scheduledRes.status === 'fulfilled') {
     upcomingRetakes.value = (scheduledRes.value.data.items ?? []).map(r => {
-      const d = new Date(r.scheduled_at)
+      // Время вуза (Ханты, UTC+5), а не зона устройства.
+      const p = partsInTZ(r.scheduled_at)
       return {
         id: r.id,
         subject: discMap.value[r.discipline_id] || 'Дисциплина',
-        day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
-        time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        day: Number(p.day), month: Number(p.month), year: Number(p.year),
+        time: `${p.hour}:${p.minute}`,
         building: r.building, room: r.room,
       }
     })

@@ -6,6 +6,7 @@ import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { fmtDate, fmtTime, partsInTZ, toUtcISO } from '../utils/datetime'
 
 const auth   = useAuthStore()
 const router = useRouter()
@@ -83,16 +84,8 @@ onMounted(async () => {
   }
 })
 
-// ── Helpers ───────────────────────────────────────────────
-function fmtDate(iso) {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })
-}
-function fmtTime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+// fmtDate / fmtTime импортированы из utils/datetime — форматируют в зоне
+// вуза (Ханты, UTC+5), а не в зоне устройства.
 
 // ── Teacher action ────────────────────────────────────────
 function goTeacherEdit(retake) {
@@ -115,9 +108,10 @@ function openEdit(r) {
   editForm.room     = r.room     || ''
   editForm.duration = r.duration_minutes || 90
   if (r.scheduled_at) {
-    const d = new Date(r.scheduled_at)
-    editForm.hour   = String(d.getHours()).padStart(2, '0')
-    editForm.minute = String(d.getMinutes()).padStart(2, '0')
+    // Предзаполняем часы/минуты временем вуза, а не зоной устройства.
+    const p = partsInTZ(r.scheduled_at)
+    editForm.hour   = p.hour
+    editForm.minute = p.minute
   }
   editError.value = ''
   editOpen.value  = true
@@ -133,13 +127,18 @@ async function saveEdit() {
   editError.value = ''
   editSaving.value = true
   try {
-    const base = new Date(editTarget.value.scheduled_at || new Date())
-    base.setHours(parseInt(editForm.hour, 10), parseInt(editForm.minute, 10), 0, 0)
+    // Дата берётся из исходной пересдачи (в зоне вуза), часы/минуты —
+    // из формы. Собираем UTC-ISO явно через зону вуза.
+    const p = partsInTZ(editTarget.value.scheduled_at)
+    const newScheduledAt = toUtcISO(
+      `${p.year}-${p.month}-${p.day}`,
+      `${editForm.hour}:${editForm.minute}`,
+    )
     await retakesApi.update(editTarget.value.id, {
       building:         editForm.building,
       room:             editForm.room,
       duration_minutes: editForm.duration,
-      scheduled_at:     base.toISOString(),
+      scheduled_at:     newScheduledAt,
     })
     const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
     if (idx !== -1) {
@@ -148,7 +147,7 @@ async function saveEdit() {
         building:         editForm.building,
         room:             editForm.room,
         duration_minutes: editForm.duration,
-        scheduled_at:     base.toISOString(),
+        scheduled_at:     newScheduledAt,
       }
     }
     closeEdit()
