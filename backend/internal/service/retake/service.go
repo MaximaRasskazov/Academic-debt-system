@@ -295,13 +295,9 @@ func (s *Service) UpdateSchedule(ctx context.Context, id uuid.UUID, in UpdateSch
 	// Уведомляем всех студентов-участников. Шлём по обновлённой записи,
 	// чтобы payload содержал актуальное время/место — иначе фронт
 	// получит расхождение со списком пересдач.
-	s.notifyAllStudents(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdated,
-		retakeBasePayload(
-			pgutil.UUID(updated.ID),
-			pgutil.UUID(updated.DisciplineID),
-			updated.ScheduledAt.Time.Format("2006-01-02 15:04"),
-			updated.Building, updated.Room,
-		))
+	updatePayload := s.retakePayloadFor(ctx, updated)
+	s.notifyAllStudents(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdated, updatePayload)
+	s.notifyAllTeachers(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdatedTeacher, updatePayload)
 
 	return updated, nil
 }
@@ -388,16 +384,12 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID, actorID uuid.UUID) e
 		return err
 	}
 
-	// Cancel — критическое событие для студента: он рассчитывал прийти,
-	// время надо вернуть. Уведомление здесь полезнее, чем для start/end
-	// (которые покрываются авто-шедулером без участия студента).
-	s.notifyAllStudents(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelled,
-		retakeBasePayload(
-			pgutil.UUID(current.ID),
-			pgutil.UUID(current.DisciplineID),
-			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
-			current.Building, current.Room,
-		))
+	// Cancel — критическое событие и для студента (рассчитывал прийти),
+	// и для преподавателя (планировал принимать). Уведомление здесь
+	// полезнее, чем для start/end (покрываются авто-шедулером).
+	cancelPayload := s.retakePayloadFor(ctx, current)
+	s.notifyAllStudents(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelled, cancelPayload)
+	s.notifyAllTeachers(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelledTeacher, cancelPayload)
 
 	return nil
 }

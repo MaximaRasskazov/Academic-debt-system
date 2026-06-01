@@ -37,6 +37,7 @@ func CleanupUser(ctx context.Context, pool *pgxpool.Pool, userID pgtype.UUID) er
 		sql  string
 		args []any
 	}{
+		{`DELETE FROM retake_participants WHERE retake_id IN (SELECT id FROM retakes WHERE created_by = $1 OR deleted_by = $1)`, []any{id}},
 		{`DELETE FROM retake_participants WHERE user_id = $1 OR graded_by = $1`, []any{id}},
 		{`DELETE FROM retake_change_requests WHERE requested_by = $1 OR reviewed_by = $1`, []any{id}},
 		{`DELETE FROM retakes WHERE created_by = $1 OR deleted_by = $1`, []any{id}},
@@ -84,6 +85,7 @@ func CleanupUser(ctx context.Context, pool *pgxpool.Pool, userID pgtype.UUID) er
 func CleanupAllTestUsers(ctx context.Context, pool *pgxpool.Pool) error {
 	const sel = `SELECT id FROM users WHERE email LIKE '%@test.local'`
 	stmts := []string{
+		`DELETE FROM retake_participants WHERE retake_id IN (SELECT id FROM retakes WHERE created_by IN (` + sel + `) OR deleted_by IN (` + sel + `))`,
 		`DELETE FROM retake_participants WHERE user_id IN (` + sel + `) OR graded_by IN (` + sel + `)`,
 		`DELETE FROM retake_change_requests WHERE requested_by IN (` + sel + `) OR reviewed_by IN (` + sel + `)`,
 		`DELETE FROM retakes WHERE created_by IN (` + sel + `) OR deleted_by IN (` + sel + `)`,

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 )
 
@@ -55,10 +56,41 @@ func (s *Service) notifyAllStudents(ctx context.Context, retakeID uuid.UUID, kin
 	}
 }
 
-// retakePayloadBase собирает общий payload из доменной retake-записи.
-// Сами поля имени дисциплины / места выводим в шаблоне через ID,
-// если у получателя есть права — payload здесь только идентификаторы +
-// время, чтобы письмо и WS-событие легко рендерились на фронте.
+// notifyTeacher шлёт одно уведомление конкретному преподавателю.
+// Используется для AddTeacher. Ошибка только логируется — нотификация
+// не должна валить успешно прошедшую мутацию.
+func (s *Service) notifyTeacher(ctx context.Context, teacherID uuid.UUID, kind string, payload retakePayload) {
+	if s.notify == nil {
+		return
+	}
+	if err := s.notify.Notify(ctx, notify.Event{
+		UserID:  teacherID,
+		Kind:    kind,
+		Payload: payload,
+	}); err != nil {
+		slog.Warn("retake: не удалось отправить уведомление преподавателю",
+			"kind", kind, "user_id", teacherID.String(), "err", err)
+	}
+}
+
+// notifyAllTeachers рассылает событие всем преподавателям/членам комиссии
+// пересдачи. Используется для UpdateSchedule и Cancel. Список тащим ПОСЛЕ
+// успешной мутации — на этот момент состав участников в БД стабилен.
+func (s *Service) notifyAllTeachers(ctx context.Context, retakeID uuid.UUID, kind string, basePayload retakePayload) {
+	if s.notify == nil {
+		return
+	}
+	rows, err := s.store.ListTeacherParticipantsForRetake(ctx, pgutil.PgUUID(retakeID))
+	if err != nil {
+		slog.Warn("retake: не удалось получить преподавателей для рассылки",
+			"retake_id", retakeID.String(), "kind", kind, "err", err)
+		return
+	}
+	for _, r := range rows {
+		s.notifyTeacher(ctx, pgutil.UUID(r.UserID), kind, basePayload)
+	}
+}
+
 func retakeBasePayload(retakeID uuid.UUID, disciplineID uuid.UUID, scheduledAt, building, room string) retakePayload {
 	return retakePayload{
 		"retake_id":     retakeID.String(),
@@ -67,4 +99,21 @@ func retakeBasePayload(retakeID uuid.UUID, disciplineID uuid.UUID, scheduledAt, 
 		"building":      building,
 		"room":          room,
 	}
+}
+
+// retakePayloadFor строит payload с именем дисциплины и длительностью
+// для email-шаблонов. Если дисциплина не найдена — поле discipline
+// остаётся пустым, уведомление всё равно отправляется.
+func (s *Service) retakePayloadFor(ctx context.Context, r queries.Retake) retakePayload {
+	p := retakeBasePayload(
+		pgutil.UUID(r.ID),
+		pgutil.UUID(r.DisciplineID),
+		r.ScheduledAt.Time.Format("2006-01-02 15:04"),
+		r.Building, r.Room,
+	)
+	p["duration_minutes"] = r.DurationMinutes
+	if disc, err := s.store.GetDisciplineByID(ctx, r.DisciplineID); err == nil {
+		p["discipline"] = disc.Name
+	}
+	return p
 }
