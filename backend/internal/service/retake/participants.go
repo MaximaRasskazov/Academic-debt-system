@@ -73,13 +73,7 @@ func (s *Service) AddStudent(ctx context.Context, retakeID, studentID, debtID, a
 	// создании пересдачи: до этого момента он не знает, что для него
 	// что-то запланировали. retake_scheduled — главное событие в его
 	// потоке нотификаций.
-	s.notifyStudent(ctx, studentID, notify.KindRetakeScheduled,
-		retakeBasePayload(
-			pgutil.UUID(current.ID),
-			pgutil.UUID(current.DisciplineID),
-			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
-			current.Building, current.Room,
-		))
+	s.notifyStudent(ctx, studentID, notify.KindRetakeScheduled, s.retakePayloadFor(ctx, current))
 	return nil
 }
 
@@ -99,7 +93,14 @@ func (s *Service) AddTeacher(ctx context.Context, retakeID, teacherID, actorID u
 	if current.Kind == KindCommission {
 		kind = ParticipantCommissionMember
 	}
-	return s.addParticipant(ctx, current, teacherID, kind, nil, actorID, actionTeacherAdded)
+	if err := s.addParticipant(ctx, current, teacherID, kind, nil, actorID, actionTeacherAdded); err != nil {
+		return err
+	}
+
+	// Преподаватель узнаёт о назначении на пересдачу сразу после
+	// добавления — то же событие retake_scheduled, что и у студента.
+	s.notifyTeacher(ctx, teacherID, notify.KindRetakeScheduledTeacher, s.retakePayloadFor(ctx, current))
+	return nil
 }
 
 // addParticipant — общий внутренний метод для AddStudent/AddTeacher.

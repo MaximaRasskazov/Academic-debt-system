@@ -28,6 +28,15 @@ var tmplRetakeCancelled string
 //go:embed templates/retake_grade_received.html
 var tmplRetakeGradeReceived string
 
+//go:embed templates/retake_scheduled_teacher.html
+var tmplRetakeScheduledTeacher string
+
+//go:embed templates/retake_updated_teacher.html
+var tmplRetakeUpdatedTeacher string
+
+//go:embed templates/retake_cancelled_teacher.html
+var tmplRetakeCancelledTeacher string
+
 var emailTemplates map[string]*template.Template
 
 func init() {
@@ -35,18 +44,24 @@ func init() {
 		return template.Must(template.New("").Parse(src))
 	}
 	emailTemplates = map[string]*template.Template{
-		KindRetakeScheduled:     must(tmplRetakeScheduled),
-		KindRetakeUpdated:       must(tmplRetakeUpdated),
-		KindRetakeCancelled:     must(tmplRetakeCancelled),
-		KindRetakeGradeReceived: must(tmplRetakeGradeReceived),
+		KindRetakeScheduled:        must(tmplRetakeScheduled),
+		KindRetakeUpdated:          must(tmplRetakeUpdated),
+		KindRetakeCancelled:        must(tmplRetakeCancelled),
+		KindRetakeGradeReceived:    must(tmplRetakeGradeReceived),
+		KindRetakeScheduledTeacher: must(tmplRetakeScheduledTeacher),
+		KindRetakeUpdatedTeacher:   must(tmplRetakeUpdatedTeacher),
+		KindRetakeCancelledTeacher: must(tmplRetakeCancelledTeacher),
 	}
 }
 
 var subjectByKind = map[string]string{
-	KindRetakeScheduled:     "Назначена пересдача",
-	KindRetakeUpdated:       "Изменено расписание пересдачи",
-	KindRetakeCancelled:     "Пересдача отменена",
-	KindRetakeGradeReceived: "Получена оценка за пересдачу",
+	KindRetakeScheduled:        "Назначена пересдача",
+	KindRetakeUpdated:          "Изменено расписание пересдачи",
+	KindRetakeCancelled:        "Пересдача отменена",
+	KindRetakeGradeReceived:    "Получена оценка за пересдачу",
+	KindRetakeScheduledTeacher: "Назначена пересдача",
+	KindRetakeUpdatedTeacher:   "Изменено расписание пересдачи",
+	KindRetakeCancelledTeacher: "Пересдача отменена",
 }
 
 const emailQueueSize = 100
