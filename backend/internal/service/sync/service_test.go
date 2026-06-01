@@ -284,8 +284,8 @@ func TestSync_BackfillsStudentGroup(t *testing.T) {
 		FirstName:    "Имя",
 		LastName:     "Фам",
 		ExternalID:   linkedID,
-		PasswordHash: "$2b$12$x",
-		GroupName:    nil, // ← как до фичи
+		PasswordHash: "$2a$10$placeholder", // как в остальных тестах: gosec G101 не триггерится
+		GroupName:    nil,                  // как до фичи: студент засинхронен без группы
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = repo.CleanupUser(context.Background(), store.Pool(), uid) })
