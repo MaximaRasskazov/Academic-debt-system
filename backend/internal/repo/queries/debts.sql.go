@@ -254,6 +254,63 @@ func (q *Queries) ListAllDebts(ctx context.Context, arg ListAllDebtsParams) ([]D
 	return items, nil
 }
 
+const listDebtorsByDiscipline = `-- name: ListDebtorsByDiscipline :many
+SELECT
+    d.id            AS debt_id,
+    d.student_id,
+    u.first_name,
+    u.last_name,
+    u.middle_name,
+    u.group_name
+FROM debts d
+JOIN users u ON u.id = d.student_id
+WHERE d.discipline_id = $1
+  AND d.status = 'open'
+  AND d.deleted_at IS NULL
+ORDER BY u.last_name ASC, u.first_name ASC
+`
+
+type ListDebtorsByDisciplineRow struct {
+	DebtID     pgtype.UUID `json:"debt_id"`
+	StudentID  pgtype.UUID `json:"student_id"`
+	FirstName  string      `json:"first_name"`
+	LastName   string      `json:"last_name"`
+	MiddleName *string     `json:"middle_name"`
+	GroupName  *string     `json:"group_name"`
+}
+
+// Преподаватель видит должников по конкретной дисциплине с ФИО+группой —
+// нужно для формы заявки на пересдачу (выбрать кого записывать).
+// JOIN с users безопасен: возвращаем только тех студентов, у кого есть
+// открытый долг по дисциплине, то есть тех, кого actor и так видит
+// через GET /api/debts/by-discipline. Без password_hash и т.п.
+func (q *Queries) ListDebtorsByDiscipline(ctx context.Context, disciplineID pgtype.UUID) ([]ListDebtorsByDisciplineRow, error) {
+	rows, err := q.db.Query(ctx, listDebtorsByDiscipline, disciplineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDebtorsByDisciplineRow
+	for rows.Next() {
+		var i ListDebtorsByDisciplineRow
+		if err := rows.Scan(
+			&i.DebtID,
+			&i.StudentID,
+			&i.FirstName,
+			&i.LastName,
+			&i.MiddleName,
+			&i.GroupName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDebtsByDiscipline = `-- name: ListDebtsByDiscipline :many
 SELECT id, student_id, discipline_id, issued_by, status, final_grade, graded_at, graded_by, external_id, source, notes, created_at, updated_at, deleted_at, deleted_by
 FROM debts
@@ -399,6 +456,39 @@ func (q *Queries) ListDebtsForStudent(ctx context.Context, studentID pgtype.UUID
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDisciplineIDsByIssuer = `-- name: ListDisciplineIDsByIssuer :many
+SELECT DISTINCT discipline_id
+FROM debts
+WHERE issued_by = $1
+  AND deleted_at IS NULL
+`
+
+// "Свои предметы" преподавателя = дисциплины, по которым ОН ставил долги
+// (debts.issued_by). Эмулятор не отдаёт явную связь teacher↔discipline,
+// но в каждом долге есть issued_by (= TeacherID из эмулятора, "препод,
+// поставивший долг" по ТЗ). Поэтому дисциплины препода выводим отсюда.
+// Используется в debt.Service.ListForTeacher как замена пустой
+// teacher_disciplines.
+func (q *Queries) ListDisciplineIDsByIssuer(ctx context.Context, issuedBy pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listDisciplineIDsByIssuer, issuedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var discipline_id pgtype.UUID
+		if err := rows.Scan(&discipline_id); err != nil {
+			return nil, err
+		}
+		items = append(items, discipline_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

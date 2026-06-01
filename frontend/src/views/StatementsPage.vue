@@ -1,138 +1,100 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import { retakesApi } from '../api/retakes'
+import { disciplinesApi } from '../api/disciplines'
+import { directoryApi } from '../api/directory'
+import { usersApi } from '../api/users'
 
 const auth = useAuthStore()
 const isTeacher = computed(() => auth.isTeacher)
 const sidebarOpen = ref(false)
 
-/* ─── Mock data ─────────────────────────────────────────────── */
-import { reactive } from 'vue'
+/* ─── Логика ведомости ──────────────────────────────────────────
+ *
+ * В ведомость попадают только пересдачи, которые НАЧАЛИСЬ или уже
+ * ЗАВЕРШИЛИСЬ (статусы in_progress / completed). Пока пересдача
+ * "Назначена" (scheduled) — оценивать нечего, она в ведомость не
+ * выводится. Это совпадает с бэкендом: GradeStudent разрешает оценку
+ * только в scheduled|in_progress, а scheduled мы и так не показываем.
+ *
+ * Оценку (2..5) ставит преподаватель-участник. Каждая оценка
+ * применяется немедленно через PATCH /api/retakes/:id/students/:uid/grade:
+ * это атомарно закрывает связанный долг и фиксирует дату (graded_at).
+ * Бэкенд запрещает переставлять уже выставленную оценку, поэтому в UI
+ * проставленная оценка блокируется.
+ *
+ * Если по завершении пересдачи оценка так и не выставлена — долг
+ * остаётся открытым; в ведомости такая строка показывается как
+ * "Долг остался".
+ *
+ * Декан видит ведомость только на чтение + выгрузка Word/Excel.
+ */
 
-const allRetakes = reactive([
-  {
-    id: 1,
-    subject: 'Математический анализ',
-    date: '2026-04-25',
-    time: '10:00',
-    duration: 90,
-    building: '1',
-    room: '204',
-    type: 'normal',
-    status: 'completed',
-    teachers: ['Иванов Иван Иванович'],
-    students: [
-      { id: 1, lastName: 'Петров',    firstName: 'Алексей',   middleName: 'Сергеевич',    group: 'ИВТ-21', result: 4 },
-      { id: 2, lastName: 'Сидорова',  firstName: 'Мария',     middleName: 'Ивановна',      group: 'ИВТ-21', result: 'absent' },
-      { id: 3, lastName: 'Козлов',    firstName: 'Дмитрий',   middleName: 'Александрович', group: 'ИВТ-22', result: 3 },
-      { id: 4, lastName: 'Новикова',  firstName: 'Анна',      middleName: 'Петровна',      group: 'ИВТ-22', result: 5 },
-    ],
-  },
-  {
-    id: 2,
-    subject: 'Физика',
-    date: '2026-04-27',
-    time: '14:00',
-    duration: 120,
-    building: '2',
-    room: '308',
-    type: 'commission',
-    status: 'ongoing',
-    teachers: ['Смирнов Сергей Сергеевич', 'Кузнецов Андрей Владимирович', 'Попов Николай Михайлович'],
-    students: [
-      { id: 5, lastName: 'Федоров',    firstName: 'Игорь',     middleName: 'Борисович',     group: 'ФИЗ-21', result: null },
-      { id: 6, lastName: 'Михайлова',  firstName: 'Екатерина', middleName: 'Юрьевна',       group: 'ФИЗ-21', result: null },
-      { id: 7, lastName: 'Орешников',  firstName: 'Борис',     middleName: 'Александрович', group: 'ФИЗ-22', result: null },
-    ],
-  },
-  {
-    id: 3,
-    subject: 'Линейная алгебра',
-    date: '2026-04-30',
-    time: '09:00',
-    duration: 90,
-    building: '3',
-    room: '112',
-    type: 'normal',
-    status: 'completed',
-    teachers: ['Волков Владимир Иванович'],
-    students: [
-      { id: 8,  lastName: 'Захаров', firstName: 'Павел',  middleName: 'Алексеевич',  group: 'ИВТ-21', result: 2 },
-      { id: 9,  lastName: 'Чернова', firstName: 'Ольга',  middleName: 'Сергеевна',   group: 'ИВТ-21', result: 4 },
-      { id: 10, lastName: 'Орлов',   firstName: 'Максим', middleName: 'Дмитриевич',  group: 'ИВТ-22', result: 'absent' },
-    ],
-  },
-  {
-    id: 4,
-    subject: 'Дискретная математика',
-    date: '2026-05-05',
-    time: '11:00',
-    duration: 90,
-    building: '1',
-    room: '301',
-    type: 'normal',
-    status: 'scheduled',
-    teachers: ['Белов Алексей Николаевич'],
-    students: [
-      { id: 11, lastName: 'Крылов',   firstName: 'Виктор',  middleName: 'Олегович',    group: 'ИВТ-21', result: null },
-      { id: 12, lastName: 'Лебедева', firstName: 'Надежда', middleName: 'Сергеевна',   group: 'ИВТ-22', result: null },
-      { id: 13, lastName: 'Морозов',  firstName: 'Антон',   middleName: 'Викторович',  group: 'ИВТ-22', result: null },
-      { id: 14, lastName: 'Тихонова', firstName: 'Юлия',    middleName: 'Андреевна',   group: 'ИВТ-23', result: null },
-    ],
-  },
-  {
-    id: 5,
-    subject: 'Программирование',
-    date: '2026-05-12',
-    time: '13:00',
-    duration: 120,
-    building: '2',
-    room: '215',
-    type: 'normal',
-    status: 'scheduled',
-    teachers: ['Иванов Иван Иванович'],
-    students: [
-      { id: 15, lastName: 'Абрамов',   firstName: 'Илья',     middleName: 'Николаевич',  group: 'ИВТ-21', result: null },
-      { id: 16, lastName: 'Васильева', firstName: 'Светлана', middleName: 'Олеговна',    group: 'ИВТ-21', result: null },
-    ],
-  },
-])
+/* ─── State ─────────────────────────────────────────────────── */
+const allRetakes = ref([])        // нормализованные пересдачи
+const loading    = ref(true)
+const loadError  = ref('')
+const discMap    = ref({})         // discipline_id → { name, code }
+const userMap    = ref({})         // user_id → { lastName, firstName, middleName, group }
 
 /* ─── Left panel ─────────────────────────────────────────────── */
 const searchQuery  = ref('')
 const filterStatus = ref('all')
 
 const filteredRetakes = computed(() =>
-  allRetakes.filter(r => {
+  allRetakes.value.filter(r => {
     const q = searchQuery.value.toLowerCase()
     return (!q || r.subject.toLowerCase().includes(q)) &&
            (filterStatus.value === 'all' || r.status === filterStatus.value)
   })
 )
 
-/* ─── Selection & editable grades ────────────────────────────── */
-const selectedId       = ref(null)
-const selectedRetake   = computed(() => allRetakes.find(r => r.id === selectedId.value) ?? null)
-const editableStudents = ref([])
+/* ─── Selection ──────────────────────────────────────────────── */
+const selectedId     = ref(null)
+const selectedRetake = computed(() => allRetakes.value.find(r => r.id === selectedId.value) ?? null)
+const detailLoading  = ref(false)
 
-watch(selectedId, id => {
-  const r = allRetakes.find(r => r.id === id)
-  editableStudents.value = r ? r.students.map(s => ({ ...s })) : []
-})
-
-function setResult(studentId, result) {
-  const s = editableStudents.value.find(s => s.id === studentId)
-  if (s) s.result = s.result === result ? null : result
+// Оценки редактируемы только преподавателем и пока ведомость не
+// зафиксирована. completed-пересдачу бэкенд грейдить запрещает,
+// поэтому на ней оценки read-only. То есть редактируемо = teacher
+// + статус in_progress + оценка ещё не стоит.
+function canGrade(retake) {
+  return isTeacher.value && retake && retake.status === 'in_progress'
 }
 
+watch(selectedId, async (id) => {
+  if (!id) return
+  await loadParticipants(id)
+})
+
+/* ─── Grade ──────────────────────────────────────────────────── */
+const gradingId   = ref(null)   // student_id, по которому идёт запрос
+const gradeError  = ref('')
 const saveSuccess = ref(false)
-function saveGrades() {
-  const retake = allRetakes.find(r => r.id === selectedId.value)
-  if (retake) retake.students = editableStudents.value.map(s => ({ ...s }))
-  saveSuccess.value = true
-  setTimeout(() => (saveSuccess.value = false), 2500)
+
+async function setGrade(retake, student, grade) {
+  if (!canGrade(retake)) return
+  if (student.result !== null) return        // переставить нельзя
+  if (gradingId.value) return                 // не плодим параллельные
+
+  gradingId.value = student.id
+  gradeError.value = ''
+  try {
+    await retakesApi.gradeStudent(retake.id, student.id, grade)
+    // Оптимистично фиксируем результат и дату — повторно грузить не нужно
+    student.result   = grade
+    student.gradedAt = new Date().toISOString()
+    saveSuccess.value = true
+    setTimeout(() => (saveSuccess.value = false), 2000)
+  } catch (e) {
+    gradeError.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось выставить оценку'
+    setTimeout(() => (gradeError.value = ''), 4000)
+  } finally {
+    gradingId.value = null
+  }
 }
 
 /* ─── Export panel ───────────────────────────────────────────── */
@@ -142,7 +104,7 @@ const expDateFrom     = ref('')
 const expDateTo       = ref('')
 const expStatus       = ref('all')
 
-const allSubjects = computed(() => [...new Set(allRetakes.map(r => r.subject))])
+const allSubjects = computed(() => [...new Set(allRetakes.value.map(r => r.subject))])
 
 function toggleSubject(s) {
   const i = expSubjects.value.indexOf(s)
@@ -150,7 +112,7 @@ function toggleSubject(s) {
 }
 
 const exportFiltered = computed(() =>
-  allRetakes.filter(r => {
+  allRetakes.value.filter(r => {
     const okSub  = !expSubjects.value.length || expSubjects.value.includes(r.subject)
     const okSt   = expStatus.value === 'all' || r.status === expStatus.value
     const okFrom = !expDateFrom.value || r.date >= expDateFrom.value
@@ -161,24 +123,35 @@ const exportFiltered = computed(() =>
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 const STATUS_MAP = {
-  scheduled: { label: 'Назначена',  bg: 'rgba(59,63,224,.1)',   color: '#3b3fe0' },
-  ongoing:   { label: 'Проводится', bg: 'rgba(245,158,11,.12)', color: '#d97706' },
-  completed: { label: 'Завершена',  bg: 'rgba(5,150,105,.1)',   color: '#059669' },
+  in_progress: { label: 'Проводится', bg: 'rgba(245,158,11,.12)', color: '#d97706' },
+  completed:   { label: 'Завершена',  bg: 'rgba(5,150,105,.1)',   color: '#059669' },
 }
 
-function fullName(s)     { return `${s.lastName} ${s.firstName} ${s.middleName}` }
-function typeLabel(t)    { return t === 'commission' ? 'С комиссией' : 'Обычная' }
+function fullName(s)  { return [s.lastName, s.firstName, s.middleName].filter(Boolean).join(' ') }
+function typeLabel(t) { return t === 'commission' ? 'С комиссией' : 'Обычная' }
+
+// "Оценено" = либо стоит оценка, либо (для завершённой) долг остался —
+// то есть результат по студенту окончательно определён.
 function gradeCount(arr) { return arr.filter(s => s.result !== null).length }
 function todayStr()      { return new Date().toISOString().split('T')[0] }
 
-function resultLabel(result) {
-  if (result === null || result === undefined) return '—'
-  return result === 'absent' ? 'Н/Я' : String(result)
+function resultLabel(result, status) {
+  if (result === 0) return 'Н/я'
+  if (result !== null && result !== undefined) return String(result)
+  return status === 'completed' ? 'Долг' : '—'
 }
 
-function resultColor(result) {
-  const map = { 2: '#dc2626', 3: '#d97706', 4: '#3b82f6', 5: '#059669', absent: '#6b7280' }
-  return map[result] || '#b0b3be'
+function resultColor(result, status) {
+  const map = { 0: '#6b7280', 2: '#dc2626', 3: '#d97706', 4: '#3b82f6', 5: '#059669' }
+  if (result !== null && result !== undefined) return map[result] || '#b0b3be'
+  return status === 'completed' ? '#dc2626' : '#b0b3be'
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+       + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatLong(dateStr) {
@@ -193,6 +166,167 @@ function formatShort(dateStr) {
   })
 }
 
+/* ─── Загрузка данных ────────────────────────────────────────── */
+
+// Пересдачи, попадающие в ведомость: только начавшиеся/завершённые.
+const VEDOMOST_STATUSES = ['in_progress', 'completed']
+
+function normalizeRetake(r) {
+  const d = new Date(r.scheduled_at)
+  const disc = discMap.value[r.discipline_id]
+  return {
+    id:        r.id,
+    disciplineId: r.discipline_id,
+    subject:   disc?.name || disc?.code || 'Дисциплина',
+    code:      disc?.code || '',
+    date:      d.toISOString().split('T')[0],
+    time:      `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`,
+    duration:  r.duration_minutes,
+    building:  r.building,
+    room:      r.room,
+    type:      r.kind === 'commission' ? 'commission' : 'normal',
+    status:    r.status,
+    completedAt: r.completed_at || null,
+    teachers:  [],          // подтянем из participants при открытии
+    students:  [],          // подтянем из participants при открытии
+    _loaded:   false,
+  }
+}
+
+async function loadData() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    // 1. Справочник дисциплин (для названий)
+    const discsRes = await disciplinesApi.getAll({ limit: 500 }).catch(() => null)
+    if (discsRes) {
+      for (const d of (discsRes.data.items ?? discsRes.data ?? [])) {
+        discMap.value[d.id] = { name: d.name, code: d.code }
+      }
+    }
+
+    // 2. Пересдачи. Декан — все, преподаватель — только свои.
+    let rows = []
+    if (auth.isDean || auth.isAdmin) {
+      // Тянем in_progress и completed двумя запросами (бэк фильтрует по одному статусу)
+      const [ipRes, cmpRes] = await Promise.allSettled([
+        retakesApi.getAll({ status: 'in_progress', limit: 200 }),
+        retakesApi.getAll({ status: 'completed', limit: 200 }),
+      ])
+      if (ipRes.status === 'fulfilled')  rows.push(...(ipRes.value.data.items ?? []))
+      if (cmpRes.status === 'fulfilled') rows.push(...(cmpRes.value.data.items ?? []))
+    } else {
+      const myRes = await retakesApi.getMy().catch(() => null)
+      const items = myRes ? (myRes.data.items ?? myRes.data ?? []) : []
+      rows = items.filter(r => VEDOMOST_STATUSES.includes(r.status))
+    }
+
+    allRetakes.value = rows
+      .map(normalizeRetake)
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+  } catch (e) {
+    loadError.value = e.response?.data?.message || 'Не удалось загрузить ведомости'
+  } finally {
+    loading.value = false
+  }
+}
+
+// Подгрузка участников выбранной пересдачи + резолв ФИО.
+async function loadParticipants(retakeId) {
+  const retake = allRetakes.value.find(r => r.id === retakeId)
+  if (!retake || retake._loaded) return
+
+  detailLoading.value = true
+  try {
+    const partRes = await retakesApi.getParticipants(retakeId).catch(() => null)
+    const parts = partRes ? (partRes.data.items ?? partRes.data ?? []) : []
+
+    // ФИО студентов: преподаватель не имеет users.view, поэтому берём
+    // из directoryApi.listDebtors по дисциплине (он отдаёт ФИО+группу).
+    // Декан может тянуть users напрямую, но listDebtors проще и единообразно.
+    await ensureNamesForDiscipline(retake.disciplineId)
+
+    const teachers = []
+    const students = []
+    for (const p of parts) {
+      const u = userMap.value[p.user_id]
+      const name = u ? [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ') : p.user_id
+      if (p.kind === 'student') {
+        students.push({
+          id:        p.user_id,
+          lastName:  u?.lastName  || '',
+          firstName: u?.firstName || '',
+          middleName:u?.middleName|| '',
+          group:     u?.group     || '',
+          result:    p.grade ?? null,
+          gradedAt:  p.graded_at || null,
+          debtId:    p.debt_id || null,
+        })
+      } else {
+        teachers.push(name)
+      }
+    }
+    // Студентов сортируем по фамилии для ведомости
+    students.sort((a, b) => fullName(a).localeCompare(fullName(b), 'ru'))
+
+    retake.teachers = teachers
+    retake.students = students
+    retake._loaded  = true
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+// Заполняет userMap ФИО студентов-должников по дисциплине.
+// Кеширует по дисциплине, чтобы не дёргать listDebtors повторно.
+const _discNamesLoaded = new Set()
+async function ensureNamesForDiscipline(disciplineId) {
+  if (_discNamesLoaded.has(disciplineId)) return
+  _discNamesLoaded.add(disciplineId)
+
+  // Декан — полный справочник пользователей (есть users.view)
+  if (auth.isDean || auth.isAdmin) {
+    if (!_allUsersLoaded) {
+      const res = await usersApi.getAll({ limit: 1000 }).catch(() => null)
+      if (res) {
+        for (const u of (res.data.items ?? [])) {
+          userMap.value[u.id] = {
+            lastName: u.last_name, firstName: u.first_name,
+            middleName: u.middle_name, group: u.group_name || '',
+          }
+        }
+      }
+      _allUsersLoaded = true
+    }
+    return
+  }
+
+  // Преподаватель — студенты через listDebtors, преподаватели через listTeachers
+  const [debtorsRes, teachersRes] = await Promise.allSettled([
+    directoryApi.listDebtors(disciplineId),
+    directoryApi.listTeachers(),
+  ])
+  if (debtorsRes.status === 'fulfilled') {
+    for (const s of (debtorsRes.value.data.items ?? [])) {
+      userMap.value[s.student_id] = {
+        lastName: s.last_name, firstName: s.first_name,
+        middleName: s.middle_name, group: s.group_name || '',
+      }
+    }
+  }
+  if (teachersRes.status === 'fulfilled') {
+    for (const t of (teachersRes.value.data.items ?? [])) {
+      userMap.value[t.id] = {
+        lastName: t.last_name, firstName: t.first_name,
+        middleName: t.middle_name, group: '',
+      }
+    }
+  }
+}
+let _allUsersLoaded = false
+
+onMounted(loadData)
+
 /* ─── Excel export ───────────────────────────────────────────── */
 async function doExcelOne(retake, students) {
   const XLSX = await import('xlsx')
@@ -202,6 +336,9 @@ async function doExcelOne(retake, students) {
 }
 
 async function doExcelAll() {
+  // Подгружаем участников для всех попадающих в выборку пересдач —
+  // они грузятся лениво при открытии, а для экспорта нужны все.
+  await Promise.all(exportFiltered.value.map(r => loadParticipants(r.id)))
   const XLSX = await import('xlsx')
   const wb   = XLSX.utils.book_new()
   exportFiltered.value.forEach((r, i) => {
@@ -224,8 +361,8 @@ function appendSheet(XLSX, wb, retake, students, sheetName) {
     ['Статус:',          STATUS_MAP[retake.status]?.label || retake.status],
     ['Преподаватель(и):', retake.teachers.join('; ')],
     [],
-    ['№', 'ФИО студента', 'Группа', 'Оценка'],
-    ...students.map((s, i) => [i + 1, fullName(s), s.group, resultLabel(s.result)]),
+    ['№', 'ФИО студента', 'Группа', 'Результат'],
+    ...students.map((s, i) => [i + 1, fullName(s), s.group, resultLabel(s.result, retake.status)]),
     [],
     ['Преподаватель:', retake.teachers[0] || ''],
     ['Дата составления:', formatShort(todayStr())],
@@ -245,6 +382,7 @@ async function doWordOne(retake, students) {
 }
 
 async function doWordAll() {
+  await Promise.all(exportFiltered.value.map(r => loadParticipants(r.id)))
   const libs  = await import('docx')
   const items = exportFiltered.value.map(r => ({ retake: r, students: r.students }))
   const doc   = buildWordDoc(libs, items)
@@ -351,7 +489,7 @@ function buildWordDoc(libs, items) {
             cell('№',              { bold: true, align: AlignmentType.CENTER, w: 5,  shade: true }),
             cell('ФИО студента',   { bold: true,                              w: 43, shade: true }),
             cell('Группа',         { bold: true, align: AlignmentType.CENTER, w: 14, shade: true }),
-            cell('Оценка',         { bold: true, align: AlignmentType.CENTER, w: 13, shade: true }),
+            cell('Результат',      { bold: true, align: AlignmentType.CENTER, w: 13, shade: true }),
             cell('Подпись',        { bold: true, align: AlignmentType.CENTER, w: 25, shade: true }),
           ],
         }),
@@ -360,7 +498,7 @@ function buildWordDoc(libs, items) {
             cell(i + 1,              { align: AlignmentType.CENTER }),
             cell(fullName(s)),
             cell(s.group,            { align: AlignmentType.CENTER }),
-            cell(resultLabel(s.result), { align: AlignmentType.CENTER, bold: true }),
+            cell(resultLabel(s.result, retake.status), { align: AlignmentType.CENTER, bold: true }),
             cell(''),
           ],
         })),
@@ -440,13 +578,17 @@ function downloadBlob(blob, filename) {
             </div>
 
             <div class="chips">
-              <button class="chip" :class="{ active: filterStatus === 'all' }"       @click="filterStatus = 'all'">Все</button>
-              <button class="chip" :class="{ active: filterStatus === 'scheduled' }" @click="filterStatus = 'scheduled'">Назначена</button>
-              <button class="chip" :class="{ active: filterStatus === 'ongoing' }"   @click="filterStatus = 'ongoing'">Проводится</button>
-              <button class="chip" :class="{ active: filterStatus === 'completed' }" @click="filterStatus = 'completed'">Завершена</button>
+              <button class="chip" :class="{ active: filterStatus === 'all' }"         @click="filterStatus = 'all'">Все</button>
+              <button class="chip" :class="{ active: filterStatus === 'in_progress' }" @click="filterStatus = 'in_progress'">Проводится</button>
+              <button class="chip" :class="{ active: filterStatus === 'completed' }"   @click="filterStatus = 'completed'">Завершена</button>
             </div>
 
             <div class="retakes-list">
+              <div v-if="loading" class="empty-list">
+                <div class="spinner-inline" />
+                Загрузка…
+              </div>
+
               <div
                 v-for="r in filteredRetakes"
                 :key="r.id"
@@ -462,16 +604,12 @@ function downloadBlob(blob, filename) {
                     class="status-badge"
                     :style="{ background: STATUS_MAP[r.status]?.bg, color: STATUS_MAP[r.status]?.color }"
                   >{{ STATUS_MAP[r.status]?.label }}</span>
-                  <span class="r-count">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-                    {{ gradeCount(r.students) }} / {{ r.students.length }}
-                  </span>
                 </div>
               </div>
 
-              <div v-if="!filteredRetakes.length" class="empty-list">
+              <div v-if="!loading && !filteredRetakes.length" class="empty-list">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d7d9e0" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-                Пересдачи не найдены
+                Нет пересдач в ведомости
               </div>
             </div>
           </div>
@@ -539,13 +677,13 @@ function downloadBlob(blob, filename) {
 
               <div class="info-footer">
                 <div class="export-group">
-                  <button class="btn-exp excel" @click="doExcelOne(selectedRetake, editableStudents)">
+                  <button class="btn-exp excel" @click="doExcelOne(selectedRetake, selectedRetake.students)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>
                     </svg>
                     Excel
                   </button>
-                  <button class="btn-exp word" @click="doWordOne(selectedRetake, editableStudents)">
+                  <button class="btn-exp word" @click="doWordOne(selectedRetake, selectedRetake.students)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13l2 4 2-4 2 4"/>
                     </svg>
@@ -560,70 +698,89 @@ function downloadBlob(blob, filename) {
               <div class="students-head">
                 <h3 class="students-title">Список студентов</h3>
                 <span class="progress-text">
-                  Оценено:&nbsp;<strong>{{ gradeCount(editableStudents) }}</strong>&nbsp;из&nbsp;<strong>{{ editableStudents.length }}</strong>
+                  Оценено:&nbsp;<strong>{{ gradeCount(selectedRetake.students) }}</strong>&nbsp;из&nbsp;<strong>{{ selectedRetake.students.length }}</strong>
                 </span>
               </div>
 
-              <div class="table-wrap">
+              <!-- Подсказка о режиме редактирования -->
+              <div v-if="canGrade(selectedRetake)" class="grade-note grade-note--active">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
+                Пересдача идёт — выставьте оценки студентам.
+              </div>
+              <div v-else-if="isTeacher && selectedRetake.status === 'completed'" class="grade-note">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                Пересдача завершена. Ведомость доступна только для просмотра и выгрузки.
+              </div>
+
+              <div v-if="detailLoading" class="detail-loading">
+                <div class="spinner-inline" /> Загрузка списка студентов…
+              </div>
+
+              <div v-else class="table-wrap">
                 <table class="tbl">
                   <colgroup>
                     <col style="width:46px">
                     <col>
                     <col style="width:104px">
-                    <col style="width:248px">
+                    <col style="width:280px">
                   </colgroup>
                   <thead>
                     <tr>
                       <th>№</th>
                       <th>ФИО студента</th>
                       <th>Группа</th>
-                      <th>Оценка</th>
+                      <th>Результат</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr
-                      v-for="(s, i) in editableStudents"
+                      v-for="(s, i) in selectedRetake.students"
                       :key="s.id"
                     >
                       <td class="td-num">{{ i + 1 }}</td>
                       <td class="td-name">{{ fullName(s) }}</td>
                       <td class="td-group">{{ s.group }}</td>
                       <td class="td-grade">
-                        <!-- Преподаватель: редактируемые кнопки -->
-                        <div v-if="isTeacher" class="grade-picker">
+                        <!-- Преподаватель, пересдача идёт, оценка ещё не стоит → можно выставить -->
+                        <div v-if="canGrade(selectedRetake) && s.result === null" class="grade-picker">
                           <button
                             v-for="g in [2, 3, 4, 5]"
                             :key="g"
                             class="g-btn"
-                            :class="[`g${g}`, { active: s.result === g }]"
-                            @click="setResult(s.id, g)"
+                            :class="`g${g}`"
+                            :disabled="gradingId !== null"
+                            @click="setGrade(selectedRetake, s, g)"
                           >{{ g }}</button>
                           <button
-                            class="g-btn g-absent"
-                            :class="{ active: s.result === 'absent' }"
-                            @click="setResult(s.id, 'absent')"
-                          >Н/Я</button>
+                            class="g-btn g-na"
+                            :disabled="gradingId !== null"
+                            @click="setGrade(selectedRetake, s, 0)"
+                          >Н/я</button>
+                          <span v-if="gradingId === s.id" class="grade-spinner" />
                         </div>
-                        <!-- Декан: только просмотр -->
-                        <span
-                          v-else
-                          class="result-text"
-                          :style="{ color: resultColor(s.result), fontWeight: s.result !== null ? 600 : 400 }"
-                        >{{ resultLabel(s.result) }}</span>
+                        <!-- Оценка проставлена ИЛИ режим только для чтения -->
+                        <div v-else class="result-cell">
+                          <span
+                            class="result-text"
+                            :style="{ color: resultColor(s.result, selectedRetake.status), fontWeight: 600 }"
+                          >{{ resultLabel(s.result, selectedRetake.status) }}</span>
+                          <span v-if="s.gradedAt" class="result-date">{{ fmtDateTime(s.gradedAt) }}</span>
+                        </div>
                       </td>
+                    </tr>
+                    <tr v-if="!selectedRetake.students.length">
+                      <td colspan="4" class="empty-cell">На пересдачу не записаны студенты</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              <div v-if="isTeacher" class="table-footer">
-                <Transition name="fade">
-                  <span v-if="saveSuccess" class="save-ok">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    Оценки сохранены
-                  </span>
-                </Transition>
-                <button class="btn-primary" @click="saveGrades">Сохранить оценки</button>
+              <div v-if="gradeError" class="grade-error-bar">{{ gradeError }}</div>
+              <div v-else-if="saveSuccess" class="table-footer">
+                <span class="save-ok">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Оценка выставлена, долг закрыт
+                </span>
               </div>
             </div>
 
@@ -674,10 +831,9 @@ function downloadBlob(blob, filename) {
           <div class="ep-field">
             <label class="ep-label">Статус</label>
             <div class="ep-chips">
-              <button class="chip" :class="{ active: expStatus === 'all' }"       @click="expStatus = 'all'">Все</button>
-              <button class="chip" :class="{ active: expStatus === 'scheduled' }" @click="expStatus = 'scheduled'">Назначена</button>
-              <button class="chip" :class="{ active: expStatus === 'ongoing' }"   @click="expStatus = 'ongoing'">Проводится</button>
-              <button class="chip" :class="{ active: expStatus === 'completed' }" @click="expStatus = 'completed'">Завершена</button>
+              <button class="chip" :class="{ active: expStatus === 'all' }"         @click="expStatus = 'all'">Все</button>
+              <button class="chip" :class="{ active: expStatus === 'in_progress' }" @click="expStatus = 'in_progress'">Проводится</button>
+              <button class="chip" :class="{ active: expStatus === 'completed' }"   @click="expStatus = 'completed'">Завершена</button>
             </div>
           </div>
 
@@ -886,6 +1042,29 @@ function downloadBlob(blob, filename) {
   font-size: 13px; color: #b0b3be; text-align: center;
 }
 
+/* ── Inline spinner ──────────────────────────────────────────── */
+.spinner-inline {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2.5px solid var(--line); border-top-color: var(--brand);
+  animation: stmt-spin .8s linear infinite;
+}
+@keyframes stmt-spin { to { transform: rotate(360deg) } }
+
+.detail-loading {
+  display: flex; align-items: center; gap: 10px;
+  padding: 28px 24px; font: 500 13px/1 'Inter', sans-serif; color: var(--ink-soft);
+}
+
+/* ── Grade note (banner о режиме) ────────────────────────────── */
+.grade-note {
+  display: flex; align-items: center; gap: 8px;
+  margin: 14px 24px 0; padding: 10px 14px; border-radius: 8px;
+  font: 500 12.5px/1.4 'Inter', sans-serif;
+  background: rgba(107,114,128,.08); color: var(--ink-soft);
+}
+.grade-note svg { flex-shrink: 0; }
+.grade-note--active { background: rgba(245,158,11,.1); color: #b45309; }
+
 /* ── Right column ────────────────────────────────────────────── */
 .right-col { display: flex; flex-direction: column; gap: 16px; }
 
@@ -967,7 +1146,7 @@ function downloadBlob(blob, filename) {
   padding: 11px 16px;
   font-size: 13px; color: var(--ink);
   border-bottom: 1px solid var(--line);
-  vertical-align: middle;
+  vertical-align: middle; text-align: left;
 }
 .tbl tbody tr:last-child td { border-bottom: none; }
 .tbl tbody tr { transition: background .12s; }
@@ -989,19 +1168,33 @@ function downloadBlob(blob, filename) {
 }
 .g-btn:hover { border-color: currentColor; transform: translateY(-1px); }
 
-.g2       { --c: #dc2626; }
-.g3       { --c: #d97706; }
-.g4       { --c: #3b82f6; }
-.g5       { --c: #059669; }
-.g-absent { --c: #6b7280; min-width: 44px; }
+.g2  { --c: #dc2626; }
+.g3  { --c: #d97706; }
+.g4  { --c: #3b82f6; }
+.g5  { --c: #059669; }
+.g-na { --c: #6b7280; min-width: 42px; }
 
-.g-btn.active {
-  border-color: var(--c); background: var(--c);
-  color: #fff;
+.g-btn:not(:disabled):hover { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); }
+.g-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+.grade-spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: stmt-spin .7s linear infinite; margin-left: 4px;
 }
-.g-btn:not(.active):hover { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); }
 
-.result-text { font-size: 14px; }
+/* Результат (проставленная оценка / долг) + дата фиксации */
+.result-cell { display: flex; flex-direction: column; gap: 2px; }
+.result-text { font-size: 15px; font-weight: 600; }
+.result-date { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
+
+.empty-cell { text-align: center; color: var(--ink-soft); padding: 28px 16px; }
+
+.grade-error-bar {
+  margin: 0; padding: 12px 24px; border-top: 1px solid var(--line);
+  font: 500 13px/1.4 'Inter', sans-serif; color: #dc2626;
+  background: rgba(220,38,38,.05);
+}
 
 /* ── Table footer ────────────────────────────────────────────── */
 .table-footer {

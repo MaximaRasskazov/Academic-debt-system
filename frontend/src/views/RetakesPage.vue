@@ -1,21 +1,28 @@
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { useAuthStore } from '../stores/auth'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
+import { usersApi } from '../api/users'
+import { debtsApi } from '../api/debts'
+import { changeRequestsApi } from '../api/changeRequests'
+import { directoryApi } from '../api/directory'
 import { fmtDate, fmtTime, partsInTZ, toUtcISO } from '../utils/datetime'
+import VueDatePicker from '@vuepic/vue-datepicker'
+import '@vuepic/vue-datepicker/dist/main.css'
 
-const auth   = useAuthStore()
-const router = useRouter()
+const auth = useAuthStore()
+const route = useRoute()
 const sidebarOpen = ref(false)
 
 // ── Data ──────────────────────────────────────────────────
-const retakes  = ref([])
-const discMap  = ref({})
-const loading  = ref(true)
+const retakes   = ref([])
+const discMap   = ref({})
+const loading   = ref(true)
+const userNames = ref({}) // id → ФИО
 const loadErr  = ref('')
 
 // ── Filters ───────────────────────────────────────────────
@@ -28,7 +35,7 @@ const STATUS_LABELS = {
   completed:   'Завершена',
   cancelled:   'Отменена',
 }
-const KIND_LABELS = { normal: 'Обычная', commission: 'С комиссией' }
+const KIND_LABELS = { regular: 'Обычная', commission: 'С комиссией' }
 
 const CHIPS = [
   { value: 'all',         label: 'Все' },
@@ -79,6 +86,11 @@ onMounted(async () => {
     } else {
       loadErr.value = 'Не удалось загрузить пересдачи'
     }
+    // Открываем модалку если в URL передан retake_id
+    if (route.query.retake_id) {
+      const target = retakes.value.find(r => r.id === route.query.retake_id)
+      if (target) openEdit(target)
+    }
   } finally {
     loading.value = false
   }
@@ -87,23 +99,237 @@ onMounted(async () => {
 // fmtDate / fmtTime импортированы из utils/datetime — форматируют в зоне
 // вуза (Ханты, UTC+5), а не в зоне устройства.
 
-// ── Teacher action ────────────────────────────────────────
-function goTeacherEdit(retake) {
-  router.push({ path: '/teacher-requests', query: { retakeId: retake.id } })
+// ── Teacher: запрос изменения уже назначенной пересдачи ───────
+// По ТЗ: "Преподаватель может подать заявку на изменение времени и
+// места пересдачи... Деканат должен рассмотреть эту заявку и
+// одобрить/не одобрить её. В случае неодобрения необходимо написать
+// причину."
+//
+// Под капотом — POST /api/retake-change-requests с теми полями, что
+// препод хочет изменить. Бэк требует actor=участник этой пересдачи
+// и retake.status ∈ {scheduled, in_progress}. Декан увидит заявку
+// на /requests, таб "Изменения пересдач".
+const reqChangeOpen   = ref(false)
+const reqChangeTarget = ref(null)
+const reqChangeForm   = reactive({
+  scheduledAt: '',      // ISO без часов — отдельные поля даты+времени
+  hour:        '',
+  minute:      '',
+  duration:    '',      // строка чтобы пустое = "не меняем"
+  building:    '',
+  room:        '',
+  notes:       '',
+  reason:      '',
+})
+const reqChangeSaving    = ref(false)
+const reqChangeError     = ref('')
+const reqChangeSuccess   = ref(false)
+const reqChangeTeachers  = ref([])
+const reqChangeStudents  = ref([])
+const reqChangePartsLoading = ref(false)
+
+async function openRequestChange(retake) {
+  reqChangeTarget.value = retake
+  Object.assign(reqChangeForm, {
+    scheduledAt: '', hour: '', minute: '',
+    duration: '', building: '', room: '', notes: '', reason: '',
+  })
+  reqChangeError.value = ''
+  reqChangeSuccess.value = false
+  reqChangeTeachers.value = []
+  reqChangeStudents.value = []
+  reqChangeOpen.value = true
+
+  if (!auth.isDean) return
+
+  reqChangePartsLoading.value = true
+  try {
+    const [partsRes, usersRes] = await Promise.allSettled([
+      retakesApi.getParticipants(retake.id),
+      usersApi.getAll({ limit: 500 }),
+    ])
+
+    const nameMap = {}
+    if (usersRes.status === 'fulfilled') {
+      const list = usersRes.value.data.items ?? usersRes.value.data ?? []
+      list.forEach(u => {
+        nameMap[u.id] = [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ')
+      })
+    }
+
+    if (partsRes.status === 'fulfilled') {
+      const parts = partsRes.value.data.items ?? partsRes.value.data ?? []
+      reqChangeTeachers.value = parts
+        .filter(p => p.kind === 'teacher' || p.kind === 'commission_member')
+        .map(p => nameMap[p.user_id])
+        .filter(Boolean)
+      reqChangeStudents.value = parts
+        .filter(p => p.kind === 'student')
+        .map(p => nameMap[p.user_id])
+        .filter(Boolean)
+    }
+  } catch { /* не критично */ } finally {
+    reqChangePartsLoading.value = false
+  }
+}
+function closeRequestChange() {
+  reqChangeOpen.value = false
+  reqChangeTarget.value = null
+}
+
+async function submitRequestChange() {
+  reqChangeError.value = ''
+
+  // Собираем requested_changes только из непустых полей.
+  const changes = {}
+  const f = reqChangeForm
+
+  const BUILDING_RE_CH = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+  const ROOM_RE_CH     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+
+  // Дата+время: если указана дата ИЛИ часы/минуты — собираем полный ISO.
+  // Если только дата без времени — берём 00:00; если только время — ошибка.
+  if (f.scheduledAt || f.hour || f.minute) {
+    if (!f.scheduledAt) {
+      reqChangeError.value = 'Укажите дату вместе с временем'
+      return
+    }
+    const hh = String(f.hour || '00').padStart(2, '0')
+    const mm = String(f.minute || '00').padStart(2, '0')
+    const [d, mo, y] = f.scheduledAt.split('.')
+    if (!d || !mo || !y) {
+      reqChangeError.value = 'Дата в формате дд.мм.гггг'
+      return
+    }
+    const newDt = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`)
+    if (newDt <= new Date()) {
+      reqChangeError.value = 'Новая дата и время должны быть в будущем'
+      return
+    }
+    changes.scheduled_at = newDt.toISOString()
+  }
+
+  if (f.duration !== '' && f.duration != null) {
+    const d = Number(f.duration)
+    if (!Number.isInteger(d) || d <= 0) {
+      reqChangeError.value = 'Длительность должна быть положительным числом минут'
+      return
+    }
+    changes.duration_minutes = d
+  }
+
+  if (f.building.trim() !== '') {
+    if (!BUILDING_RE_CH.test(f.building.trim())) {
+      reqChangeError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'
+      return
+    }
+    changes.building = f.building.trim()
+  }
+  if (f.room.trim() !== '') {
+    if (!ROOM_RE_CH.test(f.room.trim())) {
+      reqChangeError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'
+      return
+    }
+    changes.room = f.room.trim()
+  }
+  if (f.notes.trim()    !== '') changes.notes    = f.notes.trim()
+
+  if (Object.keys(changes).length === 0) {
+    reqChangeError.value = 'Укажите хотя бы одно изменение'
+    return
+  }
+
+  reqChangeSaving.value = true
+  try {
+    await changeRequestsApi.submit({
+      retake_id: reqChangeTarget.value.id,
+      requested_changes: changes,
+      reason: f.reason.trim() || undefined,
+    })
+    reqChangeSuccess.value = true
+    setTimeout(() => closeRequestChange(), 1400)
+  } catch (e) {
+    reqChangeError.value = e.response?.data?.message
+      || e.response?.data?.error
+      || 'Не удалось отправить заявку'
+  } finally {
+    reqChangeSaving.value = false
+  }
 }
 
 // ── Dean edit modal ───────────────────────────────────────
-const editOpen   = ref(false)
-const editTarget = ref(null)
-const editForm   = reactive({ building: '', room: '', hour: '09', minute: '00', duration: 90 })
-const editSaving = ref(false)
-const editError  = ref('')
+const editOpen        = ref(false)
+const editTarget      = ref(null)
+const editForm        = reactive({ building: '', room: '', hour: '09', minute: '00', duration: 90 })
+const editSaving      = ref(false)
+const editError       = ref('')
+
+// Participants state
+const editParticipants   = ref({ teachers: [], students: [] })
+const editLoadingPart    = ref(false)
+const editAllStudents    = ref([])
+const editAllTeachers    = ref([])
+const editStudentSearch  = ref('')
+const editTeacherSearch  = ref('')
+const editStudentOpen    = ref(false)
+const editTeacherOpen    = ref(false)
+let editStudentBlur = null, editTeacherBlur = null
+
+const editFilteredStudents = computed(() => {
+  const q = editStudentSearch.value.toLowerCase()
+  const enrolled = new Set(editParticipants.value.students.map(s => s.user_id))
+  return editAllStudents.value
+    .filter(s => !enrolled.has(s.id) && (s.name.toLowerCase().includes(q) || (s.group || '').toLowerCase().includes(q)))
+    .slice(0, 8)
+})
+const editFilteredTeachers = computed(() => {
+  const q = editTeacherSearch.value.toLowerCase()
+  const enrolled = new Set(editParticipants.value.teachers.map(t => t.user_id))
+  return editAllTeachers.value
+    .filter(t => !enrolled.has(t.id) && t.name.toLowerCase().includes(q))
+    .slice(0, 8)
+})
+
+// Status change — select-дропдаун
+const STATUS_NEXT_LABEL = {
+  in_progress: 'Начать пересдачу',
+  completed:   'Завершить',
+  cancelled:   'Отменить',
+}
+const STATUS_TRANSITIONS = {
+  scheduled:   ['in_progress', 'cancelled'],
+  in_progress: ['completed',   'cancelled'],
+}
+const availableNextStatuses = computed(() => STATUS_TRANSITIONS[editTarget.value?.status] ?? [])
+const editStatusSelect = ref('')   // текущее значение select
+const statusSaving = ref(false)
+
+async function changeStatus(newStatus) {
+  if (!editTarget.value || newStatus === editTarget.value.status) return
+  statusSaving.value = true
+  editError.value = ''
+  try {
+    if (newStatus === 'in_progress') await retakesApi.start(editTarget.value.id)
+    else if (newStatus === 'completed') await retakesApi.complete(editTarget.value.id)
+    else if (newStatus === 'cancelled') await retakesApi.cancel(editTarget.value.id)
+    const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
+    if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: newStatus }
+    editTarget.value = { ...editTarget.value, status: newStatus }
+    editStatusSelect.value = newStatus
+  } catch {
+    editError.value = 'Ошибка при изменении статуса'
+    editStatusSelect.value = editTarget.value.status  // откат
+  } finally {
+    statusSaving.value = false
+  }
+}
 
 const STEP = 5, DMIN = 15, DMAX = 480
 function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v || mn)) }
 
-function openEdit(r) {
+async function openEdit(r) {
   editTarget.value = r
+  editStatusSelect.value = r.status
   editForm.building = r.building || ''
   editForm.room     = r.room     || ''
   editForm.duration = r.duration_minutes || 90
@@ -114,13 +340,109 @@ function openEdit(r) {
     editForm.minute = p.minute
   }
   editError.value = ''
-  editOpen.value  = true
+  editParticipants.value = { teachers: [], students: [] }
+  editAllStudents.value = []
+  editAllTeachers.value = []
+  editOpen.value = true
+
+  editLoadingPart.value = true
+  try {
+    const [partRes, studRes, teachRes, debtsRes] = await Promise.allSettled([
+      retakesApi.getParticipants(r.id),
+      usersApi.getAll({ role: 'student', limit: 500 }),
+      usersApi.getAll({ role: 'teacher', limit: 200 }),
+      debtsApi.getAll({ limit: 500 }),
+    ])
+
+    // Строим карту user_id → имя из загруженных пользователей
+    const userNameMap = {}
+    if (studRes.status === 'fulfilled')
+      for (const u of studRes.value.data.items ?? [])
+        userNameMap[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email, group: u.group_name ?? '' }
+    if (teachRes.status === 'fulfilled')
+      for (const u of teachRes.value.data.items ?? [])
+        userNameMap[u.id] = { name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email, group: '' }
+
+    if (partRes.status === 'fulfilled') {
+      const parts = partRes.value.data ?? []
+      // Обогащаем участников именами из userNameMap
+      const enrich = (p) => ({ ...p, name: userNameMap[p.user_id]?.name || '—', group: userNameMap[p.user_id]?.group || '' })
+      editParticipants.value = {
+        teachers: parts.filter(p => p.kind === 'teacher' || p.kind === 'commission_member').map(enrich),
+        students: parts.filter(p => p.kind === 'student').map(enrich),
+      }
+    }
+
+    const debtMap = {}
+    if (debtsRes.status === 'fulfilled') {
+      for (const d of debtsRes.value.data.items ?? []) {
+        if (d.discipline_id === r.discipline_id && d.status === 'open') debtMap[d.student_id] = d.id
+      }
+    }
+    if (studRes.status === 'fulfilled') {
+      const enrolledIds = new Set(editParticipants.value.students.map(p => p.user_id))
+      editAllStudents.value = (studRes.value.data.items ?? [])
+        .filter(u => debtMap[u.id] && !enrolledIds.has(u.id))
+        .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email, group: u.group_name ?? '', debtId: debtMap[u.id] }))
+    }
+    if (teachRes.status === 'fulfilled') {
+      const enrolledIds = new Set(editParticipants.value.teachers.map(p => p.user_id))
+      editAllTeachers.value = (teachRes.value.data.items ?? [])
+        .filter(u => !enrolledIds.has(u.id))
+        .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email }))
+    }
+  } finally {
+    editLoadingPart.value = false
+  }
 }
+
 function closeEdit() { editOpen.value = false; editTarget.value = null }
+
+function handleModalOutsideClick(e) {
+  if (!e.target.closest('.picker-wrap-modal')) {
+    editTeacherOpen.value = false
+    editStudentOpen.value = false
+  }
+}
+onMounted(() => document.addEventListener('mousedown', handleModalOutsideClick))
+onUnmounted(() => document.removeEventListener('mousedown', handleModalOutsideClick))
 
 function onHourBlur()   { editForm.hour   = String(clamp(parseInt(editForm.hour,   10), 0, 23)).padStart(2, '0') }
 function onMinuteBlur() { editForm.minute = String(clamp(parseInt(editForm.minute, 10), 0, 59)).padStart(2, '0') }
 function onTimeKey(e)   { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
+
+async function removeParticipant(type, userId) {
+  try {
+    if (type === 'teacher') {
+      await retakesApi.removeTeacher(editTarget.value.id, userId)
+      editParticipants.value.teachers = editParticipants.value.teachers.filter(p => p.user_id !== userId)
+    } else {
+      await retakesApi.removeStudent(editTarget.value.id, userId)
+      editParticipants.value.students = editParticipants.value.students.filter(p => p.user_id !== userId)
+    }
+  } catch { editError.value = 'Ошибка при удалении участника' }
+}
+
+async function addParticipant(type, user) {
+  try {
+    if (type === 'teacher') {
+      await retakesApi.addTeacher(editTarget.value.id, user.id)
+      editParticipants.value.teachers.push({ user_id: user.id, first_name: '', last_name: user.name, kind: 'teacher' })
+      editTeacherSearch.value = ''
+      editTeacherOpen.value = false
+    } else {
+      await retakesApi.addStudent(editTarget.value.id, { student_id: user.id, debt_id: user.debtId })
+      editParticipants.value.students.push({ user_id: user.id, first_name: '', last_name: user.name, group: user.group, kind: 'student' })
+      editStudentSearch.value = ''
+      editStudentOpen.value = false
+    }
+  } catch { editError.value = 'Ошибка при добавлении участника' }
+}
+
+function participantName(p) {
+  if (p.name) return p.name
+  return [p.last_name, p.first_name, p.middle_name].filter(Boolean).join(' ') || '—'
+}
 
 async function saveEdit() {
   if (!editTarget.value) return
@@ -257,16 +579,18 @@ async function saveEdit() {
             <div class="card-foot">
               <span class="kind-tag">{{ KIND_LABELS[r.kind] || r.kind }}</span>
               <div class="card-actions">
-                <!-- Teacher: request edit -->
-                <button v-if="auth.isTeacher" class="btn-action" @click="goTeacherEdit(r)">
+                <!-- Teacher: запросить изменения — только для запланированных -->
+                <button v-if="auth.isTeacher && r.status === 'scheduled'"
+                        class="btn-action" @click="openRequestChange(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                   </svg>
-                  Изменить
+                  Запросить изменения
                 </button>
-                <!-- Dean: direct edit -->
-                <button v-if="auth.isDean" class="btn-action" @click="openEdit(r)">
+                <!-- Dean: edit — только для запланированных и идущих -->
+                <button v-if="auth.isDean && (r.status === 'scheduled' || r.status === 'in_progress')"
+                        class="btn-action" @click="openEdit(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -288,8 +612,7 @@ async function saveEdit() {
         <div v-if="editOpen" class="modal-overlay" @click.self="closeEdit">
           <div class="modal">
 
-            <div class="modal-head">
-              <span class="modal-title">Редактировать пересдачу</span>
+            <div class="modal-head modal-head--close-only">
               <button class="modal-close" @click="closeEdit" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
                   <path d="M18 6L6 18M6 6l12 12"/>
@@ -300,6 +623,14 @@ async function saveEdit() {
             <div class="modal-body">
               <div class="modal-disc">{{ discMap[editTarget?.discipline_id] || 'Дисциплина' }}</div>
 
+              <!-- Статус -->
+              <div class="modal-status-row">
+                <span class="status-badge" :class="'status-' + editTarget?.status">
+                  {{ STATUS_LABELS[editTarget?.status] }}
+                </span>
+              </div>
+
+              <!-- Время + Длительность -->
               <div class="form-row">
                 <div class="field">
                   <label>Время</label>
@@ -321,6 +652,7 @@ async function saveEdit() {
                 </div>
               </div>
 
+              <!-- Корпус + Аудитория -->
               <div class="form-row">
                 <div class="field">
                   <label>Корпус</label>
@@ -332,16 +664,194 @@ async function saveEdit() {
                 </div>
               </div>
 
+              <!-- Преподаватели -->
+              <div v-if="auth.isDean" class="modal-section">
+                <div class="section-label">Преподаватели</div>
+                <div v-if="editLoadingPart" class="part-loading">Загрузка…</div>
+                <template v-else>
+                  <div class="part-tags" v-if="editParticipants.teachers.length">
+                    <span v-for="t in editParticipants.teachers" :key="t.user_id" class="part-tag">
+                      {{ participantName(t) }}
+                      <button type="button" class="tag-remove" @click="removeParticipant('teacher', t.user_id)">×</button>
+                    </span>
+                  </div>
+                  <div class="picker-wrap-modal">
+                    <input
+                      class="input" v-model="editTeacherSearch" placeholder="Добавить преподавателя…"
+                      @focus="editTeacherOpen = true"
+                      @blur="editTeacherBlur = setTimeout(() => editTeacherOpen = false, 200)"
+                      @keydown.enter.prevent="editFilteredTeachers.length && addParticipant('teacher', editFilteredTeachers[0])"
+                    />
+                    <div v-show="editTeacherOpen && editFilteredTeachers.length" class="picker-dropdown-modal">
+                      <button v-for="t in editFilteredTeachers" :key="t.id"
+                        type="button" class="picker-opt"
+                        @mousedown.prevent="addParticipant('teacher', t)">{{ t.name }}</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Студенты -->
+              <div v-if="auth.isDean" class="modal-section">
+                <div class="section-label">Студенты</div>
+                <div v-if="editLoadingPart" class="part-loading">Загрузка…</div>
+                <template v-else>
+                  <div class="part-tags" v-if="editParticipants.students.length">
+                    <span v-for="s in editParticipants.students" :key="s.user_id" class="part-tag part-tag--student">
+                      {{ participantName(s) }}
+                      <button type="button" class="tag-remove" @click="removeParticipant('student', s.user_id)">×</button>
+                    </span>
+                  </div>
+                  <div class="picker-wrap-modal">
+                    <input
+                      class="input" v-model="editStudentSearch" placeholder="Добавить студента…"
+                      @focus="editStudentOpen = true"
+                      @blur="editStudentBlur = setTimeout(() => editStudentOpen = false, 200)"
+                      @keydown.enter.prevent="editFilteredStudents.length && addParticipant('student', editFilteredStudents[0])"
+                    />
+                    <div v-show="editStudentOpen && editFilteredStudents.length" class="picker-dropdown-modal">
+                      <button v-for="s in editFilteredStudents" :key="s.id"
+                        type="button" class="picker-opt"
+                        @mousedown.prevent="addParticipant('student', s)">
+                        <span>{{ s.name }}</span>
+                        <span v-if="s.group" class="opt-group">{{ s.group }}</span>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
               <p v-if="editError" class="form-error">{{ editError }}</p>
             </div>
 
+
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- ── Request-change modal (teacher) ── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="reqChangeOpen" class="modal-overlay" @click.self="closeRequestChange">
+          <div class="modal modal--wide">
+
+            <div class="modal-head">
+              <span class="modal-title">Запросить изменения пересдачи</span>
+              <button class="modal-close" @click="closeRequestChange" aria-label="Закрыть">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            <div class="modal-body modal-body--form">
+
+              <!-- Текущие значения -->
+              <div v-if="reqChangeTarget" class="current-info">
+                <div class="ci-row">
+                  <span class="ci-key">Дата и время</span>
+                  <span class="ci-val">{{ fmtDate(reqChangeTarget.scheduled_at) }} в {{ fmtTime(reqChangeTarget.scheduled_at) }}</span>
+                </div>
+                <div class="ci-row">
+                  <span class="ci-key">Место</span>
+                  <span class="ci-val">корп. {{ reqChangeTarget.building || '—' }}, ауд. {{ reqChangeTarget.room || '—' }}</span>
+                </div>
+                <div class="ci-row">
+                  <span class="ci-key">Длительность</span>
+                  <span class="ci-val">{{ reqChangeTarget.duration_minutes }} мин</span>
+                </div>
+              </div>
+
+              <!-- Участники (только просмотр) — доступно только декану -->
+              <div v-if="auth.isDean" class="req-participants">
+                <div class="req-parts-col">
+                  <span class="req-parts-label">Преподаватели</span>
+                  <div v-if="reqChangePartsLoading" class="req-parts-loading">
+                    <div class="spinner-sm" />
+                  </div>
+                  <div v-else class="req-parts-tags">
+                    <span v-for="t in reqChangeTeachers" :key="t" class="rptag">{{ t }}</span>
+                    <span v-if="!reqChangeTeachers.length" class="req-parts-empty">—</span>
+                  </div>
+                </div>
+                <div class="req-parts-col">
+                  <span class="req-parts-label">Студенты</span>
+                  <div v-if="reqChangePartsLoading" class="req-parts-loading">
+                    <div class="spinner-sm" />
+                  </div>
+                  <div v-else class="req-parts-tags">
+                    <span v-for="s in reqChangeStudents" :key="s" class="rptag rptag--student">{{ s }}</span>
+                    <span v-if="!reqChangeStudents.length" class="req-parts-empty">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <form class="req-form" @submit.prevent="submitRequestChange" novalidate>
+                <div class="form-row">
+                  <div class="field" style="flex:2">
+                    <label>Новая дата</label>
+                    <VueDatePicker v-model="reqChangeForm.scheduledAt" locale="ru"
+                                   format="dd.MM.yyyy" model-type="format"
+                                   :enable-time-picker="false" auto-apply />
+                  </div>
+                  <div class="field">
+                    <label>Новое время</label>
+                    <div class="time-picker">
+                      <input class="time-input" type="text" inputmode="numeric"
+                             v-model="reqChangeForm.hour" maxlength="2"
+                             @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
+                      <span class="time-colon">:</span>
+                      <input class="time-input" type="text" inputmode="numeric"
+                             v-model="reqChangeForm.minute" maxlength="2"
+                             @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="field">
+                    <label>Длительность (мин)</label>
+                    <div class="stepper">
+                      <button type="button" class="stepper-btn"
+                              @click="reqChangeForm.duration = Math.max(15, (Number(reqChangeForm.duration) || 90) - 5)"
+                              :disabled="(Number(reqChangeForm.duration) || 90) <= 15">−</button>
+                      <input class="stepper-input" type="number"
+                             :value="reqChangeForm.duration || ''"
+                             @input="reqChangeForm.duration = $event.target.value"
+                             min="15" max="480" />
+                      <button type="button" class="stepper-btn"
+                              @click="reqChangeForm.duration = Math.min(480, (Number(reqChangeForm.duration) || 90) + 5)"
+                              :disabled="(Number(reqChangeForm.duration) || 90) >= 480">+</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label>Корпус</label>
+                    <input class="input" v-model="reqChangeForm.building" />
+                  </div>
+                  <div class="field">
+                    <label>Аудитория</label>
+                    <input class="input" v-model="reqChangeForm.room" />
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="field field--full">
+                    <label>Причина изменения</label>
+                    <textarea class="input textarea" rows="3" v-model="reqChangeForm.reason" />
+                  </div>
+                </div>
+
+                <p v-if="reqChangeError" class="form-msg form-error">{{ reqChangeError }}</p>
+                <p v-if="reqChangeSuccess" class="form-msg form-success">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                  Заявка отправлена декану
+                </p>
+              </form>
+            </div>
+
             <div class="modal-foot">
-              <button class="btn-cancel" @click="closeEdit">Отмена</button>
-              <button class="btn-save" :disabled="editSaving" @click="saveEdit">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <path d="M20 6L9 17l-5-5"/>
-                </svg>
-                {{ editSaving ? 'Сохранение…' : 'Сохранить' }}
+              <button class="btn-cancel" type="button" @click="closeRequestChange">Отмена</button>
+              <button class="btn-save" type="button" :disabled="reqChangeSaving" @click="submitRequestChange">
+                {{ reqChangeSaving ? 'Отправка…' : 'Отправить заявку' }}
               </button>
             </div>
 
@@ -529,21 +1039,37 @@ async function saveEdit() {
 .btn-action:hover { transform: scale(1.04); box-shadow: 0 4px 10px -4px rgba(91,59,217,.65); }
 .btn-action svg { width: 13px; height: 13px; }
 
-/* ── Modal ── */
-.modal-overlay {
+/* ── Modal (global т.к. Teleport выносит за пределы scoped-дерева) ── */
+:global(.modal-overlay) {
   position: fixed; inset: 0; z-index: 400;
   background: rgba(10,12,30,.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
-.modal {
-  background: var(--card); border-radius: 16px; width: 100%; max-width: 480px;
+:global(.modal) {
+  --card:     #ffffff;
+  --bg:       #f3f4f7;
+  --ink:      #1a1d24;
+  --ink-soft: #6b7280;
+  --line:     #d7d9e0;
+  --brand:    #3b3fe0;
+  --radius:   10px;
+  --ease:     cubic-bezier(.2,.7,.2,1);
+  background: #ffffff; border-radius: 16px; width: 100%; max-width: 520px;
   box-shadow: 0 24px 64px -12px rgba(10,12,30,.3);
   display: flex; flex-direction: column; max-height: 90vh; overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+:global(.modal--wide) { max-width: 720px;
 }
 
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.modal-head--close-only {
+  justify-content: flex-end;
+  padding: 12px 14px;
+  border-bottom: none;
 }
 .modal-title {
   font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
@@ -558,17 +1084,27 @@ async function saveEdit() {
 .modal-close:hover { background: var(--bg); color: var(--ink); }
 .modal-close svg { width: 16px; height: 16px; }
 
-.modal-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.modal-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
 .modal-body::-webkit-scrollbar { width: 4px; }
 .modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
 .modal-disc {
-  font: 600 14px/1.4 'Inter', sans-serif; color: var(--ink);
-  background: var(--bg); border-radius: 8px; padding: 10px 14px;
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 17px; font-weight: 700; color: #3C38B6;
+  padding: 0 0 4px;
 }
 
+.modal-status-row { display: flex; align-items: center; }
+.status-badge {
+  display: inline-flex; align-items: center; padding: 4px 12px;
+  border-radius: 20px; font: 600 12px/1.4 'Inter', sans-serif;
+}
+.status-scheduled  { background: rgba(59,63,224,.1);  color: #3b3fe0; }
+.status-in_progress { background: rgba(245,158,11,.12); color: #b45309; }
+.status-completed  { background: rgba(16,185,129,.12); color: #065f46; }
+.status-cancelled  { background: rgba(220,38,38,.1);   color: #b91c1c; }
 .form-row { display: flex; gap: 16px; }
-.field    { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.field    { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .field label { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
 
 .input {
@@ -616,6 +1152,102 @@ async function saveEdit() {
 .stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .form-error { font: 13px/1.4 'Inter', sans-serif; color: #dc2626; margin: 0; }
+.form-msg { font: 13px/1.4 'Inter', sans-serif; margin: 0; display: flex; align-items: center; gap: 6px; }
+.form-success { color: #059669; }
+.form-success svg { width: 15px; height: 15px; }
+
+.textarea { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+.field--full { width: 100%; flex: 1 1 100%; }
+
+/* Request-change modal helpers */
+.req-form { display: flex; flex-direction: column; gap: 14px; }
+
+.req-participants {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  background: var(--bg); border-radius: var(--radius); padding: 14px 16px;
+}
+.req-parts-col { display: flex; flex-direction: column; gap: 8px; }
+.req-parts-label {
+  font: 600 11px/1 'Inter', sans-serif;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em;
+}
+.req-parts-loading { display: flex; align-items: center; height: 24px; }
+.req-parts-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.req-parts-empty { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.rptag {
+  display: inline-flex; align-items: center; padding: 4px 10px;
+  background: rgba(59,63,224,.08); color: var(--brand-ink);
+  border-radius: 20px; font: 500 12px/1.4 'Inter', sans-serif;
+}
+.rptag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.spinner-sm {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite;
+}
+
+.current-info {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 16px;
+}
+.ci-row {
+  display: flex; gap: 14px; align-items: baseline;
+  font: 13px/1.4 'Inter', sans-serif;
+}
+.ci-key { color: var(--ink-soft); min-width: 130px; font-weight: 500; }
+.ci-val { color: var(--ink); font-weight: 600; }
+
+/* ── Modal sections (статус + участники) ── */
+.modal-section {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; background: var(--bg); border-radius: var(--radius);
+}
+.section-label { font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
+.status-current { font: 13px/1.4 'Inter', sans-serif; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.status-select-wrap { display: flex; align-items: center; gap: 10px; }
+.status-select {
+  appearance: auto;
+  cursor: pointer;
+}
+.status-select:disabled { opacity: .6; cursor: not-allowed; }
+.status-saving-hint { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
+
+.part-loading { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.part-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.part-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px 4px 12px; border-radius: 20px;
+  font: 500 12px/1 'Inter', sans-serif;
+  background: rgba(59,63,224,.1); color: #2a2e9e;
+}
+.part-tag--student { background: rgba(16,185,129,.1); color: #065f46; }
+.tag-remove {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 14px; line-height: 1; padding: 0 2px; opacity: .6; transition: opacity .15s;
+}
+.tag-remove:hover { opacity: 1; }
+
+.picker-wrap-modal { position: relative; }
+.picker-dropdown-modal {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 200;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
+  max-height: 180px; overflow-y: auto;
+}
+.picker-dropdown-modal::-webkit-scrollbar { width: 4px; }
+.picker-dropdown-modal::-webkit-scrollbar-track { background: transparent; }
+.picker-dropdown-modal::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.picker-opt {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; gap: 8px;
+}
+.picker-opt:hover { background: rgba(59,63,224,.07); }
+.opt-group { font-size: 11px; color: var(--ink-soft); background: rgba(59,63,224,.08); border-radius: 10px; padding: 2px 8px; }
 
 .modal-foot {
   display: flex; justify-content: flex-end; gap: 10px;

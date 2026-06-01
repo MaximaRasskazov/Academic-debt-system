@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -26,32 +25,50 @@ func (s *Service) ListForStudent(ctx context.Context, studentID uuid.UUID) ([]qu
 	return rows, nil
 }
 
-// ListForTeacher — долги по всем дисциплинам, которые ведёт teacherID.
-// Если у преподавателя нет ни одной дисциплины — возвращаем пустой
-// список без обращения к БД. Это и оптимизация, и защита от
-// "у преподавателя 0 дисциплин — SELECT WHERE id = ANY(empty) вернёт
-// синтаксическую ошибку".
+// ListForTeacher — должники по "своим предметам" преподавателя
+// (ТЗ: "Преподаватель может посмотреть список должников по своим
+// предметам").
+//
+// "Свой предмет" определяем по debts.issued_by: дисциплина считается
+// предметом препода, если он по ней ставил хотя бы один долг. Эмулятор
+// деканата не отдаёт явную связь teacher↔discipline (teacher_disciplines
+// остаётся пустой), но в каждом долге есть issued_by — это и есть
+// "преподаватель, который долг поставил" из ТЗ. Поэтому набор дисциплин
+// препода выводим из его долгов, а затем показываем ВСЕХ должников этих
+// дисциплин (предмет общий — не только те долги, что препод выставил сам).
+//
+// Если препод не ставил ни одного долга — у него нет "своих предметов",
+// возвращаем пустой список (и без ANY(empty), который дал бы ошибку).
 func (s *Service) ListForTeacher(ctx context.Context, teacherID uuid.UUID, limit, offset int32) ([]queries.Debt, error) {
-	disciplines, err := s.disciplines.ListDisciplinesForTeacher(ctx, teacherID)
+	disciplineIDs, err := s.store.ListDisciplineIDsByIssuer(ctx, pgutil.PgUUID(teacherID))
 	if err != nil {
-		return nil, fmt.Errorf("list teacher disciplines: %w", err)
+		return nil, fmt.Errorf("list teacher discipline ids: %w", err)
 	}
-	if len(disciplines) == 0 {
+	if len(disciplineIDs) == 0 {
 		return nil, nil
 	}
 
-	ids := make([]pgtype.UUID, 0, len(disciplines))
-	for _, d := range disciplines {
-		ids = append(ids, d.ID)
-	}
-
 	rows, err := s.store.ListDebtsByDisciplines(ctx, queries.ListDebtsByDisciplinesParams{
-		DisciplineIds: ids,
+		DisciplineIds: disciplineIDs,
 		Lim:           normalizeLimit(limit),
 		Off:           normalizeOffset(offset),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list debts by disciplines: %w", err)
+	}
+	return rows, nil
+}
+
+// ListDebtorsByDiscipline — список открытых должников по дисциплине
+// с ФИО и группой. Используется фронтом формы заявки на пересдачу:
+// преподаватель выбирает кого записать. Без фильтра по
+// teacher_disciplines — пока эмулятор эти связи не отдаёт, любой
+// preподаватель видит должников по любой дисциплине; декан тоже
+// использует это для своего UI создания пересдачи.
+func (s *Service) ListDebtorsByDiscipline(ctx context.Context, disciplineID uuid.UUID) ([]queries.ListDebtorsByDisciplineRow, error) {
+	rows, err := s.store.ListDebtorsByDiscipline(ctx, pgutil.PgUUID(disciplineID))
+	if err != nil {
+		return nil, fmt.Errorf("list debtors by discipline: %w", err)
 	}
 	return rows, nil
 }

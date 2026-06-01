@@ -17,7 +17,10 @@
       "PowerShell(docker exec academic-debt-system-frontend-1 nginx -s reload)",
       "PowerShell(Start-Process \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
       "PowerShell(docker exec academic-debt-system-postgres-1 psql -U academic -d academic_debts -c \"SELECT first_name, last_name, email FROM users LIMIT 10;\")",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")",
+      "Bash(curl -s --max-time 15 -H \"X-API-Key: emu_live_3a4383068b194f33916a7536aa768e04e8370d72\" \"https://hant-decanat.freydin.space/docs\")",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

@@ -13,6 +13,9 @@ export const debtsApi = {
   getByDiscipline: (params) =>
     http.get('/api/debts/by-discipline', { params }),
 
+  listByDiscipline: (params) =>
+    http.get('/api/debts/by-discipline', { params }),
+
   // Сводка по дисциплинам
   getSummary: () =>
     http.get('/api/debts/summary'),

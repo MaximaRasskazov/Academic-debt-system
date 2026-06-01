@@ -11,6 +11,8 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
+import { directoryApi } from '../api/directory'
+import { exportExcel, exportWord } from '../utils/exportTable'
 import { toUtcISO, partsInTZ } from '../utils/datetime'
 
 const sidebarOpen = ref(false)
@@ -23,6 +25,91 @@ const stats = ref([
   { label: 'Проводится сейчас',    value: '—', accent: '#f59e0b' },
   { label: 'Завершено в месяце',   value: '—', accent: '#10b981' },
 ])
+
+// ── Debt summary table (панель декана) ────────────────────────
+const debtTableOpen    = ref(false)
+const debtTableLoading = ref(false)
+const debtTableRows    = ref([])   // [{discipline, disciplineCode, student, group, teacher, status}]
+const debtTableSearch  = ref('')
+
+const filteredDebtRows = computed(() => {
+  const q = debtTableSearch.value.toLowerCase()
+  if (!q) return debtTableRows.value
+  return debtTableRows.value.filter(r =>
+    r.discipline.toLowerCase().includes(q) ||
+    r.student.toLowerCase().includes(q) ||
+    r.teacher.toLowerCase().includes(q) ||
+    (r.group || '').toLowerCase().includes(q)
+  )
+})
+
+async function toggleDebtTable() {
+  debtTableOpen.value = !debtTableOpen.value
+  if (debtTableOpen.value && debtTableRows.value.length === 0) await loadDebtTable()
+}
+
+async function loadDebtTable() {
+  debtTableLoading.value = true
+  try {
+    const [debtsRes, usersRes, discsRes] = await Promise.allSettled([
+      debtsApi.getAll({ limit: 500 }),
+      usersApi.getAll({ limit: 1000 }),
+      disciplinesApi.getAll({ limit: 500 }),
+    ])
+
+    const userMap = {}
+    if (usersRes.status === 'fulfilled') {
+      for (const u of usersRes.value.data.items ?? []) {
+        userMap[u.id] = {
+          name: [u.last_name, u.first_name, u.middle_name].filter(Boolean).join(' ') || u.email,
+          group: u.group_name || '',
+        }
+      }
+    }
+
+    const discMapLocal = {}
+    if (discsRes.status === 'fulfilled') {
+      for (const d of discsRes.value.data.items ?? []) {
+        discMapLocal[d.id] = { name: d.name, code: d.code }
+      }
+    }
+
+    const rows = []
+    if (debtsRes.status === 'fulfilled') {
+      for (const d of debtsRes.value.data.items ?? []) {
+        if (d.deleted_at) continue
+        const disc    = discMapLocal[d.discipline_id] ?? { name: d.discipline_id, code: '' }
+        const student = userMap[d.student_id] ?? { name: d.student_id, group: '' }
+        const teacher = userMap[d.issued_by]  ?? { name: d.issued_by, group: '' }
+        rows.push({
+          discipline:     disc.name,
+          disciplineCode: disc.code,
+          student:        student.name,
+          group:          student.group,
+          teacher:        teacher.name,
+          status:         d.status,
+        })
+      }
+    }
+    rows.sort((a, b) => a.discipline.localeCompare(b.discipline, 'ru') || a.student.localeCompare(b.student, 'ru'))
+    debtTableRows.value = rows
+  } finally {
+    debtTableLoading.value = false
+  }
+}
+
+const STATUS_LABEL = { open: 'Открыт', graded: 'Закрыт', cancelled: 'Отменён' }
+
+function doExportExcel() {
+  const headers = ['Дисциплина', 'Код', 'Студент', 'Группа', 'Преподаватель', 'Статус']
+  const rows = filteredDebtRows.value.map(r => [r.discipline, r.disciplineCode, r.student, r.group, r.teacher, STATUS_LABEL[r.status] ?? r.status])
+  exportExcel('Сводная таблица долгов', headers, rows, 'dolgi_dean')
+}
+function doExportWord() {
+  const headers = ['Дисциплина', 'Код', 'Студент', 'Группа', 'Преподаватель', 'Статус']
+  const rows = filteredDebtRows.value.map(r => [r.discipline, r.disciplineCode, r.student, r.group, r.teacher, STATUS_LABEL[r.status] ?? r.status])
+  exportWord('Сводная таблица долгов', headers, rows, 'dolgi_dean')
+}
 
 // ── Disciplines ───────────────────────────────────────────────
 const disciplines = ref([])
@@ -79,10 +166,22 @@ const filteredTeachers = computed(() => {
 
 let teacherBlurTimer = null
 let studentBlurTimer = null
-function onTeacherBlur() { teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200) }
-function onStudentBlur() { studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200) }
-function onTeacherFocus() { clearTimeout(teacherBlurTimer); teacherOpen.value = true }
-function onStudentFocus() { clearTimeout(studentBlurTimer); studentOpen.value = true }
+function onTeacherFocus() {
+  clearTimeout(teacherBlurTimer)
+  studentOpen.value = false  // закрываем студентов
+  teacherOpen.value = true
+}
+function onTeacherBlur() {
+  teacherBlurTimer = setTimeout(() => { teacherOpen.value = false }, 200)
+}
+function onStudentFocus() {
+  clearTimeout(studentBlurTimer)
+  teacherOpen.value = false  // закрываем преподавателей
+  studentOpen.value = true
+}
+function onStudentBlur() {
+  studentBlurTimer = setTimeout(() => { studentOpen.value = false }, 200)
+}
 
 watch(disciplineId, async (id) => {
   availableStudents.value = []
@@ -156,6 +255,18 @@ function addTeacher(t) {
 
 function removeTeacher(id) { selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id) }
 
+function onTeacherEnter() {
+  if (filteredTeachers.value.length > 0) addTeacher(filteredTeachers.value[0])
+}
+function onStudentEnter() {
+  if (filteredStudents.value.length > 0) addStudent(filteredStudents.value[0])
+}
+
+// ── Group dropdown ────────────────────────────────────────────
+const groupDropdownOpen = ref(false)
+function selectGroup(g) { groupSelect.value = g; groupDropdownOpen.value = false }
+function handleGroupOutside(e) { if (!e.target.closest('.group-custom-select')) groupDropdownOpen.value = false }
+
 // ── Type ──────────────────────────────────────────────────────
 const typeDropdownOpen = ref(false)
 const typeOptions = [
@@ -214,12 +325,27 @@ const submitting  = ref(false)
 const submitError   = ref('')
 const submitSuccess = ref(false)
 
+const BUILDING_RE = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+const ROOM_RE     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
+
 async function submitRetake() {
   submitError.value = ''
   if (!disciplineId.value)   { submitError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)      { submitError.value = 'Укажите дату'; return }
-  if (!building.value.trim()) { submitError.value = 'Укажите корпус'; return }
-  if (!room.value.trim())     { submitError.value = 'Укажите аудиторию'; return }
+
+  // Время вводится в зоне вуза (Ханты, UTC+5) → toUtcISO собирает
+  // корректный UTC ISO, а не интерпретирует как зону устройства.
+  const [day, month, year] = retakeDate.value.split('.')
+  const scheduledAtIso = toUtcISO(`${year}-${month}-${day}`, timeString.value)
+  if (new Date(scheduledAtIso) <= new Date()) { submitError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+
+  const bld = building.value.trim()
+  const rm  = room.value.trim()
+  if (!bld) { submitError.value = 'Укажите корпус'; return }
+  if (!BUILDING_RE.test(bld)) { submitError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'; return }
+  if (!rm) { submitError.value = 'Укажите аудиторию'; return }
+  if (!ROOM_RE.test(rm)) { submitError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'; return }
+
   if (!teacherCountOk.value)  {
     submitError.value = isCommission.value
       ? 'Для комиссии нужно минимум 3 преподавателя'
@@ -227,19 +353,14 @@ async function submitRetake() {
     return
   }
 
-  const [day, month, year] = retakeDate.value.split('.')
-  // Введённые дата и время — это время вуза (Ханты, UTC+5). Конвертируем
-  // в UTC явно, не полагаясь на зону устройства (иначе время «уезжало»).
-  const scheduledAt = toUtcISO(`${year}-${month}-${day}`, timeString.value)
-
   submitting.value = true
   try {
     const { data: retake } = await retakesApi.create({
       discipline_id: disciplineId.value,
       kind: isCommission.value ? 'commission' : 'regular',
-      building: building.value,
-      room: room.value,
-      scheduled_at: scheduledAt,
+      building: bld,
+      room: rm,
+      scheduled_at: scheduledAtIso,
       duration_minutes: duration.value,
     })
 
@@ -257,6 +378,7 @@ async function submitRetake() {
     selectedStudents.value = []; selectedTeachers.value = []
     submitSuccess.value = true
     setTimeout(() => { submitSuccess.value = false }, 3000)
+    await loadDashboard()
   } catch (e) {
     submitError.value = e.response?.data?.message || e.response?.data?.error || 'Ошибка при создании пересдачи'
   } finally {
@@ -270,11 +392,10 @@ function handleOutsideClick(e) {
     typeDropdownOpen.value = false
     discDropdownOpen.value = false
   }
+  if (!e.target.closest('.group-custom-select')) groupDropdownOpen.value = false
 }
 
-onMounted(async () => {
-  document.addEventListener('mousedown', handleOutsideClick)
-
+async function loadDashboard() {
   const [summaryRes, retakesRes, scheduledRes, disciplinesRes] = await Promise.allSettled([
     debtsApi.getSummary(),
     retakesApi.getAll({ limit: 200 }),
@@ -324,6 +445,11 @@ onMounted(async () => {
       }
     })
   }
+}
+
+onMounted(async () => {
+  document.addEventListener('mousedown', handleOutsideClick)
+  await loadDashboard()
 })
 
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
@@ -344,12 +470,75 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
         <section class="col-left">
 
           <div class="stats-grid">
-            <div v-for="s in stats" :key="s.label" class="stat-card">
+            <div
+              v-for="(s, i) in stats" :key="s.label"
+              :class="['stat-card', i === 0 && 'stat-card--clickable', i === 0 && debtTableOpen && 'stat-card--active']"
+              @click="i === 0 && toggleDebtTable()"
+            >
               <div class="stat-accent" :style="{ background: s.accent }" />
               <div class="stat-value">{{ s.value }}</div>
               <div class="stat-label">{{ s.label }}</div>
+              <div v-if="i === 0" class="stat-hint">{{ debtTableOpen ? 'Скрыть ↑' : 'Сводная таблица →' }}</div>
             </div>
           </div>
+
+          <!-- Сводная таблица долгов -->
+          <Transition name="panel">
+            <div v-if="debtTableOpen" class="debt-table-card">
+              <div class="debt-table-head">
+                <h3 class="debt-table-title">Сводная таблица долгов</h3>
+                <div class="debt-table-actions">
+                  <input v-model="debtTableSearch" class="table-search" placeholder="Поиск по таблице…" />
+                  <button class="btn-export btn-export--excel" @click="doExportExcel" :disabled="debtTableLoading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Excel
+                  </button>
+                  <button class="btn-export btn-export--word" @click="doExportWord" :disabled="debtTableLoading">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Word
+                  </button>
+                  <button class="debt-table-close" @click="debtTableOpen = false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="debtTableLoading" class="debt-table-state">
+                <div class="spinner" /><span>Загрузка данных…</span>
+              </div>
+              <div v-else-if="filteredDebtRows.length === 0" class="debt-table-state">
+                Нет данных
+              </div>
+              <div v-else class="debt-table-wrap">
+                <table class="debt-table">
+                  <thead>
+                    <tr>
+                      <th>Дисциплина</th>
+                      <th>Студент</th>
+                      <th>Группа</th>
+                      <th>Преподаватель</th>
+                      <th>Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, i) in filteredDebtRows" :key="i">
+                      <td>
+                        <div class="td-disc-name">{{ r.discipline }}</div>
+                        <div v-if="r.disciplineCode" class="td-disc-code">{{ r.disciplineCode }}</div>
+                      </td>
+                      <td>{{ r.student }}</td>
+                      <td>{{ r.group || '—' }}</td>
+                      <td>{{ r.teacher }}</td>
+                      <td><span :class="['tbl-badge', 'tbl-badge--' + r.status]">{{ STATUS_LABEL[r.status] ?? r.status }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-if="!debtTableLoading && filteredDebtRows.length > 0" class="debt-table-foot">
+                Показано {{ filteredDebtRows.length }} из {{ debtTableRows.length }} записей
+              </div>
+            </div>
+          </Transition>
 
           <div class="section-card">
             <h2 class="section-title">Назначить пересдачу</h2>
@@ -445,34 +634,35 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
               <div class="form-row">
                 <div class="field field--full picker-wrap">
                   <label>{{ isCommission ? 'Преподаватели (мин. 3)' : 'Преподаватель' }}</label>
-                  <div class="tags-row" v-if="selectedTeachers.length">
-                    <span v-for="t in selectedTeachers" :key="t.id" class="teacher-tag">
-                      {{ t.name }}
-                      <button type="button" class="teacher-tag-remove" @click="removeTeacher(t.id)">×</button>
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
+                  >
+                    <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
+                      <span class="token-chip-text">{{ t.name }}</span>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeTeacher(t.id)">×</button>
                     </span>
+                    <input
+                      class="token-field"
+                      v-model="teacherSearch"
+                      :placeholder="selectedTeachers.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя...' : 'Сначала выберите дисциплину'))"
+                      :disabled="!disciplineId || loadingParticipants"
+                      @focus="onTeacherFocus"
+                      @blur="onTeacherBlur"
+                      @keydown.enter.prevent="onTeacherEnter"
+                    />
                   </div>
-                  <div v-if="isCommission || selectedTeachers.length === 0">
-                    <div class="picker-input-wrap">
-                      <input
-                        class="input"
-                        v-model="teacherSearch"
-                        :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск преподавателя...' : 'Сначала выберите дисциплину')"
-                        :disabled="!disciplineId || loadingParticipants"
-                        @focus="onTeacherFocus"
-                        @blur="onTeacherBlur"
-                      />
+                  <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
+                    <div v-if="filteredTeachers.length">
+                      <button
+                        v-for="t in filteredTeachers" :key="t.id"
+                        type="button" class="picker-option"
+                        @mousedown.prevent="addTeacher(t)"
+                      >{{ t.name }}</button>
                     </div>
-                    <div v-show="teacherOpen && disciplineId" class="picker-dropdown">
-                      <div v-if="filteredTeachers.length">
-                        <button
-                          v-for="t in filteredTeachers" :key="t.id"
-                          type="button" class="picker-option"
-                          @mousedown.prevent="addTeacher(t)"
-                        >{{ t.name }}</button>
-                      </div>
-                      <div v-else class="picker-empty">
-                        {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
-                      </div>
+                    <div v-else class="picker-empty">
+                      {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
                     </div>
                   </div>
                   <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="field-hint-warn">
@@ -484,21 +674,25 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
               <!-- Студенты + Группа -->
               <div class="form-row">
                 <div class="field picker-wrap">
-                  <label>Студент</label>
-                  <div class="tags-row" v-if="selectedStudents.length">
-                    <span v-for="s in selectedStudents" :key="s.id" class="teacher-tag teacher-tag--student">
-                      {{ s.name }}<span v-if="s.group" class="tag-group"> · {{ s.group }}</span>
-                      <button type="button" class="teacher-tag-remove" @click="removeStudent(s.id)">×</button>
+                  <label>Студенты</label>
+                  <div
+                    class="token-input"
+                    :class="{ 'token-input--focused': studentOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
+                    @click="$event.currentTarget.querySelector('input')?.focus()"
+                  >
+                    <span v-for="s in selectedStudents" :key="s.id" class="token-chip token-chip--student">
+                      <span class="token-chip-text">{{ s.name }}</span>
+                      <span v-if="s.group" class="token-group">· {{ s.group }}</span>
+                      <button type="button" class="token-remove" @mousedown.prevent="removeStudent(s.id)">×</button>
                     </span>
-                  </div>
-                  <div class="picker-input-wrap">
                     <input
-                      class="input"
+                      class="token-field token-field-s"
                       v-model="studentSearch"
-                      :placeholder="loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Поиск по имени...' : 'Сначала выберите дисциплину')"
+                      :placeholder="selectedStudents.length ? '' : (loadingParticipants ? 'Загрузка...' : (disciplineId ? 'Введите имя или группу...' : 'Сначала выберите дисциплину'))"
                       :disabled="!disciplineId || loadingParticipants"
                       @focus="onStudentFocus"
                       @blur="onStudentBlur"
+                      @keydown.enter.prevent="onStudentEnter"
                     />
                   </div>
                   <div v-show="studentOpen && disciplineId" class="picker-dropdown">
@@ -521,10 +715,28 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
                 <div class="field">
                   <label>Группа</label>
                   <div class="group-select-row">
-                    <select class="input" v-model="groupSelect" :disabled="!availableGroups.length">
-                      <option value="">{{ disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину' }}</option>
-                      <option v-for="g in availableGroups" :key="g" :value="g">{{ g }}</option>
-                    </select>
+                    <div class="group-custom-select" :class="{ open: groupDropdownOpen }">
+                      <button
+                        type="button" class="group-select-trigger"
+                        :disabled="!availableGroups.length"
+                        @click="groupDropdownOpen = !groupDropdownOpen"
+                      >
+                        <span :class="{ placeholder: !groupSelect }">
+                          {{ groupSelect || (disciplineId ? (availableGroups.length ? 'Выберите группу' : 'Нет групп') : 'Сначала выберите дисциплину') }}
+                        </span>
+                        <svg class="select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                      <div v-show="groupDropdownOpen && availableGroups.length" class="group-select-dropdown">
+                        <button
+                          v-for="g in availableGroups" :key="g"
+                          type="button" class="group-select-option"
+                          :class="{ selected: groupSelect === g }"
+                          @click="selectGroup(g)"
+                        >{{ g }}</button>
+                      </div>
+                    </div>
                     <button
                       type="button" class="btn-add-group"
                       :disabled="!groupSelect"
@@ -744,12 +956,59 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .teacher-tag-remove:hover { opacity: 1; }
 
+/* ── Token input (Bitrix-style chips inside field) ── */
+.token-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 44px; max-height: 140px; overflow-y: auto;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; padding: 6px 10px; cursor: text;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+  box-sizing: border-box;
+}
+.token-input::-webkit-scrollbar { width: 4px; }
+.token-input::-webkit-scrollbar-track { background: transparent; }
+.token-input::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.token-input::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
+.token-input--focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.token-input--disabled { background: #f9fafb; opacity: .7; cursor: not-allowed; }
+
+.token-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px; border-radius: 20px;
+  background: rgba(59,63,224,.1); color: #2a2e9e;
+  font: 500 12px/1.4 'Inter', sans-serif;
+  max-width: 200px; min-width: 0; flex-shrink: 0;
+}
+.token-chip-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.token-chip--student { background: rgba(16,185,129,.1); color: #065f46; }
+.token-group { opacity: .7; font-size: 11px; flex-shrink: 0; }
+.token-remove {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 15px; line-height: 1; padding: 0 2px; opacity: .55;
+  transition: opacity .15s; flex-shrink: 0;
+}
+.token-remove:hover { opacity: 1; }
+
+.token-field {
+  flex: 1; min-width: 80px; border: none; outline: none;
+  background: transparent; font: 13px/1 'Inter', sans-serif;
+  color: var(--ink); padding: 3px 2px;
+}
+.token-field::placeholder { color: var(--ink-soft); }
+.token-field:disabled { cursor: not-allowed; }
+
 .picker-dropdown {
   position: absolute; top: calc(100% + 2px); left: 0; right: 0;
   background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
   box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
   z-index: 100; max-height: 220px; overflow-y: auto;
 }
+.picker-dropdown::-webkit-scrollbar { width: 4px; }
+.picker-dropdown::-webkit-scrollbar-track { background: transparent; }
+.picker-dropdown::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.picker-dropdown::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
 .picker-option {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; text-align: left; background: none; border: none;
@@ -767,7 +1026,39 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 
 /* ── Group select row ── */
 .group-select-row { display: flex; gap: 8px; }
-.group-select-row .input { flex: 1; }
+
+.group-custom-select { position: relative; flex: 1; }
+.group-select-trigger {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; height: 40px; padding: 0 12px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; text-align: left;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.group-select-trigger:hover:not(:disabled) { border-color: #a0a3b1; }
+.group-select-trigger:disabled { opacity: .5; cursor: not-allowed; background: #f9fafb; }
+.group-custom-select.open .group-select-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.group-select-trigger .placeholder { color: var(--ink-soft); }
+.select-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; transition: transform .2s var(--ease); }
+.group-custom-select.open .select-arrow { transform: rotate(180deg); }
+
+.group-select-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
+  max-height: 200px; overflow-y: auto;
+}
+.group-select-dropdown::-webkit-scrollbar { width: 4px; }
+.group-select-dropdown::-webkit-scrollbar-track { background: transparent; }
+.group-select-dropdown::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.group-select-option {
+  display: block; width: 100%; text-align: left; padding: 9px 14px;
+  background: none; border: none; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s;
+}
+.group-select-option:hover { background: rgba(59,63,224,.07); }
+.group-select-option.selected { color: var(--brand); font-weight: 600; }
 .btn-add-group {
   height: 38px; padding: 0 14px; flex-shrink: 0;
   border: 1.5px solid var(--line); border-radius: var(--radius);
@@ -794,6 +1085,97 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .btn-primary:hover:not(:disabled) { transform: scale(1.03); box-shadow: 0 4px 10px -5px rgba(91,59,217,.7); }
 .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Stat card clickable ── */
+.stat-card { transition: box-shadow .18s var(--ease), transform .18s var(--ease); }
+.stat-card--clickable { cursor: pointer; }
+.stat-card--clickable:hover { box-shadow: 0 4px 18px rgba(20,22,60,.13); transform: translateY(-2px); }
+.stat-card--active   { box-shadow: 0 0 0 2px var(--brand), 0 4px 18px rgba(59,63,224,.15); transform: translateY(-2px); }
+.stat-hint { font-size: 11px; color: var(--brand); margin-top: 6px; font-weight: 500; }
+
+/* ── Panel transition ── */
+.panel-enter-active { transition: opacity .2s var(--ease), transform .2s var(--ease); }
+.panel-leave-active { transition: opacity .15s var(--ease), transform .15s var(--ease); }
+.panel-enter-from, .panel-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* ── Debt table card ── */
+.debt-table-card {
+  background: var(--card); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden;
+  border: 1.5px solid rgba(59,63,224,.15); margin-bottom: 24px;
+}
+.debt-table-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
+  gap: 10px; flex-wrap: wrap;
+}
+.debt-table-title {
+  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-size: 14px; font-weight: 700; color: #3C38B6; margin: 0; white-space: nowrap;
+}
+.debt-table-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-search {
+  height: 32px; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 0 10px; font: 13px/1 'Inter', sans-serif; color: var(--ink);
+  outline: none; background: #fff; width: 200px;
+  transition: border-color .2s;
+}
+.table-search:focus { border-color: var(--brand); }
+
+.btn-export {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 32px; padding: 0 12px; border-radius: 8px; border: 1.5px solid var(--line);
+  font: 600 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.btn-export svg { width: 13px; height: 13px; flex-shrink: 0; }
+.btn-export:disabled { opacity: .4; cursor: not-allowed; }
+.btn-export--excel { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+.btn-export--excel:hover:not(:disabled) { background: #dcfce7; border-color: #86efac; }
+.btn-export--word  { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+.btn-export--word:hover:not(:disabled)  { background: #dbeafe; border-color: #93c5fd; }
+
+.debt-table-close {
+  width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+  background: none; border: none; cursor: pointer;
+  display: grid; place-items: center; color: var(--ink-soft);
+  transition: background .15s;
+}
+.debt-table-close:hover { background: var(--bg); color: var(--ink); }
+.debt-table-close svg { width: 14px; height: 14px; }
+
+.debt-table-state {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 32px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft);
+}
+
+.debt-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+.debt-table-wrap::-webkit-scrollbar { width: 4px; height: 4px; }
+.debt-table-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+.debt-table { width: 100%; border-collapse: collapse; font: 13px/1.4 'Inter', sans-serif; }
+.debt-table thead tr { position: sticky; top: 0; z-index: 2; }
+.debt-table th {
+  background: #f8f9fb; padding: 9px 14px;
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line);
+}
+.debt-table td { padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.debt-table tbody tr:last-child td { border-bottom: none; }
+.debt-table tbody tr:hover td { background: rgba(59,63,224,.025); }
+
+.td-disc-name { font-weight: 500; }
+.td-disc-code { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+.tbl-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font: 600 11px/1.4 'Inter', sans-serif; white-space: nowrap; }
+.tbl-badge--open      { background: #fef3c7; color: #92400e; }
+.tbl-badge--graded    { background: #d1fae5; color: #065f46; }
+.tbl-badge--cancelled { background: #e5e7eb; color: #374151; }
+
+.debt-table-foot {
+  padding: 8px 20px; border-top: 1px solid var(--line);
+  font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); text-align: right;
+}
 
 /* ── Responsive ── */
 @media (max-width: 1280px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }

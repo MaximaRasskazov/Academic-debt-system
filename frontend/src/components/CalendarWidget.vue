@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, reactive } from 'vue'
+import iconClipboard from '../assets/icons/Clipboard.svg'
 
 const props = defineProps({
   retakes: { type: Array, default: () => [] },
@@ -43,7 +44,7 @@ function isToday(day) {
 function getRetakesForDay(day) {
   if (!day) return []
   const y = calendarCursor.value.getFullYear()
-  const m = calendarCursor.value.getMonth()
+  const m = calendarCursor.value.getMonth() + 1  // retakes use 1-based month
   return props.retakes.filter(r => r.day === day && r.month === m && r.year === y)
 }
 
@@ -112,9 +113,7 @@ function onDayClick(day) {
         <ul class="modal-list">
           <li v-for="r in modal.retakes" :key="r.id" class="modal-item">
             <div class="notif-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/>
-              </svg>
+              <img :src="iconClipboard" class="clipboard-icon" alt="" />
             </div>
             <div class="notif-body">
               <div class="notif-subject">{{ r.subject }}</div>
@@ -215,11 +214,11 @@ function onDayClick(day) {
 .modal-item { display: flex; align-items: flex-start; gap: 12px; }
 
 .notif-icon {
-  width: 38px; height: 38px; border-radius: 50%;
+  width: 42px; height: 42px; border-radius: 12px;
   display: grid; place-items: center; flex-shrink: 0;
-  background: rgba(59,63,224,.1); color: var(--brand);
+  background: rgba(110,114,200,.12);
 }
-.notif-icon svg { width: 18px; height: 18px; }
+.clipboard-icon { width: 26px; height: 26px; object-fit: contain; display: block; }
 .notif-body { flex: 1; min-width: 0; }
 .notif-subject {
   font-size: 13px; font-weight: 600; color: var(--ink);
