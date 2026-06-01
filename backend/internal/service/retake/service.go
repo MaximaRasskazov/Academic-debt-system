@@ -6,24 +6,21 @@
 //     проверяется при попытке перевести пересдачу в in_progress;
 //   - переходы статусов: scheduled → in_progress → completed (вручную
 //     в этом сервисе, авто-переходы по времени делает шедулер в BACK-07);
-//   - cancelled — только из scheduled или in_progress;
-//   - выставление оценки на пересдаче атомарно закрывает связанный долг
-//     (debts.status → 'graded') в одной транзакции.
+//   - cancelled — только из scheduled или in_progress.
 //
-// Все мутации идут через Store.RunInTx с записью audit_log и change_logs.
+// Выставление оценок и закрытие долгов вынесено в пакет statement
+// (двухэтапная ведомость). Все мутации идут через Store.RunInTx с
+// записью audit_log и change_logs.
 package retake
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -65,70 +62,22 @@ var (
 	ErrInvalidKind       = errors.New("retake: kind должен быть regular или commission")
 	ErrInvalidStatus     = errors.New("retake: переход статуса невозможен")
 	ErrNotEnoughTeachers = errors.New("retake: для комиссии нужно минимум 3 преподавателя")
-	ErrAlreadyHasGrade   = errors.New("retake: оценка уже выставлена")
 )
 
-// GradeSender инкапсулирует отправку оценки во внешнюю систему (деканат).
-// Узкий интерфейс развязывает зависимость от *emulator.Client и
-// упрощает тесты. nil = обратный sync отключён.
-type GradeSender interface {
-	PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error
-}
-
-// Service инкапсулирует операции с пересдачами и их участниками.
-//
-// При выставлении оценки на пересдаче связанный долг закрывается в
-// той же транзакции — для этого retake-сервис дёргает q.GradeDebt
-// напрямую в RunInTx-callback, не через debt-сервис. Это сознательное
-// нарушение strict layering ради атомарности (нельзя смешать tx двух
-// сервисов без сложной transactional-functor машинерии).
+// Service инкапсулирует операции с пересдачами и их участниками
+// (создание, состав, переходы статусов). Выставление оценок и закрытие
+// долгов вынесено в пакет statement (двухэтапная ведомость).
 type Service struct {
-	store       *repo.Store
-	audit       *audit.Service
-	changelog   *changelog.Service
-	notify      *notify.Service // опционально — для уведомлений студентам
-	gradeSender GradeSender
+	store     *repo.Store
+	audit     *audit.Service
+	changelog *changelog.Service
+	notify    *notify.Service // опционально — для уведомлений студентам
 }
 
 // New собирает Service. notifySvc может быть nil — тогда уведомления
 // не шлются (удобно в юнит-тестах, где notify-инфраструктура не нужна).
 func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Service, notifySvc *notify.Service) *Service {
 	return &Service{store: store, audit: auditSvc, changelog: changelogSvc, notify: notifySvc}
-}
-
-// SetGradeSender позволяет подключить внешнюю систему для синхронизации
-// после инициализации сервиса.
-func (s *Service) SetGradeSender(sender GradeSender) {
-	s.gradeSender = sender
-}
-
-// emulatorSendTimeout — потолок на фоновую отправку оценки в эмулятор.
-const emulatorSendTimeout = 30 * time.Second
-
-// sendGradeToEmulator отправляет числовую оценку (2..5) в эмулятор,
-// если write-back подключён и у долга есть external_id. Запускается в
-// отдельной горутине со своим context.Background()+таймаутом, чтобы
-// отправка не отменялась вместе с request-контекстом и не блокировала
-// ответ пользователю. Любая ошибка — WARN и проглатывается: обратный
-// sync вспомогательный, оценка на пересдаче у нас уже выставлена.
-func (s *Service) sendGradeToEmulator(externalID *string, debtID string, grade int32) {
-	if s.gradeSender == nil || externalID == nil {
-		return
-	}
-	extID := *externalID
-	g := emulator.Grade{Type: "numeric", Value: int(grade)}
-	idemKey := fmt.Sprintf("debt-grade-%s-%d", extID, grade)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), emulatorSendTimeout)
-		defer cancel()
-		if err := s.gradeSender.PatchDebtGrade(ctx, extID, g, nil, idemKey); err != nil {
-			slog.Warn("retake: не удалось отправить оценку в эмулятор (best-effort)",
-				"debt_id", debtID,
-				"external_id", extID,
-				"err", err)
-		}
-	}()
 }
 
 // CreateInput — параметры создания пересдачи.

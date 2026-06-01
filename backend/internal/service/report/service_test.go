@@ -182,7 +182,14 @@ func TestReport_RetakesForPeriod_IncludesCompletedWithParticipants(t *testing.T)
 
 	require.NoError(t, f.retake.AddStudent(context.Background(), pgutil.UUID(r.ID), student, pgutil.UUID(d.ID), dean))
 	require.NoError(t, f.retake.AddTeacher(context.Background(), pgutil.UUID(r.ID), teacher, dean))
-	require.NoError(t, f.retake.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 4, teacher))
+	// Отчёт читает retake_participants.grade. Ставим оценку напрямую
+	// (grade-flow живёт в statement-сервисе, тащить его сюда ради одной
+	// простановки оценки избыточно).
+	_, err = f.store.Pool().Exec(context.Background(),
+		`UPDATE retake_participants SET grade=4, graded_at=NOW(), graded_by=$1
+		 WHERE retake_id=$2 AND user_id=$3 AND kind='student'`,
+		pgutil.PgUUID(teacher), r.ID, pgutil.PgUUID(student))
+	require.NoError(t, err)
 	require.NoError(t, f.retake.Complete(context.Background(), pgutil.UUID(r.ID), dean))
 
 	// Запрашиваем отчёт за окно вокруг completed_at.

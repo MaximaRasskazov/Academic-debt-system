@@ -34,7 +34,6 @@ type RetakeService interface {
 	AddTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
 	RemoveStudent(ctx context.Context, retakeID, studentID, actorID uuid.UUID) error
 	RemoveTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
-	GradeStudent(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, gradedBy uuid.UUID) error
 }
 
 // RetakeHandler собирает зависимости для /api/retakes/*.
@@ -430,44 +429,9 @@ func (h *RetakeHandler) RemoveTeacher(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GradeStudent godoc
-//
-//	@Summary	Выставить оценку студенту на пересдаче
-//	@Description	Атомарно закрывает связанный долг студента.
-//	@Tags		retakes
-//	@Accept		json
-//	@Param		id		path	string							true	"UUID пересдачи"
-//	@Param		user_id	path	string							true	"UUID студента"
-//	@Param		body	body	dto.GradeRetakeStudentRequest	true	"Оценка"
-//	@Success	204
-//	@Failure	400	{object}	dto.ErrorResponse
-//	@Security	BearerAuth
-//	@Router		/api/retakes/{id}/students/{user_id}/grade [patch]
-func (h *RetakeHandler) GradeStudent(w http.ResponseWriter, r *http.Request) {
-	userID, ok := mw.UserID(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
-		return
-	}
-	id, ok := parseURLUUID(w, r, "id")
-	if !ok {
-		return
-	}
-	studentID, ok := parseURLUUID(w, r, "user_id")
-	if !ok {
-		return
-	}
-	var req dto.GradeRetakeStudentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
-		return
-	}
-	if err := h.svc.GradeStudent(r.Context(), id, studentID, req.Grade, userID); err != nil {
-		mapRetakeError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
+// Выставление оценки переехало в пакет statement (handler/statement.go):
+// двухэтапная ведомость SaveDraftGrade → CloseSheet вместо одноэтапного
+// необратимого GradeStudent.
 
 // Используем time для импорта - в случае если эта функция вырастет.
 var _ = time.Time{}
@@ -489,10 +453,6 @@ func mapRetakeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "already_participant", "пользователь уже участник этой пересдачи")
 	case errors.Is(err, retake.ErrStudentNeedsDebt):
 		writeError(w, http.StatusBadRequest, "student_needs_debt", "студенту необходим debt_id")
-	case errors.Is(err, retake.ErrParticipantNotStudent):
-		writeError(w, http.StatusBadRequest, "not_student", "оценку можно ставить только студенту")
-	case errors.Is(err, retake.ErrAlreadyHasGrade):
-		writeError(w, http.StatusConflict, "already_has_grade", "оценка уже выставлена")
 	case errors.Is(err, retake.ErrInvalidParticipant):
 		writeError(w, http.StatusBadRequest, "invalid_participant", err.Error())
 	case errors.Is(err, retake.ErrInvalidInput):

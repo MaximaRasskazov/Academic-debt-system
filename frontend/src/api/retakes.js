@@ -36,12 +36,26 @@ export const retakesApi = {
   removeStudent: (id, userId) =>
     http.delete(`/api/retakes/${id}/students/${userId}`),
 
-  gradeStudent: (id, userId, grade) =>
-    http.patch(`/api/retakes/${id}/students/${userId}/grade`, { grade }),
-
   addTeacher: (id, teacherId) =>
     http.post(`/api/retakes/${id}/teachers`, { teacher_id: teacherId }),
 
   removeTeacher: (id, userId) =>
     http.delete(`/api/retakes/${id}/teachers/${userId}`),
+
+  // ── Ведомость пересдачи (двухэтапная) ──────────────────────
+  // Статус ведомости (open/closed). Lazy-create на бэке при первом GET.
+  getSheet: (id) =>
+    http.get(`/api/retakes/${id}/sheet`),
+
+  // Черновик оценки студенту: долг НЕ закрывается, можно перезаписывать.
+  saveDraftGrade: (id, userId, grade) =>
+    http.patch(`/api/retakes/${id}/sheet/grades/${userId}`, { grade }),
+
+  // Закрыть ведомость (препод): фиксация оценок + закрытие долгов.
+  closeSheet: (id) =>
+    http.post(`/api/retakes/${id}/sheet/close`),
+
+  // Открыть закрытую ведомость (только декан): откат долгов в open.
+  reopenSheet: (id) =>
+    http.post(`/api/retakes/${id}/sheet/reopen`),
 }

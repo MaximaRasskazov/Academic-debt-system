@@ -50,7 +50,6 @@ type retakeServiceStub struct {
 	addTeacherFn       func(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
 	removeStudentFn    func(ctx context.Context, retakeID, studentID, actorID uuid.UUID) error
 	removeTeacherFn    func(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
-	gradeStudentFn     func(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, gradedBy uuid.UUID) error
 }
 
 func (s *retakeServiceStub) ListForUser(ctx context.Context, userID uuid.UUID) ([]queries.Retake, error) {
@@ -92,9 +91,6 @@ func (s *retakeServiceStub) RemoveStudent(ctx context.Context, retakeID, student
 func (s *retakeServiceStub) RemoveTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error {
 	return s.removeTeacherFn(ctx, retakeID, teacherID, actorID)
 }
-func (s *retakeServiceStub) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, gradedBy uuid.UUID) error {
-	return s.gradeStudentFn(ctx, retakeID, studentID, grade, gradedBy)
-}
 
 // retakeFixture — мини-роутер с одним методом, чтобы передать chi-параметры
 // (например {id} в /api/retakes/:id) в handler.
@@ -113,7 +109,6 @@ func retakeFixture(h *handler.RetakeHandler) *chi.Mux {
 	r.Delete("/api/retakes/{id}/students/{user_id}", h.RemoveStudent)
 	r.Post("/api/retakes/{id}/teachers", h.AddTeacher)
 	r.Delete("/api/retakes/{id}/teachers/{user_id}", h.RemoveTeacher)
-	r.Patch("/api/retakes/{id}/students/{user_id}/grade", h.GradeStudent)
 	return r
 }
 
@@ -316,37 +311,4 @@ func TestRetake_Cancel_404(t *testing.T) {
 		"/api/retakes/"+uuid.New().String()+"/cancel", nil), uuid.New())
 	retakeFixture(handler.NewRetakeHandler(stub)).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNotFound, rr.Code)
-}
-
-// ── GradeStudent ───────────────────────────────────────────────────────────
-
-func TestRetake_GradeStudent_400_OutOfRange(t *testing.T) {
-	stub := &retakeServiceStub{
-		gradeStudentFn: func(_ context.Context, _, _ uuid.UUID, _ int32, _ uuid.UUID) error {
-			return fmt.Errorf("оценка вне 2..5: %w", retake.ErrInvalidInput)
-		},
-	}
-	body, _ := json.Marshal(map[string]any{"grade": 1})
-	rr := httptest.NewRecorder()
-	req := withUser(httptest.NewRequest(http.MethodPatch,
-		"/api/retakes/"+uuid.New().String()+"/students/"+uuid.New().String()+"/grade",
-		bytes.NewReader(body)), uuid.New())
-	retakeFixture(handler.NewRetakeHandler(stub)).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRetake_GradeStudent_204(t *testing.T) {
-	stub := &retakeServiceStub{
-		gradeStudentFn: func(_ context.Context, _, _ uuid.UUID, grade int32, _ uuid.UUID) error {
-			assert.EqualValues(t, 5, grade)
-			return nil
-		},
-	}
-	body, _ := json.Marshal(map[string]any{"grade": 5})
-	rr := httptest.NewRecorder()
-	req := withUser(httptest.NewRequest(http.MethodPatch,
-		"/api/retakes/"+uuid.New().String()+"/students/"+uuid.New().String()+"/grade",
-		bytes.NewReader(body)), uuid.New())
-	retakeFixture(handler.NewRetakeHandler(stub)).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusNoContent, rr.Code)
 }
