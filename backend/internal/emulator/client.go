@@ -85,6 +85,20 @@ type AccountDTO struct {
 	Status         string  `json:"status"`
 	PasswordHash   string  `json:"password_hash"`
 	LinkedEntityID string  `json:"linked_entity_id"` // ID студента/преподавателя (используется в долгах)
+	GroupID        string  `json:"group_id"`         // ID учебной группы (только у студентов; резолвится в group_name через ListGroups)
+}
+
+// GroupDTO — данные учебной группы из эмулятора.
+// В нашей БД храним только Name (в users.group_name); остальные поля
+// (Faculty/Course/FlowName) эмулятор отдаёт, но мы их не репозитим —
+// отдельной таблицы групп нет (решение BACK-01).
+type GroupDTO struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ExternalID string `json:"external_id"`
+	Faculty    string `json:"faculty"`
+	Course     int    `json:"course"`
+	FlowName   string `json:"flow_name"`
 }
 
 // debtsListResponse — обёртка ответа GET /api/v1/debts (список).
@@ -135,6 +149,12 @@ type accountResponse struct {
 // accountsListResponse — обёртка ответа GET /api/v1/accounts (список).
 type accountsListResponse struct {
 	Data []AccountDTO   `json:"data"`
+	Meta paginationMeta `json:"meta"`
+}
+
+// groupsListResponse — обёртка ответа GET /api/v1/groups (список).
+type groupsListResponse struct {
+	Data []GroupDTO     `json:"data"`
 	Meta paginationMeta `json:"meta"`
 }
 
@@ -243,6 +263,33 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 		return nil, fmt.Errorf("get account %s: %w", externalID, err)
 	}
 	return &resp.Data, nil
+}
+
+// ListGroups возвращает учебные группы из эмулятора постранично.
+// Используется sync'ом для построения справочника group_id → name.
+func (c *Client) ListGroups(ctx context.Context, page, limit int) ([]GroupDTO, paginationMeta, error) {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", page))
+	params.Set("limit", fmt.Sprintf("%d", limit))
+
+	var resp groupsListResponse
+	if err := c.get(ctx, "/api/v1/groups?"+params.Encode(), &resp); err != nil {
+		return nil, paginationMeta{}, fmt.Errorf("list groups: %w", err)
+	}
+	return resp.Data, resp.Meta, nil
+}
+
+// GetGroup возвращает группу по её ID. В отличие от списка, одиночный
+// endpoint эмулятора отдаёт объект без обёртки {"data":...}, поэтому
+// декодируем напрямую в GroupDTO. Нужен sync'у как fallback, если в
+// аккаунте встретился group_id, которого не было в предзагруженном
+// справочнике (группа создана в середине прогона).
+func (c *Client) GetGroup(ctx context.Context, groupID string) (*GroupDTO, error) {
+	var dto GroupDTO
+	if err := c.get(ctx, "/api/v1/groups/"+url.PathEscape(groupID), &dto); err != nil {
+		return nil, fmt.Errorf("get group %s: %w", groupID, err)
+	}
+	return &dto, nil
 }
 
 // get выполняет GET-запрос с backoff на 429-ответы.
