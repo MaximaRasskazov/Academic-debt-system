@@ -26,9 +26,9 @@ beforeEach(() => {
     _close:   () => wsMock.onclose?.(),
   }
   // `new WebSocket(...)` требует конструктируемой функции — arrow-function
-  // им быть не может. Поэтому используем function expression и
-  // прицепляем vi.fn-spy через .mockImplementation отдельно для assertion'ов.
-  WsMockCtor = vi.fn(function MockWebSocket() { return wsMock })
+  // им быть не может (Reflect.construct → "is not a constructor"). Поэтому
+  // function expression; возврат объекта из конструктора подменяет this.
+  WsMockCtor = vi.fn(function MockWebSocket () { return wsMock })
   vi.stubGlobal('WebSocket', WsMockCtor)
 
   notificationsApi.unreadCount.mockResolvedValue({ count: 5 })

@@ -13,6 +13,7 @@ import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
 import { directoryApi } from '../api/directory'
 import { exportExcel, exportWord } from '../utils/exportTable'
+import { toUtcISO, partsInTZ } from '../utils/datetime'
 
 const sidebarOpen = ref(false)
 
@@ -332,9 +333,11 @@ async function submitRetake() {
   if (!disciplineId.value)   { submitError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)      { submitError.value = 'Укажите дату'; return }
 
+  // Время вводится в зоне вуза (Ханты, UTC+5) → toUtcISO собирает
+  // корректный UTC ISO, а не интерпретирует как зону устройства.
   const [day, month, year] = retakeDate.value.split('.')
-  const scheduledAt = new Date(`${year}-${month}-${day}T${timeString.value}:00`)
-  if (scheduledAt <= new Date()) { submitError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+  const scheduledAtIso = toUtcISO(`${year}-${month}-${day}`, timeString.value)
+  if (new Date(scheduledAtIso) <= new Date()) { submitError.value = 'Дата и время пересдачи должны быть в будущем'; return }
 
   const bld = building.value.trim()
   const rm  = room.value.trim()
@@ -349,8 +352,6 @@ async function submitRetake() {
       : 'Добавьте хотя бы одного преподавателя'
     return
   }
-
-  const scheduledAtIso = scheduledAt.toISOString()
 
   submitting.value = true
   try {
@@ -433,12 +434,13 @@ async function loadDashboard() {
 
   if (scheduledRes.status === 'fulfilled') {
     upcomingRetakes.value = (scheduledRes.value.data.items ?? []).map(r => {
-      const d = new Date(r.scheduled_at)
+      // Время вуза (Ханты, UTC+5), а не зона устройства.
+      const p = partsInTZ(r.scheduled_at)
       return {
         id: r.id,
         subject: discMap.value[r.discipline_id] || 'Дисциплина',
-        day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
-        time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        day: Number(p.day), month: Number(p.month), year: Number(p.year),
+        time: `${p.hour}:${p.minute}`,
         building: r.building, room: r.room,
       }
     })

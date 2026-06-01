@@ -2,6 +2,8 @@ package sync_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,17 +12,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 )
 
 // systemUserUUID — UUID служебного пользователя из сид-миграции 00010_seed_rbac.
-var systemUserUUID = pgutil.PgUUID(uuid.MustParse("00000000-0000-0000-0000-000000000000"))
+// Строим напрямую с Valid:true (как в cmd/server/main.go): pgutil.PgUUID
+// трактует uuid.Nil как NULL, а нам нужен валидный created_by для role_user.
+var systemUserUUID = pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000000"), Valid: true}
 
 // setupSync поднимает sync.Service против httptest-эмулятора.
 // Если TEST_DATABASE_URL не задан — тест пропускается, потому что
@@ -133,4 +138,102 @@ func TestSync_NoChanges_AdvancesLastSyncedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, after.After(before),
 		"при отсутствии 429 last_synced_at должен сдвинуться вперёд")
+}
+
+// readUserGroup возвращает id и group_name пользователя по email.
+// found=false, если пользователя нет (sync его не создал).
+func readUserGroup(t *testing.T, store *repo.Store, email string) (id pgtype.UUID, group *string, found bool) {
+	t.Helper()
+	err := store.Pool().QueryRow(context.Background(),
+		`SELECT id, group_name FROM users WHERE LOWER(email) = LOWER($1)`, email,
+	).Scan(&id, &group)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return id, nil, false
+	}
+	require.NoError(t, err)
+	return id, group, true
+}
+
+// accountChangeJSON собирает тело /changes с одним account-изменением,
+// несущим group_id (как реальный эмулятор). linkedID — linked_entity_id,
+// он же external_id пользователя; уникален на тест, чтобы прогоны не
+// сталкивались по idx_users_external_id.
+func accountChangeJSON(email, linkedID, groupID string) string {
+	return `{"data":[{"id":"ch1","entity_type":"account","entity_id":"acc1","action":"created",` +
+		`"occurred_at":"2026-05-22T09:29:22Z","new_value":{"id":"acc1","email":"` + email + `",` +
+		`"first_name":"Имя","last_name":"Фам","role":"student","status":"active",` +
+		`"password_hash":"$2b$12$x","linked_entity_id":"` + linkedID + `","group_id":"` + groupID + `"}}],` +
+		`"meta":{"next_since":"","has_more":false}}`
+}
+
+// TestSync_StudentAccount_PopulatesGroupName: при синхронизации студента
+// его group_id резолвится в название через предзагруженный справочник
+// /groups и пишется в users.group_name. Это основной happy-path задачи.
+func TestSync_StudentAccount_PopulatesGroupName(t *testing.T) {
+	suf := time.Now().Format("150405.000000000")
+	email := fmt.Sprintf("grp-pre-%s@test.local", suf)
+	linkedID := "stu-pre-" + suf
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/groups":
+			_, _ = w.Write([]byte(`{"data":[{"id":"g-pre","name":"ПИ-77","external_id":"EXT-GRP-077","faculty":"Ф","course":3,"flow_name":"П"}],"meta":{"page":1,"limit":100,"total":1,"total_pages":1}}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/changes"):
+			_, _ = w.Write([]byte(accountChangeJSON(email, linkedID, "g-pre")))
+		default:
+			_, _ = w.Write([]byte(`{"data":[],"meta":{"page":1,"limit":100,"total":0,"total_pages":0}}`))
+		}
+	}
+	svc, store, _ := setupSync(t, handler)
+	ctx := context.Background()
+	// Не-epoch — пропускаем полный импорт, идём дельта-путём.
+	setLastSynced(t, store, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+
+	require.NoError(t, svc.Sync(ctx))
+
+	id, group, found := readUserGroup(t, store, email)
+	if found {
+		t.Cleanup(func() { _ = repo.CleanupUser(context.Background(), store.Pool(), id) })
+	}
+	require.True(t, found, "sync должен был создать пользователя-студента")
+	require.NotNil(t, group, "group_name должен заполниться из справочника групп")
+	require.Equal(t, "ПИ-77", *group)
+}
+
+// TestSync_StudentAccount_GroupNameViaLazyFallback: если группы нет в
+// предзагруженном справочнике (список /groups пуст), sync должен лениво
+// дозапросить её через GET /groups/{id}. Имя "ПИ-88" может прийти только
+// этим путём — список пуст, значит fallback сработал.
+func TestSync_StudentAccount_GroupNameViaLazyFallback(t *testing.T) {
+	suf := time.Now().Format("150405.000000000")
+	email := fmt.Sprintf("grp-lazy-%s@test.local", suf)
+	linkedID := "stu-lazy-" + suf
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/groups":
+			// Пустой справочник — вынуждаем lazy GetGroup.
+			_, _ = w.Write([]byte(`{"data":[],"meta":{"page":1,"limit":100,"total":0,"total_pages":0}}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/groups/"):
+			// Bare-объект без обёртки data — как реальный одиночный endpoint.
+			_, _ = w.Write([]byte(`{"id":"g-lazy","name":"ПИ-88","external_id":"EXT-GRP-088","faculty":"Ф","course":4,"flow_name":"П"}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/changes"):
+			_, _ = w.Write([]byte(accountChangeJSON(email, linkedID, "g-lazy")))
+		default:
+			_, _ = w.Write([]byte(`{"data":[],"meta":{"page":1,"limit":100,"total":0,"total_pages":0}}`))
+		}
+	}
+	svc, store, _ := setupSync(t, handler)
+	ctx := context.Background()
+	setLastSynced(t, store, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+
+	require.NoError(t, svc.Sync(ctx))
+
+	id, group, found := readUserGroup(t, store, email)
+	if found {
+		t.Cleanup(func() { _ = repo.CleanupUser(context.Background(), store.Pool(), id) })
+	}
+	require.True(t, found, "sync должен был создать пользователя-студента")
+	require.NotNil(t, group, "group_name должен заполниться через lazy GetGroup")
+	require.Equal(t, "ПИ-88", *group, "имя могло прийти только через fallback (список /groups пуст)")
 }

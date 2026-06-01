@@ -12,6 +12,7 @@ import { disciplinesApi } from '../api/disciplines'
 import { notificationsApi } from '../api/notifications'
 import { notifMeta, notifTitle, notifBody, timeAgo } from '../utils/notifFormat'
 import { exportExcel, exportWord } from '../utils/exportTable'
+import { partsInTZ } from '../utils/datetime'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -132,12 +133,13 @@ onMounted(async () => {
       .filter(r => r.status === 'scheduled')
       .slice(0, 10)
       .map(r => {
-        const d = new Date(r.scheduled_at)
+        // Время вуза (Ханты, UTC+5), а не зона устройства.
+        const p = partsInTZ(r.scheduled_at)
         return {
           id: r.id,
           subject: discMap.value[r.discipline_id] || 'Дисциплина',
-          day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear(),
-          time: `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`,
+          day: Number(p.day), month: Number(p.month), year: Number(p.year),
+          time: `${p.hour}:${p.minute}`,
           building: r.building, room: r.room,
         }
       })

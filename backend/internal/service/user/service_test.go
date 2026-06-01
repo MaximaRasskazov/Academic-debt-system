@@ -27,6 +27,13 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 )
 
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
 var jwtSecret = []byte("test-secret-must-be-at-least-32-bytes!!")
 
 type fixture struct {
@@ -53,7 +60,7 @@ func setup(t *testing.T) *fixture {
 	return &fixture{
 		store: store,
 		users: user.New(store),
-		auth:  auth.New(store, tokens),
+		auth:  auth.New(store, tokens, nil),
 	}
 }
 
@@ -82,6 +89,11 @@ func (f *fixture) registerStudent(t *testing.T, fullSuffix string, group *string
 	}
 	r, err := f.auth.Register(context.Background(), in, "127.0.0.1")
 	require.NoError(t, err)
+	// Чистим за собой: иначе зарегистрированные юзеры (с audit/role
+	// записями) копятся в dev-БД между прогонами.
+	t.Cleanup(func() {
+		_ = repo.CleanupUser(context.Background(), f.store.Pool(), r.User.ID)
+	})
 	return r
 }
 

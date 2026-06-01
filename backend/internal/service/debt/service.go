@@ -21,10 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -59,6 +61,13 @@ var (
 	ErrInvalidGrade       = errors.New("debt: оценка должна быть в диапазоне 2..5")
 )
 
+// GradeSender инкапсулирует отправку оценки во внешнюю систему (деканат).
+// Узкий интерфейс (а не *emulator.Client) развязывает зависимость и
+// упрощает тесты. nil = обратный sync отключён.
+type GradeSender interface {
+	PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error
+}
+
 // Service инкапсулирует операции с долгами.
 type Service struct {
 	store       *repo.Store
@@ -66,6 +75,7 @@ type Service struct {
 	changelog   *changelog.Service
 	disciplines *discipline.Service
 	notify      *notify.Service
+	gradeSender GradeSender
 }
 
 // New собирает Service. discipline нужен для валидации
@@ -79,6 +89,12 @@ func New(store *repo.Store, auditSvc *audit.Service, changelogSvc *changelog.Ser
 		disciplines: disciplinesSvc,
 		notify:      notifySvc,
 	}
+}
+
+// SetGradeSender позволяет подключить внешнюю систему для синхронизации
+// после инициализации сервиса.
+func (s *Service) SetGradeSender(sender GradeSender) {
+	s.gradeSender = sender
 }
 
 // CreateInput — параметры постановки долга. issued_by приходит из
@@ -250,7 +266,47 @@ func (s *Service) Grade(ctx context.Context, id uuid.UUID, grade int32, gradedBy
 	if err != nil {
 		return queries.Debt{}, err
 	}
+
+	// Обратный sync оценки в эмулятор деканата — best-effort.
+	// Долг у нас уже закрыт (источник истины); отправка идёт в фоне со
+	// своим контекстом, чтобы не блокировать ответ пользователю и не
+	// отменяться вместе с request-контекстом при возврате ответа.
+	sendGradeToEmulator(s.gradeSender, updated.ExternalID,
+		pgutil.UUID(updated.ID).String(), grade, "debt")
+
 	return updated, nil
+}
+
+// emulatorSendTimeout — потолок на фоновую отправку оценки в эмулятор.
+// Эмулятор отвечает за ~1с; запас даём на медленный TLS-handshake.
+const emulatorSendTimeout = 30 * time.Second
+
+// sendGradeToEmulator отправляет числовую оценку (2..5) в эмулятор,
+// если write-back подключён и у долга есть external_id. Запускается в
+// отдельной горутине с собственным context.Background()+таймаутом:
+// request-контекст к моменту отправки уже может быть отменён (ответ
+// пользователю вернулся), а обратный sync должен дойти независимо.
+// Любая ошибка логируется как WARN и проглатывается — sync вспомогательный.
+// logScope — префикс лога ("debt"/"retake") для различения источника.
+func sendGradeToEmulator(sender GradeSender, externalID *string, debtID string, grade int32, logScope string) {
+	if sender == nil || externalID == nil {
+		return
+	}
+	extID := *externalID
+	g := emulator.Grade{Type: "numeric", Value: int(grade)}
+	// Детерминированный ключ: повтор той же операции не задвоит оценку.
+	idemKey := fmt.Sprintf("debt-grade-%s-%d", extID, grade)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), emulatorSendTimeout)
+		defer cancel()
+		if err := sender.PatchDebtGrade(ctx, extID, g, nil, idemKey); err != nil {
+			slog.Warn(logScope+": не удалось отправить оценку в эмулятор (best-effort)",
+				"debt_id", debtID,
+				"external_id", extID,
+				"err", err)
+		}
+	}()
 }
 
 // Cancel переводит open → cancelled. По ТЗ это право деканата

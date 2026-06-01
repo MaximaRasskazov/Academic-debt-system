@@ -17,6 +17,13 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 )
 
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
 func testStore(t *testing.T) *repo.Store {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -43,7 +50,7 @@ func seedActor(t *testing.T, s *repo.Store) uuid.UUID {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = s.Pool().Exec(context.Background(), "DELETE FROM users WHERE id = $1", u.ID)
+		_ = repo.CleanupUser(context.Background(), s.Pool(), u.ID)
 	})
 	return pgutil.UUID(u.ID)
 }

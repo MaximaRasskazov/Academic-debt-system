@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -36,26 +37,34 @@ var emailRegex = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
 // Sentinel-ошибки, на которые HTTP-слой маппит коды ответа.
 var (
-	ErrEmailTaken         = errors.New("auth: email уже зарегистрирован")
-	ErrInvalidEmail       = errors.New("auth: некорректный email")
-	ErrPasswordTooShort   = errors.New("auth: пароль слишком короткий")
-	ErrInvalidCredentials = errors.New("auth: неверный email или пароль")
-	ErrUserNotFound       = errors.New("auth: пользователь не найден")
-	ErrInvalidPassword    = errors.New("auth: текущий пароль неверен")
-	ErrSamePassword       = errors.New("auth: новый пароль совпадает с текущим")
+	ErrEmailTaken          = errors.New("auth: email уже зарегистрирован")
+	ErrInvalidEmail        = errors.New("auth: некорректный email")
+	ErrPasswordTooShort    = errors.New("auth: пароль слишком короткий")
+	ErrInvalidCredentials  = errors.New("auth: неверный email или пароль")
+	ErrUserNotFound        = errors.New("auth: пользователь не найден")
+	ErrInvalidPassword     = errors.New("auth: текущий пароль неверен")
+	ErrSamePassword        = errors.New("auth: новый пароль совпадает с текущим")
+	ErrEmulatorUnavailable = errors.New("auth: сервис деканата временно недоступен")
 )
+
+// EmulatorAuth — то, что auth-слою нужно от эмулятора: проверка
+// учётных данных. Интерфейс (а не *emulator.Client) развязывает
+// зависимость и упрощает тесты. nil = эмулятор-логин отключён.
+type EmulatorAuth interface {
+	AuthCheck(ctx context.Context, email, password string) (string, error)
+}
 
 // Service — обёртка над хранилищем и TokenService.
 type Service struct {
-	store  *repo.Store
-	tokens *token.Service
+	store    *repo.Store
+	tokens   *token.Service
+	emulator EmulatorAuth // может быть nil — тогда эмулятор-логин отключён
 }
 
-// New собирает Service. defaultRole загружается лениво при первом
-// вызове Register — это позволяет создать сервис до накатывания
-// миграций (полезно для unit-тестов на конфиг).
-func New(store *repo.Store, tokens *token.Service) *Service {
-	return &Service{store: store, tokens: tokens}
+// New собирает Service. emu может быть nil (тесты, отсутствие
+// EMULATOR_URL) — тогда вход возможен только для локальных юзеров.
+func New(store *repo.Store, tokens *token.Service, emu EmulatorAuth) *Service {
+	return &Service{store: store, tokens: tokens, emulator: emu}
 }
 
 // RegisterInput — параметры регистрации. MiddleName/Birthday/GroupName
@@ -146,10 +155,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput, ip string) (*R
 	return &Result{User: created, Pair: pair}, nil
 }
 
-// Login проверяет email+password и выдаёт пару токенов. Чтобы не
-// раскрывать факт существования email, при ненайденном пользователе
-// мы всё равно делаем bcrypt-сравнение с фиктивным хешем — это
-// выравнивает время ответа.
+// Login проверяет email+password и выдаёт пару токенов.
+//
+// Две ветки проверки пароля:
+//   - локальный юзер (есть password_hash): bcrypt-сравнение, как обычно.
+//     Это admin, dean и самозарегистрированные.
+//   - эмуляторный юзер (password_hash пустой): пароль не хранится у нас,
+//     спрашиваем эмулятор через AuthCheck. Так логинятся студенты и
+//     преподаватели, импортированные из деканата.
 func (s *Service) Login(ctx context.Context, email, password, ip string) (*Result, error) {
 	emailLower := strings.ToLower(strings.TrimSpace(email))
 
@@ -162,8 +175,16 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (*Resul
 		return nil, fmt.Errorf("lookup user: %w", err)
 	}
 
-	if err := checkPassword(user.PasswordHash, password); err != nil {
-		return nil, ErrInvalidCredentials
+	if user.PasswordHash == "" {
+		// Эмуляторный юзер — проверяем пароль на стороне деканата.
+		if err := s.loginViaEmulator(ctx, user, password); err != nil {
+			return nil, err
+		}
+	} else {
+		// Локальный юзер — обычная bcrypt-проверка.
+		if err := checkPassword(user.PasswordHash, password); err != nil {
+			return nil, ErrInvalidCredentials
+		}
 	}
 
 	pair, err := s.tokens.Issue(ctx, pgutil.UUID(user.ID), ip)
@@ -171,6 +192,29 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (*Resul
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
 	return &Result{User: user, Pair: pair}, nil
+}
+
+// loginViaEmulator проверяет пароль эмуляторного юзера через деканат.
+// Сетевую/любую неожиданную ошибку трактуем как «эмулятор недоступен»
+// (мягкий вариант) — чтобы на защите при моргнувшем эмуляторе юзер
+// увидел понятное «сервис недоступен», а не «неверный пароль».
+func (s *Service) loginViaEmulator(ctx context.Context, user queries.User, password string) error {
+	if s.emulator == nil {
+		// Эмулятор-логин отключён, а локального пароля нет — войти нельзя.
+		return ErrInvalidCredentials
+	}
+	// queries.User не селектит external_id, поэтому возвращённый эмулятором
+	// идентификатор не сверяем: email уникален, а эмулятор подтвердил пароль
+	// именно для этого email — связки по email достаточно.
+	extID, err := s.emulator.AuthCheck(ctx, user.Email, password)
+	if err != nil {
+		if errors.Is(err, emulator.ErrAuthInvalid) {
+			return ErrInvalidCredentials
+		}
+		return ErrEmulatorUnavailable
+	}
+	_ = extID
+	return nil
 }
 
 // Refresh — прокси к TokenService.Rotate. Здесь нужен сервис auth

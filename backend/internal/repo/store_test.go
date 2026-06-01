@@ -8,12 +8,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 )
+
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
 
 // testStore возвращает Store, подключённый к БД из TEST_DATABASE_URL.
 // Если переменная не задана — тест скипается (это интеграционный тест,
@@ -68,10 +76,10 @@ func TestStore_RunInTx_CommitsOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, email, got.Email)
 
-	// Cleanup: удаляем созданного пользователя, чтобы не накапливать
-	// мусор в dev-БД между прогонами.
+	// Cleanup: удаляем созданного пользователя со всеми зависимостями,
+	// чтобы не накапливать мусор в dev-БД между прогонами.
 	t.Cleanup(func() {
-		_, _ = s.Pool().Exec(ctx, "DELETE FROM users WHERE id = $1", got.ID)
+		_ = repo.CleanupUser(ctx, s.Pool(), got.ID)
 	})
 }
 
@@ -103,7 +111,7 @@ func TestStore_RunInTx_NestedQueriesShareTx(t *testing.T) {
 	ctx := context.Background()
 	email := uniqueEmail("nested")
 
-	var createdID interface{}
+	var createdID pgtype.UUID
 
 	err := s.RunInTx(ctx, func(q *queries.Queries) error {
 		user, err := q.CreateUser(ctx, newUserParams(email))
@@ -126,7 +134,7 @@ func TestStore_RunInTx_NestedQueriesShareTx(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		_, _ = s.Pool().Exec(ctx, "DELETE FROM users WHERE id = $1", createdID)
+		_ = repo.CleanupUser(ctx, s.Pool(), createdID)
 	})
 }
 

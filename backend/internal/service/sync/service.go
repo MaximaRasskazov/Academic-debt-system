@@ -43,11 +43,22 @@ type Service struct {
 	store        *repo.Store
 	client       *emulator.Client
 	systemUserID pgtype.UUID // UUID пользователя-системы (created_by в upsert'ах)
+
+	// groupNames — справочник group_id → name учебных групп. Перезагружается
+	// в начале каждого Sync(). Доступа из нескольких горутин нет: Sync
+	// вызывается шедулером по тику последовательно, изменения применяются
+	// в одном цикле без горутин — поэтому мьютекс не нужен.
+	groupNames map[string]string
 }
 
 // New создаёт сервис.
 func New(store *repo.Store, client *emulator.Client, systemUserID pgtype.UUID) *Service {
-	return &Service{store: store, client: client, systemUserID: systemUserID}
+	return &Service{
+		store:        store,
+		client:       client,
+		systemUserID: systemUserID,
+		groupNames:   make(map[string]string),
+	}
 }
 
 // Sync выполняет один цикл синхронизации: читает изменения из эмулятора
@@ -57,6 +68,12 @@ func (s *Service) Sync(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sync: get last_synced_at: %w", err)
 	}
+
+	// Загружаем справочник групп заранее, чтобы при upsert'е аккаунтов
+	// резолвить group_id → group_name без HTTP-запроса на каждого студента.
+	// Best-effort: при ошибке group_name просто не заполнится в этом
+	// прогоне (COALESCE в upsert сохранит прежнее значение).
+	s.loadGroups(ctx)
 
 	// При первом запуске делаем полный импорт справочников.
 	// Каждый этап проверяет наличие данных в БД — если они уже есть,
@@ -188,9 +205,12 @@ func (s *Service) applyChange(ctx context.Context, ch emulator.ChangeEntry) erro
 	case "debt":
 		return s.applyDebtChange(ctx, ch.NewValue)
 	default:
-		// "group" и любые будущие сущности — пропускаем без ошибки.
-		// Группы у нас в БД не репозитятся (BACK-01 решено: group_name
-		// хранится строкой в users.group_name, без отдельной таблицы).
+		// "group" и любые будущие сущности — отдельной таблицы групп нет
+		// (BACK-01: group_name хранится строкой в users.group_name). Сам
+		// change-объект группы пропускаем: название группы студента берётся
+		// из account.group_id и резолвится через справочник ListGroups
+		// (см. resolveGroupName в upsertAccount), который перезагружается
+		// в начале каждого Sync — поэтому переименование группы подхватится.
 		return nil
 	}
 }
@@ -292,6 +312,64 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 // захочет fetch по id), но при синхронизации через /changes он больше
 // не зовётся.
 
+// ── Группы ────────────────────────────────────────────────────────────────────
+
+// loadGroups перезагружает справочник group_id → name из эмулятора.
+// Групп единицы, поэтому тянем все разом в начале Sync, чтобы не делать
+// HTTP-запрос на каждого студента. Best-effort: при ошибке оставляем
+// прежний справочник (на первом прогоне — пустой), group_name тогда
+// просто не заполнится.
+func (s *Service) loadGroups(ctx context.Context) {
+	const pageSize = 100
+	names := make(map[string]string)
+	page := 1
+	for {
+		items, meta, err := s.client.ListGroups(ctx, page, pageSize)
+		if err != nil {
+			slog.Warn("sync: не удалось загрузить справочник групп, group_name может не заполниться", "err", err)
+			return
+		}
+		for _, g := range items {
+			if g.ID != "" && g.Name != "" {
+				names[g.ID] = g.Name
+			}
+		}
+		if page >= meta.TotalPages {
+			break
+		}
+		page++
+	}
+	s.groupNames = names
+	slog.Info("sync: справочник групп загружен", "count", len(names))
+}
+
+// resolveGroupName возвращает название группы по её ID для записи в
+// users.group_name. Сначала смотрит в предзагруженный справочник; если
+// группы там нет (создана в середине прогона) — лениво запрашивает
+// GetGroup и кэширует. Возвращает nil, если group_id пуст или группу не
+// удалось разрешить — тогда upsert не трогает существующий group_name.
+func (s *Service) resolveGroupName(ctx context.Context, groupID string) *string {
+	if groupID == "" {
+		return nil
+	}
+	if name, ok := s.groupNames[groupID]; ok {
+		if name == "" {
+			return nil
+		}
+		return &name
+	}
+	g, err := s.client.GetGroup(ctx, groupID)
+	if err != nil {
+		slog.Warn("sync: не удалось разрешить группу", "group_id", groupID, "err", err)
+		return nil
+	}
+	s.groupNames[groupID] = g.Name
+	if g.Name == "" {
+		return nil
+	}
+	return &g.Name
+}
+
 // ── Аккаунты (студенты / преподаватели) ──────────────────────────────────────
 
 // importAllAccounts постранично импортирует аккаунты нужной роли.
@@ -339,6 +417,14 @@ func (s *Service) upsertAccount(ctx context.Context, a emulator.AccountDTO) erro
 	if extID == "" {
 		extID = a.ID // fallback на ID аккаунта если linked_entity_id не заполнен
 	}
+
+	// Группа есть только у студентов. Резолвим group_id → name; у
+	// преподавателей group_id пуст → groupName == nil (group_name не трогаем).
+	var groupName *string
+	if roleSlug == "student" {
+		groupName = s.resolveGroupName(ctx, a.GroupID)
+	}
+
 	userID, err := s.store.UpsertUserFromSync(ctx, repo.UpsertUserParams{
 		Email:        a.Email,
 		FirstName:    a.FirstName,
@@ -346,6 +432,7 @@ func (s *Service) upsertAccount(ctx context.Context, a emulator.AccountDTO) erro
 		MiddleName:   a.MiddleName,
 		ExternalID:   extID,
 		PasswordHash: a.PasswordHash,
+		GroupName:    groupName,
 	})
 	if err != nil {
 		return fmt.Errorf("upsert user %s: %w", a.ID, err)

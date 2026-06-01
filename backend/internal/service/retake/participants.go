@@ -73,13 +73,7 @@ func (s *Service) AddStudent(ctx context.Context, retakeID, studentID, debtID, a
 	// создании пересдачи: до этого момента он не знает, что для него
 	// что-то запланировали. retake_scheduled — главное событие в его
 	// потоке нотификаций.
-	s.notifyStudent(ctx, studentID, notify.KindRetakeScheduled,
-		retakeBasePayload(
-			pgutil.UUID(current.ID),
-			pgutil.UUID(current.DisciplineID),
-			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
-			current.Building, current.Room,
-		))
+	s.notifyStudent(ctx, studentID, notify.KindRetakeScheduled, s.retakePayloadFor(ctx, current))
 	return nil
 }
 
@@ -103,15 +97,9 @@ func (s *Service) AddTeacher(ctx context.Context, retakeID, teacherID, actorID u
 		return err
 	}
 
-	// Преподаватель должен увидеть назначенную пересдачу в своей ленте так же,
-	// как студент: иначе он узнаёт только о статусе заявки, но не о назначении.
-	s.notifyUser(ctx, teacherID, notify.KindRetakeScheduled,
-		retakeBasePayload(
-			pgutil.UUID(current.ID),
-			pgutil.UUID(current.DisciplineID),
-			current.ScheduledAt.Time.Format("2006-01-02 15:04"),
-			current.Building, current.Room,
-		))
+	// Преподаватель узнаёт о назначении на пересдачу сразу после
+	// добавления — то же событие retake_scheduled, что и у студента.
+	s.notifyTeacher(ctx, teacherID, notify.KindRetakeScheduledTeacher, s.retakePayloadFor(ctx, current))
 	return nil
 }
 
@@ -246,6 +234,7 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		return ErrStudentNeedsDebt
 	}
 
+	var closedDebt queries.Debt
 	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		// 1. Оценка участнику. SQL содержит AND grade IS NULL — при гонке
 		// второй UPDATE вернёт ErrNoRows: возвращаем ErrAlreadyHasGrade,
@@ -265,7 +254,7 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 		// 2. Закрытие связанного долга. WHERE status='open' защищает
 		// от двойного закрытия — если долг уже graded/cancelled,
 		// q.GradeDebt вернёт ErrNoRows, откатит транзакцию.
-		_, err = q.GradeDebt(ctx, queries.GradeDebtParams{
+		closedDebt, err = q.GradeDebt(ctx, queries.GradeDebtParams{
 			ID:         participant.DebtID,
 			FinalGrade: &grade,
 			GradedBy:   pgutil.PgUUID(gradedBy),
@@ -291,6 +280,10 @@ func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUI
 	}); err != nil {
 		return err
 	}
+
+	// Обратный sync оценки в эмулятор — best-effort, в фоне.
+	s.sendGradeToEmulator(closedDebt.ExternalID,
+		pgutil.UUID(closedDebt.ID).String(), grade)
 
 	// Студент должен узнать оценку сразу, не дожидаясь email-дайджеста
 	// или ручного refresh. Payload минимальный — фронт сам подтянет

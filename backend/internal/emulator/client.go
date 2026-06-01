@@ -5,10 +5,12 @@
 package emulator
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -83,6 +85,20 @@ type AccountDTO struct {
 	Status         string  `json:"status"`
 	PasswordHash   string  `json:"password_hash"`
 	LinkedEntityID string  `json:"linked_entity_id"` // ID студента/преподавателя (используется в долгах)
+	GroupID        string  `json:"group_id"`         // ID учебной группы (только у студентов; резолвится в group_name через ListGroups)
+}
+
+// GroupDTO — данные учебной группы из эмулятора.
+// В нашей БД храним только Name (в users.group_name); остальные поля
+// (Faculty/Course/FlowName) эмулятор отдаёт, но мы их не репозитим —
+// отдельной таблицы групп нет (решение BACK-01).
+type GroupDTO struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ExternalID string `json:"external_id"`
+	Faculty    string `json:"faculty"`
+	Course     int    `json:"course"`
+	FlowName   string `json:"flow_name"`
 }
 
 // debtsListResponse — обёртка ответа GET /api/v1/debts (список).
@@ -133,6 +149,12 @@ type accountResponse struct {
 // accountsListResponse — обёртка ответа GET /api/v1/accounts (список).
 type accountsListResponse struct {
 	Data []AccountDTO   `json:"data"`
+	Meta paginationMeta `json:"meta"`
+}
+
+// groupsListResponse — обёртка ответа GET /api/v1/groups (список).
+type groupsListResponse struct {
+	Data []GroupDTO     `json:"data"`
 	Meta paginationMeta `json:"meta"`
 }
 
@@ -243,6 +265,33 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 	return &resp.Data, nil
 }
 
+// ListGroups возвращает учебные группы из эмулятора постранично.
+// Используется sync'ом для построения справочника group_id → name.
+func (c *Client) ListGroups(ctx context.Context, page, limit int) ([]GroupDTO, paginationMeta, error) {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", page))
+	params.Set("limit", fmt.Sprintf("%d", limit))
+
+	var resp groupsListResponse
+	if err := c.get(ctx, "/api/v1/groups?"+params.Encode(), &resp); err != nil {
+		return nil, paginationMeta{}, fmt.Errorf("list groups: %w", err)
+	}
+	return resp.Data, resp.Meta, nil
+}
+
+// GetGroup возвращает группу по её ID. В отличие от списка, одиночный
+// endpoint эмулятора отдаёт объект без обёртки {"data":...}, поэтому
+// декодируем напрямую в GroupDTO. Нужен sync'у как fallback, если в
+// аккаунте встретился group_id, которого не было в предзагруженном
+// справочнике (группа создана в середине прогона).
+func (c *Client) GetGroup(ctx context.Context, groupID string) (*GroupDTO, error) {
+	var dto GroupDTO
+	if err := c.get(ctx, "/api/v1/groups/"+url.PathEscape(groupID), &dto); err != nil {
+		return nil, fmt.Errorf("get group %s: %w", groupID, err)
+	}
+	return &dto, nil
+}
+
 // get выполняет GET-запрос с backoff на 429-ответы.
 // Эмулятор при 429 сообщает retry_after_seconds=30, поэтому ждём 35с.
 // RetryAfter — пауза между повторными попытками после 429.
@@ -314,3 +363,163 @@ var ErrNotFound = fmt.Errorf("emulator: не найдено")
 // retry. Sync-сервис должен ловить эту ошибку и НЕ сдвигать
 // last_synced_at, чтобы при следующем тике эти change'ы пришли снова.
 var ErrRateLimited = fmt.Errorf("emulator: rate limited (429)")
+
+// authCheckRequest — тело POST /api/v1/auth/check.
+type authCheckRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// authCheckResponse — успешный ответ auth/check (200).
+// Нас интересует только подтверждение и external_id для связки
+// с локальной записью пользователя.
+type authCheckResponse struct {
+	Success bool `json:"success"`
+	Account struct {
+		ExternalID string `json:"external_id"`
+		Email      string `json:"email"`
+		Role       string `json:"role"`
+	} `json:"account"`
+}
+
+// ErrAuthInvalid возвращается, когда эмулятор ответил 401 —
+// учётные данные неверны. Отличается от ErrRateLimited и сетевых
+// ошибок, чтобы auth-слой мог различить «неверный пароль» и
+// «эмулятор недоступен».
+var ErrAuthInvalid = fmt.Errorf("emulator: неверные учётные данные")
+
+// AuthCheck проверяет email+password на стороне эмулятора.
+// Возвращает external_id подтверждённого аккаунта при успехе,
+// ErrAuthInvalid при 401, или сетевую/прочую ошибку если эмулятор
+// недоступен (auth-слой трактует это как «сервис деканата лёг»).
+func (c *Client) AuthCheck(ctx context.Context, email, password string) (string, error) {
+	body, err := json.Marshal(authCheckRequest{Email: email, Password: password}) //nolint:gosec // G117: пароль намеренно передаётся эмулятору для верификации
+	if err != nil {
+		return "", fmt.Errorf("marshal auth check: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base+"/api/v1/auth/check", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build auth check request: %w", err)
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("do auth check: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", ErrAuthInvalid
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("auth check: эмулятор ответил %d", resp.StatusCode)
+	}
+
+	var out authCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode auth check: %w", err)
+	}
+	if !out.Success || out.Account.ExternalID == "" {
+		return "", ErrAuthInvalid
+	}
+	return out.Account.ExternalID, nil
+}
+
+// Grade — оценка для отправки в эмулятор.
+// Type: "numeric" (Value — int) или "pass_fail" (Value — "passed"/"failed").
+type Grade struct {
+	Type  string `json:"type"`
+	Value any    `json:"value"`
+}
+
+// ErrGradeRejected возвращается, когда эмулятор ответил 422 —
+// валидация тела не прошла. Это сигнал о баге маппинга на нашей
+// стороне, а не «эмулятор недоступен», поэтому ошибка отдельная.
+var ErrGradeRejected = fmt.Errorf("emulator: оценка отклонена валидацией")
+
+// debtGradeRequest — тело PATCH /api/v1/debts/{id}/grade.
+type debtGradeRequest struct {
+	Grade          Grade   `json:"grade"`
+	Comment        *string `json:"comment"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+// PatchDebtGrade закрывает долг в эмуляторе, проставляя оценку.
+// debtExternalID — идентификатор долга на стороне эмулятора (UUID,
+// который sync сохранил в debts.external_id). idempotencyKey —
+// стабильный ключ для защиты от двойной отправки.
+//
+// Ответы: 200 → nil; 422 → ErrGradeRejected (с reason в тексте для
+// лога); 404 → ErrNotFound; иной код/сетевой сбой → обычная ошибка
+// (трактуется вызывающим как «эмулятор недоступен»).
+func (c *Client) PatchDebtGrade(ctx context.Context, debtExternalID string, grade Grade, comment *string, idempotencyKey string) error {
+	body, err := json.Marshal(debtGradeRequest{
+		Grade:          grade,
+		Comment:        comment,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal grade request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		c.base+"/api/v1/debts/"+url.PathEscape(debtExternalID)+"/grade", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build patch grade request: %w", err)
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("do patch grade: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return ErrNotFound
+	case http.StatusUnprocessableEntity:
+		// 422 — валидация; вытаскиваем reason в обёртку для лога.
+		reason := readErrorReason(resp.Body)
+		if reason != "" {
+			return fmt.Errorf("%w: %s", ErrGradeRejected, reason)
+		}
+		return ErrGradeRejected
+	default:
+		return fmt.Errorf("patch grade: эмулятор ответил %d", resp.StatusCode)
+	}
+}
+
+// readErrorReason пытается достать человекочитаемую причину из тела
+// ошибки эмулятора ({"error":{"details":{"reason":"..."}}}). Любая
+// проблема разбора — пустая строка (для лога это не критично).
+func readErrorReason(body io.Reader) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+			Details struct {
+				Field  string `json:"field"`
+				Reason string `json:"reason"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(body).Decode(&e); err != nil {
+		return ""
+	}
+	if e.Error.Details.Reason != "" {
+		if e.Error.Details.Field != "" {
+			return e.Error.Details.Field + ": " + e.Error.Details.Reason
+		}
+		return e.Error.Details.Reason
+	}
+	return e.Error.Message
+}

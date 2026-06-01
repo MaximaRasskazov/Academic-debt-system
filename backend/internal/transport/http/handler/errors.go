@@ -47,6 +47,8 @@ func mapAuthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "password_too_short", "пароль слишком короткий")
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "неверный email или пароль")
+	case errors.Is(err, auth.ErrEmulatorUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "emulator_unavailable", "сервис деканата временно недоступен, попробуйте позже")
 	case errors.Is(err, auth.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, "user_not_found", "пользователь не найден")
 	case errors.Is(err, auth.ErrInvalidPassword):

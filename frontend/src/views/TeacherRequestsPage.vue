@@ -8,6 +8,7 @@ import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
 import { retakeRequestsApi } from '../api/retakeRequests'
 import { debtsApi } from '../api/debts'
+import { fmtDate as fmtDateTZ, fmtTime, toUtcISO } from '../utils/datetime'
 
 const sidebarOpen = ref(false)
 
@@ -49,6 +50,10 @@ function handleOutsideClick(e) {
 }
 onMounted(async () => {
   document.addEventListener('mousedown', handleOutsideClick)
+  // Старого префилла формы по route.query.retakeId больше нет: изменение
+  // уже назначенной пересдачи теперь идёт через модалку «Запросить
+  // изменения» на /retakes (POST /api/retake-change-requests), а не через
+  // редирект на форму создания. См. коммит про этот flow.
   await Promise.allSettled([
     loadMyRequests(),
     disciplinesApi.getAll({ limit: 500 }).then(r => { disciplines.value = r.data.items ?? [] }).catch(() => {}),
@@ -231,14 +236,11 @@ function onTimeInput(e) { e.target.value = e.target.value.replace(/\D/g, '').sli
 // Форматтеры даты/времени для таблицы «Мои заявки». Без них шаблон
 // вызывает _ctx.fmtDate is not a function и страница крашится в
 // рендере списка. Используются также в RequestsPage.vue — точные копии.
+// Дата/время в часовом поясе вуза (Ханты, UTC+5) — через utils/datetime,
+// а не зону устройства. fmtTime импортирован напрямую.
 function fmtDate(iso) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-}
-function fmtTime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return fmtDateTZ(iso, { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 function decreaseDuration() { if (duration.value > DURATION_MIN) duration.value -= DURATION_STEP }
 function increaseDuration()  { if (duration.value < DURATION_MAX) duration.value += DURATION_STEP }
@@ -262,9 +264,10 @@ async function submitForm() {
   if (!disciplineId.value)  { formError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)    { formError.value = 'Укажите дату'; return }
 
-  const [day, month, year] = retakeDate.value.split('.')
-  const scheduledDt = new Date(`${year}-${month}-${day}T${hourDisplay.value}:${minuteDisplay.value}:00`)
-  if (scheduledDt <= new Date()) { formError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+  // Время вводится в зоне вуза (Ханты, UTC+5) → toUtcISO собирает
+  // корректный UTC ISO, а не интерпретирует как зону устройства.
+  const scheduledAtISO = toUtcISO(retakeDate.value, `${hourDisplay.value}:${minuteDisplay.value}`)
+  if (new Date(scheduledAtISO) <= new Date()) { formError.value = 'Дата и время пересдачи должны быть в будущем'; return }
 
   const bld = building.value.trim()
   const rm  = room.value.trim()
@@ -273,14 +276,12 @@ async function submitForm() {
 
   if (!teacherCountOk.value) { formError.value = `Минимум ${minTeachers.value} преподавател${minTeachers.value > 1 ? 'я' : 'ь'}`; return }
 
-  const scheduledAt = scheduledDt.toISOString()
-
   formSubmitting.value = true
   try {
     await retakeRequestsApi.submit({
       discipline_id:    disciplineId.value,
       kind:             isCommission.value ? 'commission' : 'regular',
-      scheduled_at:     scheduledAt,
+      scheduled_at:     scheduledAtISO,
       duration_minutes: duration.value,
       building:         building.value,
       room:             room.value,

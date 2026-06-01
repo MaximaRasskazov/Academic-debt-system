@@ -9,6 +9,7 @@ import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { usersApi } from '../api/users'
 import { debtsApi } from '../api/debts'
+import { fmtDate as fmtDateTZ, fmtTime } from '../utils/datetime'
 
 const sidebarOpen = ref(false)
 
@@ -51,20 +52,18 @@ function disciplineName(retakeId) {
   const retake = retakeMap.value[retakeId]
   return retake ? (discMap.value[retake.discipline_id] || 'Дисциплина') : '—'
 }
-function retakeScheduled(retakeId) {
-  const retake = retakeMap.value[retakeId]
-  if (!retake?.scheduled_at) return null
-  return retake.scheduled_at
+function retakeDate(r) {
+  const retake = retakeMap.value[r.retake_id]
+  if (!retake?.scheduled_at) return '—'
+  return fmtDate(retake.scheduled_at)
 }
+// fmtDate с коротким форматом ДД.ММ.ГГГГ, время — fmtTime, обе в зоне вуза.
+const DATE_OPTS = { day: '2-digit', month: '2-digit', year: 'numeric' }
 function fmtDate(iso) {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  return fmtDateTZ(iso, DATE_OPTS)
 }
-function fmtTime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+// fmtTime импортирован из utils/datetime (зона вуза). fmtDateTime —
+// комбинация даты и времени, используется в карточках заявок.
 function fmtDateTime(iso) {
   if (!iso) return '—'
   return `${fmtDate(iso)} ${fmtTime(iso)}`

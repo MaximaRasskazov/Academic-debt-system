@@ -18,6 +18,13 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 )
 
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
 // secret — 32-байтовый ключ для тестов, чтобы не задавать через env.
 var secret = []byte("test-secret-must-be-at-least-32-bytes!!")
 
@@ -50,7 +57,7 @@ func seedUser(t *testing.T, s *repo.Store, prefix string) uuid.UUID {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = s.Pool().Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		_ = repo.CleanupUser(ctx, s.Pool(), u.ID)
 	})
 	return pgutil.UUID(u.ID)
 }

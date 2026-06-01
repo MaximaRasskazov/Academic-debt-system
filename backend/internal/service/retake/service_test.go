@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -20,6 +22,10 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 )
+
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
 
 type fixture struct {
 	store *repo.Store
@@ -63,7 +69,7 @@ func seedUser(t *testing.T, store *repo.Store, prefix string) uuid.UUID {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = store.Pool().Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		_ = repo.CleanupUser(ctx, store.Pool(), u.ID)
 	})
 	return pgutil.UUID(u.ID)
 }
@@ -372,4 +378,66 @@ func TestRetake_ListForUser_OnlyOwn(t *testing.T) {
 	rowsB, err := f.svc.ListForUser(context.Background(), studentB)
 	require.NoError(t, err)
 	require.Empty(t, rowsB)
+}
+
+type gradeCall struct {
+	extID string
+	grade emulator.Grade
+	idem  string
+}
+
+// mockGradeSender потокобезопасен: write-back идёт в фоновой горутине.
+type mockGradeSender struct {
+	mu    sync.Mutex
+	calls []gradeCall
+}
+
+func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, gradeCall{debtExternalID, grade, idempotencyKey})
+	return nil
+}
+
+// waitCalls ждёт n вызовов фоновой отправки и возвращает их копию.
+func (m *mockGradeSender) waitCalls(t *testing.T, n int) []gradeCall {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.calls) >= n
+	}, 2*time.Second, 10*time.Millisecond, "ожидали %d вызовов PatchDebtGrade", n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]gradeCall, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func TestRetake_GradeStudent_SyncsToEmulator(t *testing.T) {
+	f := setup(t)
+	teacher := seedUser(t, f.store, "tr-gsync")
+	student := seedUser(t, f.store, "st-gsync")
+	dean := seedUser(t, f.store, "dean-gsync")
+	discID := seedDiscipline(t, f, "GSYNC", teacher, student)
+
+	sender := &mockGradeSender{}
+	f.svc.SetGradeSender(sender)
+
+	extID := "ext-retake-debt-777"
+	debtRow, err := f.debt.Create(context.Background(), debt.CreateInput{
+		StudentID: student, DisciplineID: discID, ExternalID: &extID,
+	}, teacher)
+	require.NoError(t, err)
+
+	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
+	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, pgutil.UUID(debtRow.ID), dean))
+	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 3, teacher))
+
+	calls := sender.waitCalls(t, 1)
+	require.Len(t, calls, 1, "PatchDebtGrade должен быть вызван при выставлении оценки через пересдачу")
+	require.Equal(t, "ext-retake-debt-777", calls[0].extID)
+	require.Equal(t, "numeric", calls[0].grade.Type)
+	require.Equal(t, 3, calls[0].grade.Value)
+	require.NotEmpty(t, calls[0].idem)
 }

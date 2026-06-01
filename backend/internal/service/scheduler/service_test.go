@@ -21,6 +21,13 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
 )
 
+// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
+// мусор (@test.local). Per-test cleanup может не сработать при гонках
+// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
 type fixture struct {
 	store *repo.Store
 	disc  *discipline.Service
@@ -63,7 +70,7 @@ func seedUser(t *testing.T, store *repo.Store, prefix string) uuid.UUID {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = store.Pool().Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		_ = repo.CleanupUser(ctx, store.Pool(), u.ID)
 	})
 	return pgutil.UUID(u.ID)
 }

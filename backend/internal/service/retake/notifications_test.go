@@ -114,9 +114,12 @@ func TestNotify_RetakeScheduled_OnAddTeacher(t *testing.T) {
 	require.NoError(t, f.svc.AddTeacher(context.Background(),
 		pgutil.UUID(r.ID), teacher, dean))
 
+	// Преподаватель получает отдельный тип retake_scheduled_teacher
+	// (свой email-шаблон), а не студенческий retake_scheduled — см.
+	// participants.go AddTeacher → notifyTeacher.
 	require.True(t,
-		hasUnreadKind(t, f.store, f.notifySvc, teacher.String(), notify.KindRetakeScheduled),
-		"преподаватель должен получить retake_scheduled при добавлении в пересдачу")
+		hasUnreadKind(t, f.store, f.notifySvc, teacher.String(), notify.KindRetakeScheduledTeacher),
+		"преподаватель должен получить retake_scheduled_teacher при добавлении в пересдачу")
 }
 
 func TestNotify_RetakeUpdated_OnScheduleChange(t *testing.T) {
