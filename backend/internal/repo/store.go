@@ -335,6 +335,27 @@ func (s *Store) CountSyncedUsers(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// CountSyncedStudentsWithoutGroup — сколько импортированных из эмулятора
+// студентов ещё без group_name. Используется sync'ом для разового back-fill
+// групп после внедрения feat/sync-student-groups: до него студенты были
+// засинхронены с пустой группой, а /changes их не переобновит, пока они
+// не изменятся в эмуляторе. external_id IS NOT NULL — признак sync-источника;
+// JOIN role_user/roles ограничивает выборку студентами (у преподавателей
+// группы нет, их NULL — норма и back-fill трогать не должен).
+func (s *Store) CountSyncedStudentsWithoutGroup(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT u.id)
+		FROM users u
+		JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
+		JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
+		WHERE u.external_id IS NOT NULL
+		  AND u.group_name IS NULL
+		  AND r.slug = 'student'
+	`).Scan(&n)
+	return n, err
+}
+
 // CountDebts — количество долгов из эмулятора. См. CountDisciplines.
 func (s *Store) CountDebts(ctx context.Context) (int64, error) {
 	var n int64

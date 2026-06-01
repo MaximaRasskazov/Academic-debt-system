@@ -75,6 +75,22 @@ func (s *Service) Sync(ctx context.Context) error {
 	// прогоне (COALESCE в upsert сохранит прежнее значение).
 	s.loadGroups(ctx)
 
+	// Разовый back-fill групп: студенты, засинхроненные ДО feat/sync-student-groups,
+	// имеют group_name = NULL и не переобновятся через /changes, пока не изменятся
+	// в эмуляторе (эмулятор кладёт в /changes только реально изменившиеся аккаунты).
+	// Если справочник групп непуст и такие студенты есть — переимпортируем
+	// студенческие аккаунты: upsertAccount проставит group_name, COALESCE в
+	// UpsertUserFromSync остального не тронет. Условие самозатухающее — как только
+	// NULL-студентов не останется, back-fill больше не запускается.
+	if len(s.groupNames) > 0 {
+		if n, _ := s.store.CountSyncedStudentsWithoutGroup(ctx); n > 0 {
+			slog.Info("sync: back-fill групп студентов", "without_group", n)
+			if err := s.importAllAccounts(ctx, "student"); err != nil {
+				slog.Warn("sync: ошибка back-fill групп студентов", "err", err)
+			}
+		}
+	}
+
 	// При первом запуске делаем полный импорт справочников.
 	// Каждый этап проверяет наличие данных в БД — если они уже есть,
 	// пропускаем чтобы не тратить rate-limit эмулятора впустую.

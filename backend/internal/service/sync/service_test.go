@@ -237,3 +237,80 @@ func TestSync_StudentAccount_GroupNameViaLazyFallback(t *testing.T) {
 	require.NotNil(t, group, "group_name должен заполниться через lazy GetGroup")
 	require.Equal(t, "ПИ-88", *group, "имя могло прийти только через fallback (список /groups пуст)")
 }
+
+// accountsListJSON собирает тело GET /api/v1/accounts (список) с одним
+// студентом, несущим group_id. total_pages=1 — importAllAccounts читает
+// одну страницу и останавливается.
+func accountsListJSON(email, linkedID, groupID string) string {
+	return `{"data":[{"id":"acc1","email":"` + email + `",` +
+		`"first_name":"Имя","last_name":"Фам","role":"student","status":"active",` +
+		`"password_hash":"$2b$12$x","linked_entity_id":"` + linkedID + `","group_id":"` + groupID + `"}],` +
+		`"meta":{"page":1,"limit":100,"total":1,"total_pages":1}}`
+}
+
+// TestSync_BackfillsStudentGroup: студент, засинхроненный ДО появления
+// feat/sync-student-groups (group_name = NULL), должен получить группу на
+// ближайшем тике через разовый back-fill — без изменения в /changes.
+// Это регресс на «5-минутный тик не наполняет старые группы»: дельты по
+// неизменившимся аккаунтам не приходят, чинит именно back-fill по
+// CountSyncedStudentsWithoutGroup + повторный importAllAccounts.
+func TestSync_BackfillsStudentGroup(t *testing.T) {
+	suf := time.Now().Format("150405.000000000")
+	email := fmt.Sprintf("grp-backfill-%s@test.local", suf)
+	linkedID := "stu-backfill-" + suf
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/groups":
+			_, _ = w.Write([]byte(`{"data":[{"id":"g-bf","name":"БФ-01","external_id":"EXT-GRP-BF1","faculty":"Ф","course":2,"flow_name":"П"}],"meta":{"page":1,"limit":100,"total":1,"total_pages":1}}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/accounts"):
+			// Листинг для back-fill: студент с group_id, ещё без группы в БД.
+			_, _ = w.Write([]byte(accountsListJSON(email, linkedID, "g-bf")))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/changes"):
+			// Никаких дельт — старый студент в эмуляторе не менялся.
+			_, _ = w.Write([]byte(`{"data":[],"meta":{"next_since":"","has_more":false}}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":[],"meta":{"page":1,"limit":100,"total":0,"total_pages":0}}`))
+		}
+	}
+	svc, store, _ := setupSync(t, handler)
+	ctx := context.Background()
+
+	// Сеем «старого» студента так, как его оставил бы pre-feature sync:
+	// external_id есть, роль student, group_name = NULL.
+	uid, err := store.UpsertUserFromSync(ctx, repo.UpsertUserParams{
+		Email:        email,
+		FirstName:    "Имя",
+		LastName:     "Фам",
+		ExternalID:   linkedID,
+		PasswordHash: "$2b$12$x",
+		GroupName:    nil, // ← как до фичи
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repo.CleanupUser(context.Background(), store.Pool(), uid) })
+	require.NoError(t, store.AssignRoleFromSync(ctx, uid, systemUserUUID, "student"))
+
+	// Sanity: до Sync группа пустая.
+	_, group0, found0 := readUserGroup(t, store, email)
+	require.True(t, found0)
+	require.Nil(t, group0, "перед back-fill group_name должен быть NULL")
+
+	// Не-epoch → ветка первого полного импорта НЕ срабатывает; проверяем
+	// именно back-fill, а не первичный импорт.
+	setLastSynced(t, store, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+
+	require.NoError(t, svc.Sync(ctx))
+
+	_, group, found := readUserGroup(t, store, email)
+	require.True(t, found)
+	require.NotNil(t, group, "back-fill должен был проставить group_name старому студенту")
+	require.Equal(t, "БФ-01", *group)
+
+	// Идемпотентность: повторный Sync не ломает данные (NULL-студентов уже
+	// нет → back-fill не должен запускаться, группа сохраняется).
+	require.NoError(t, svc.Sync(ctx))
+	_, group2, _ := readUserGroup(t, store, email)
+	require.NotNil(t, group2)
+	require.Equal(t, "БФ-01", *group2)
+}
