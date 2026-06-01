@@ -23,18 +23,8 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 )
 
-// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
-// мусор (@test.local). Per-test cleanup может не сработать при гонках
-// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
 func TestMain(m *testing.M) {
-	code := m.Run()
-	if dsn := os.Getenv("TEST_DATABASE_URL"); dsn != "" {
-		if pool, err := pgxpool.New(context.Background(), dsn); err == nil {
-			_ = repo.CleanupAllTestUsers(context.Background(), pool)
-			pool.Close()
-		}
-	}
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 type fixture struct {

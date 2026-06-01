@@ -31,14 +31,7 @@ import (
 // мусор (@test.local). Per-test cleanup может не сработать при гонках
 // параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
 func TestMain(m *testing.M) {
-	code := m.Run()
-	if dsn := os.Getenv("TEST_DATABASE_URL"); dsn != "" {
-		if pool, err := pgxpool.New(context.Background(), dsn); err == nil {
-			_ = repo.CleanupAllTestUsers(context.Background(), pool)
-			pool.Close()
-		}
-	}
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 var jwtSecret = []byte("test-secret-must-be-at-least-32-bytes!!")
