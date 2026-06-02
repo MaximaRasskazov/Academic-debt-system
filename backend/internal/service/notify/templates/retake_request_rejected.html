@@ -1,0 +1,7 @@
+{{define "heading"}}Заявка на пересдачу отклонена{{end}}
+{{define "content"}}
+<p>Здравствуйте!</p>
+<p>Деканат отклонил вашу заявку на пересдачу{{with .discipline}} по дисциплине <strong>{{.}}</strong>{{end}}.</p>
+{{with .decision_reason}}<div class="reason"><strong>Причина отклонения:</strong> {{.}}</div>{{end}}
+<p>Для уточнения деталей обратитесь к куратору или в деканат.</p>
+{{end}}

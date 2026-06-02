@@ -241,12 +241,21 @@ func (s *Service) UpdateSchedule(ctx context.Context, id uuid.UUID, in UpdateSch
 		return queries.Retake{}, err
 	}
 
-	// Уведомляем всех студентов-участников. Шлём по обновлённой записи,
-	// чтобы payload содержал актуальное время/место — иначе фронт
-	// получит расхождение со списком пересдач.
-	updatePayload := s.retakePayloadFor(ctx, updated)
-	s.notifyAllStudents(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdated, updatePayload)
-	s.notifyAllTeachers(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdatedTeacher, updatePayload)
+	// Рассылку «пересдача перенесена» шлём ВСЕМ участникам только если
+	// реально поменялось расписание (место/время/день/длительность).
+	// Правка прочих полей (например notes) не должна спамить участников —
+	// уведомления о составе шлёт отдельно add/removeParticipant адресно.
+	scheduleChanged := current.Building != updated.Building ||
+		current.Room != updated.Room ||
+		!current.ScheduledAt.Time.Equal(updated.ScheduledAt.Time) ||
+		current.DurationMinutes != updated.DurationMinutes
+	if scheduleChanged {
+		// Шлём по обновлённой записи, чтобы payload содержал актуальное
+		// время/место — иначе фронт получит расхождение со списком пересдач.
+		updatePayload := s.retakePayloadFor(ctx, updated)
+		s.notifyAllStudents(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdated, updatePayload)
+		s.notifyAllTeachers(ctx, pgutil.UUID(updated.ID), notify.KindRetakeUpdatedTeacher, updatePayload)
+	}
 
 	return updated, nil
 }

@@ -284,6 +284,17 @@ const editStudentOpen    = ref(false)
 const editTeacherOpen    = ref(false)
 let editStudentBlur = null, editTeacherBlur = null
 
+// Снимок исходного состава при открытии — по нему в saveEdit считаем
+// диф (кого добавить / кого снять). До «Сохранить» изменения состава
+// живут только локально и на бэк не уходят.
+const editOriginal = ref({ teacherIds: [], studentIds: [] })
+
+const MIN_STUDENTS = 1
+function minTeachers() {
+  const t = editTarget.value
+  return t?.min_teachers ?? (t?.kind === 'commission' ? 3 : 1)
+}
+
 const editFilteredStudents = computed(() => {
   const q = editStudentSearch.value.toLowerCase()
   const enrolled = new Set(editParticipants.value.students.map(s => s.user_id))
@@ -380,6 +391,11 @@ async function openEdit(r) {
         teachers: parts.filter(p => p.kind === 'teacher' || p.kind === 'commission_member').map(enrich),
         students: parts.filter(p => p.kind === 'student').map(enrich),
       }
+      // Запоминаем исходный состав для дифа при сохранении.
+      editOriginal.value = {
+        teacherIds: editParticipants.value.teachers.map(p => p.user_id),
+        studentIds: editParticipants.value.students.map(p => p.user_id),
+      }
     }
 
     const debtMap = {}
@@ -388,16 +404,17 @@ async function openEdit(r) {
         if (d.discipline_id === r.discipline_id && d.status === 'open') debtMap[d.student_id] = d.id
       }
     }
+    // Доступные для добавления храним ПОЛНЫМИ (включая уже зачисленных) —
+    // видимость в выпадашке рулит computed-фильтр по editParticipants.
+    // Так снятый локально участник снова появляется в списке и его можно
+    // вернуть до сохранения.
     if (studRes.status === 'fulfilled') {
-      const enrolledIds = new Set(editParticipants.value.students.map(p => p.user_id))
       editAllStudents.value = (studRes.value.data.items ?? [])
-        .filter(u => debtMap[u.id] && !enrolledIds.has(u.id))
+        .filter(u => debtMap[u.id])
         .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email, group: u.group_name ?? '', debtId: debtMap[u.id] }))
     }
     if (teachRes.status === 'fulfilled') {
-      const enrolledIds = new Set(editParticipants.value.teachers.map(p => p.user_id))
       editAllTeachers.value = (teachRes.value.data.items ?? [])
-        .filter(u => !enrolledIds.has(u.id))
         .map(u => ({ id: u.id, name: userNameMap[u.id]?.name || u.email }))
     }
   } finally {
@@ -420,32 +437,39 @@ function onHourBlur()   { editForm.hour   = String(clamp(parseInt(editForm.hour,
 function onMinuteBlur() { editForm.minute = String(clamp(parseInt(editForm.minute, 10), 0, 59)).padStart(2, '0') }
 function onTimeKey(e)   { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
 
-async function removeParticipant(type, userId) {
-  try {
-    if (type === 'teacher') {
-      await retakesApi.removeTeacher(editTarget.value.id, userId)
-      editParticipants.value.teachers = editParticipants.value.teachers.filter(p => p.user_id !== userId)
-    } else {
-      await retakesApi.removeStudent(editTarget.value.id, userId)
-      editParticipants.value.students = editParticipants.value.students.filter(p => p.user_id !== userId)
+// Add/remove работают ТОЛЬКО локально — фактические вызовы API уходят
+// в saveEdit по «Сохранить». Здесь же держим клиентскую проверку п.5,
+// чтобы не дать оголить состав (бэк продублирует её как authoritative).
+function removeParticipant(type, userId) {
+  editError.value = ''
+  if (type === 'teacher') {
+    if (editParticipants.value.teachers.length <= minTeachers()) {
+      editError.value = editTarget.value?.kind === 'commission'
+        ? 'В комиссии должно остаться не меньше 3 преподавателей'
+        : 'Должен остаться хотя бы один преподаватель'
+      return
     }
-  } catch { editError.value = 'Ошибка при удалении участника' }
+    editParticipants.value.teachers = editParticipants.value.teachers.filter(p => p.user_id !== userId)
+  } else {
+    if (editParticipants.value.students.length <= MIN_STUDENTS) {
+      editError.value = 'В пересдаче должен остаться хотя бы один студент'
+      return
+    }
+    editParticipants.value.students = editParticipants.value.students.filter(p => p.user_id !== userId)
+  }
 }
 
-async function addParticipant(type, user) {
-  try {
-    if (type === 'teacher') {
-      await retakesApi.addTeacher(editTarget.value.id, user.id)
-      editParticipants.value.teachers.push({ user_id: user.id, first_name: '', last_name: user.name, kind: 'teacher' })
-      editTeacherSearch.value = ''
-      editTeacherOpen.value = false
-    } else {
-      await retakesApi.addStudent(editTarget.value.id, { student_id: user.id, debt_id: user.debtId })
-      editParticipants.value.students.push({ user_id: user.id, first_name: '', last_name: user.name, group: user.group, kind: 'student' })
-      editStudentSearch.value = ''
-      editStudentOpen.value = false
-    }
-  } catch { editError.value = 'Ошибка при добавлении участника' }
+function addParticipant(type, user) {
+  editError.value = ''
+  if (type === 'teacher') {
+    editParticipants.value.teachers.push({ user_id: user.id, name: user.name, last_name: user.name, kind: 'teacher' })
+    editTeacherSearch.value = ''
+    editTeacherOpen.value = false
+  } else {
+    editParticipants.value.students.push({ user_id: user.id, name: user.name, last_name: user.name, group: user.group, kind: 'student', debtId: user.debtId })
+    editStudentSearch.value = ''
+    editStudentOpen.value = false
+  }
 }
 
 function participantName(p) {
@@ -458,32 +482,67 @@ async function saveEdit() {
   editError.value = ''
   editSaving.value = true
   try {
-    // Дата берётся из исходной пересдачи (в зоне вуза), часы/минуты —
-    // из формы. Собираем UTC-ISO явно через зону вуза.
+    const id = editTarget.value.id
+
+    // 1) Диф состава относительно снимка при открытии.
+    const origT = new Set(editOriginal.value.teacherIds)
+    const origS = new Set(editOriginal.value.studentIds)
+    const curT  = editParticipants.value.teachers
+    const curS  = editParticipants.value.students
+    const curTids = new Set(curT.map(p => p.user_id))
+    const curSids = new Set(curS.map(p => p.user_id))
+
+    const teachersToAdd    = curT.filter(p => !origT.has(p.user_id))
+    const studentsToAdd    = curS.filter(p => !origS.has(p.user_id))
+    const teachersToRemove = [...origT].filter(uid => !curTids.has(uid))
+    const studentsToRemove = [...origS].filter(uid => !curSids.has(uid))
+
+    // 2) Сначала добавляем, потом удаляем — чтобы при замене (снять одного,
+    //    добавить другого) не нарушить минимум преподавателей на полпути.
+    for (const t of teachersToAdd) await retakesApi.addTeacher(id, t.user_id)
+    for (const s of studentsToAdd) await retakesApi.addStudent(id, { student_id: s.user_id, debt_id: s.debtId })
+    for (const uid of teachersToRemove) await retakesApi.removeTeacher(id, uid)
+    for (const uid of studentsToRemove) await retakesApi.removeStudent(id, uid)
+
+    // 3) Расписание шлём только если оно реально изменилось — иначе лишний
+    //    апдейт (бэк всё равно не разошлёт уведомления, но не плодим записи).
     const p = partsInTZ(editTarget.value.scheduled_at)
     const newScheduledAt = toUtcISO(
       `${p.year}-${p.month}-${p.day}`,
       `${editForm.hour}:${editForm.minute}`,
     )
-    await retakesApi.update(editTarget.value.id, {
-      building:         editForm.building,
-      room:             editForm.room,
-      duration_minutes: editForm.duration,
-      scheduled_at:     newScheduledAt,
-    })
-    const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
-    if (idx !== -1) {
-      retakes.value[idx] = {
-        ...retakes.value[idx],
+    const scheduleChanged =
+      (editForm.building || '') !== (editTarget.value.building || '') ||
+      (editForm.room || '')     !== (editTarget.value.room || '') ||
+      Number(editForm.duration) !== Number(editTarget.value.duration_minutes) ||
+      editForm.hour   !== p.hour ||
+      editForm.minute !== p.minute
+
+    if (scheduleChanged) {
+      await retakesApi.update(id, {
         building:         editForm.building,
         room:             editForm.room,
         duration_minutes: editForm.duration,
         scheduled_at:     newScheduledAt,
+      })
+      const idx = retakes.value.findIndex(r => r.id === id)
+      if (idx !== -1) {
+        retakes.value[idx] = {
+          ...retakes.value[idx],
+          building:         editForm.building,
+          room:             editForm.room,
+          duration_minutes: editForm.duration,
+          scheduled_at:     newScheduledAt,
+        }
       }
     }
     closeEdit()
-  } catch {
-    editError.value = 'Ошибка при сохранении'
+  } catch (e) {
+    // Бэк-guard п.5 (последний студент / минимум преподавателей) → 409.
+    const code = e?.response?.data?.error
+    if (code === 'last_student')      editError.value = 'В пересдаче должен остаться хотя бы один студент'
+    else if (code === 'min_teachers') editError.value = 'Преподавателей не может быть меньше минимально допустимого'
+    else editError.value = 'Ошибка при сохранении'
   } finally {
     editSaving.value = false
   }

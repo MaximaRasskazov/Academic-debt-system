@@ -5,16 +5,22 @@ import { useToastsStore } from './toasts'
 
 // Человекочитаемые метки для каждого kind — показываем в toast и dropdown.
 const KIND_LABELS = {
-  retake_scheduled:         'Назначена пересдача',
-  retake_updated:           'Изменено расписание пересдачи',
-  retake_cancelled:         'Пересдача отменена',
-  retake_grade_received:    'Получена оценка за пересдачу',
-  teacher_request_approved: 'Заявка на преподавателя одобрена',
-  teacher_request_rejected: 'Заявка на преподавателя отклонена',
-  retake_change_approved:   'Изменение пересдачи одобрено',
-  retake_change_rejected:   'Изменение пересдачи отклонено',
-  retake_request_approved:  'Заявка на пересдачу одобрена',
-  retake_request_rejected:  'Заявка на пересдачу отклонена',
+  retake_scheduled:                   'Назначена пересдача',
+  retake_updated:                     'Изменено расписание пересдачи',
+  retake_cancelled:                   'Пересдача отменена',
+  retake_grade_received:              'Получена оценка за пересдачу',
+  retake_scheduled_teacher:           'Вы назначены на пересдачу',
+  retake_updated_teacher:             'Изменено расписание пересдачи',
+  retake_cancelled_teacher:           'Пересдача отменена',
+  retake_participant_removed:         'Вы сняты с пересдачи',
+  retake_participant_removed_teacher: 'Вы сняты с приёма пересдачи',
+  debt_created:                       'Зафиксирована задолженность',
+  teacher_request_approved:           'Заявка на преподавателя одобрена',
+  teacher_request_rejected:           'Заявка на преподавателя отклонена',
+  retake_change_approved:             'Изменение пересдачи одобрено',
+  retake_change_rejected:             'Изменение пересдачи отклонено',
+  retake_request_approved:            'Заявка на пересдачу одобрена',
+  retake_request_rejected:            'Заявка на пересдачу отклонена',
 }
 
 export function kindLabel(kind) {

@@ -1,26 +1,6 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <title>Получена оценка за пересдачу</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 24px; }
-    .header { background: #2e7d32; color: #fff; padding: 20px 24px; border-radius: 6px 6px 0 0; }
-    .body   { border: 1px solid #e0e0e0; border-top: none; padding: 24px; border-radius: 0 0 6px 6px; }
-    .field  { margin: 12px 0; }
-    .label  { font-weight: bold; color: #555; }
-    .grade  { font-size: 32px; font-weight: bold; color: #2e7d32; }
-  </style>
-</head>
-<body>
-  <div class="header"><h2 style="margin:0">🎓 Получена оценка за пересдачу</h2></div>
-  <div class="body">
-    <p>Уважаемый студент,</p>
-    <p>Преподаватель выставил оценку за пересдачу. Связанный академический долг закрыт.</p>
-
-    <div class="field"><span class="label">Оценка:</span> <span class="grade">{{.grade}}</span></div>
-
-    <p>Подробную историю можно посмотреть в личном кабинете в разделе «Долги».</p>
-  </div>
-</body>
-</html>
+{{define "heading"}}Выставлена оценка за пересдачу{{end}}
+{{define "content"}}
+<p>Здравствуйте!</p>
+<p>По результатам пересдачи{{with .discipline}} по дисциплине <strong>{{.}}</strong>{{end}} вам выставлена итоговая оценка{{with .grade}}: <strong>{{.}}</strong>{{end}}.</p>
+<p>Связанная академическая задолженность закрыта. Подробности доступны в личном кабинете в разделе «Долги».</p>
+{{end}}

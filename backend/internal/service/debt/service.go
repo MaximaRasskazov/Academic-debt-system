@@ -177,15 +177,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput, issuedBy uuid.UUID
 	}
 
 	// Best-effort уведомление студенту. Ошибка не откатывает долг.
+	// Payload обогащаем именем дисциплины и заметкой — чтобы письмо
+	// было информативным, а не показывало голый id.
 	if s.notify != nil {
+		payload := map[string]any{
+			"debt_id":       pgutil.UUID(created.ID).String(),
+			"discipline_id": in.DisciplineID.String(),
+			"issued_by":     issuedBy.String(),
+		}
+		if disc, err := s.store.GetDisciplineByID(ctx, pgutil.PgUUID(in.DisciplineID)); err == nil {
+			payload["discipline"] = disc.Name
+		}
+		if in.Notes != nil {
+			payload["notes"] = *in.Notes
+		}
 		if err := s.notify.Notify(ctx, notify.Event{
-			UserID: in.StudentID,
-			Kind:   notify.KindDebtCreated,
-			Payload: map[string]any{
-				"debt_id":       pgutil.UUID(created.ID).String(),
-				"discipline_id": in.DisciplineID.String(),
-				"issued_by":     issuedBy.String(),
-			},
+			UserID:  in.StudentID,
+			Kind:    notify.KindDebtCreated,
+			Payload: payload,
 		}); err != nil {
 			slog.Warn("debt: не удалось отправить уведомление о долге",
 				"debt_id", pgutil.UUID(created.ID).String(), "err", err)
