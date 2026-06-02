@@ -1,0 +1,122 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{template "heading" .}}</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #eef0f6;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+      color: #1a1d24;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { width: 100%; background: #eef0f6; padding: 32px 12px; }
+    .container {
+      max-width: 560px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 8px 28px -8px rgba(20, 22, 60, 0.18);
+    }
+    .header {
+      background: linear-gradient(135deg, #2b5cff, #8b3df0);
+      padding: 28px 32px;
+      color: #ffffff;
+    }
+    .brandbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 18px;
+    }
+    .brandbar .logo { display: inline-flex; flex: 0 0 auto; }
+    .brandbar .logo svg { display: block; height: 34px; width: auto; }
+    .brandbar .brandname {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      line-height: 1.35;
+      color: #ffffff;
+      opacity: 0.95;
+    }
+    .header h1 { margin: 0; font-size: 21px; font-weight: 600; line-height: 1.3; }
+    .content { padding: 28px 32px 8px; font-size: 15px; line-height: 1.6; }
+    .content p { margin: 0 0 14px; }
+    .details {
+      margin: 18px 0;
+      border: 1px solid #e6e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .details .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 11px 16px;
+      font-size: 14px;
+      border-bottom: 1px solid #eef0f6;
+    }
+    .details .row:last-child { border-bottom: none; }
+    .details .label { color: #6b7280; }
+    .details .value { color: #1a1d24; font-weight: 600; text-align: right; }
+    .reason {
+      margin: 16px 0;
+      padding: 12px 16px;
+      background: rgba(59, 63, 224, 0.06);
+      border-left: 3px solid #3b3fe0;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #2a2e9e;
+    }
+    .footer {
+      padding: 20px 32px 28px;
+      font-size: 12px;
+      color: #9aa0ad;
+      line-height: 1.5;
+    }
+    .footer a { color: #3b3fe0; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="container">
+      <div class="header">
+        <div class="brandbar">
+          <span class="logo">
+            <svg width="28" height="48" viewBox="0 0 28 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M27.2564 22.6768H20.465L20.4423 33.9677C20.4721 34.8625 20.3254 35.7545 20.0105 36.5926C19.6956 37.4308 19.2187 38.1987 18.6071 38.8525C17.9954 39.5064 17.261 40.0333 16.4457 40.4033C15.6304 40.7733 14.7502 40.9791 13.8553 41.0089C12.9605 41.0388 12.0685 40.892 11.2304 40.5772C10.3922 40.2623 9.62434 39.7854 8.9705 39.1737C8.31666 38.5621 7.7897 37.8276 7.4197 37.0123C7.0497 36.197 6.84392 35.3168 6.81409 34.422V22.6768H0.0317989L0 33.9677C0 34.0063 0 34.0427 0 34.0813C0.00899065 37.6316 1.40472 41.0379 3.88953 43.5738C6.37433 46.1096 9.75156 47.5743 13.301 47.6555C16.8504 47.7367 20.291 46.4279 22.8892 44.0084C25.4873 41.5888 27.0373 38.2498 27.2087 34.7036L27.2564 22.6768Z" fill="#ffffff"/>
+              <path d="M27.2473 13.635L22.7068 9.08999L13.6259 18.1777L4.54046 9.08545L0 13.6304L10.2416 23.8834V36.3418H17.033V23.8607L27.2473 13.635Z" fill="#ffffff"/>
+              <path d="M11.352 2.27136L13.6233 0L15.8947 2.27136L13.6233 4.54273L15.8947 6.81409L18.1638 4.54273L20.4352 6.81409L13.6233 13.6282L6.81152 6.81409L9.08061 4.54273L11.352 6.81409L13.6233 4.54273" fill="#ffffff"/>
+            </svg>
+          </span>
+          <span class="brandname">Академический ассистент</span>
+        </div>
+        <h1>{{block "heading" .}}Уведомление{{end}}</h1>
+      </div>
+      <div class="content">
+        {{block "content" .}}{{end}}
+      </div>
+      <div class="footer">
+        Это автоматическое уведомление, отвечать на него не нужно.<br>
+        Все детали и история событий доступны в личном кабинете системы.
+      </div>
+    </div>
+  </div>
+</body>
+</html>{{end}}
+
+{{/* details — переиспользуемый блок с параметрами пересдачи.
+     Показывает только заполненные поля payload. */}}
+{{define "details"}}
+<div class="details">
+  {{with .discipline}}<div class="row"><span class="label">Дисциплина</span><span class="value">{{.}}</span></div>{{end}}
+  {{with .scheduled_at}}<div class="row"><span class="label">Дата и время</span><span class="value">{{.}}</span></div>{{end}}
+  {{with .building}}<div class="row"><span class="label">Корпус</span><span class="value">{{.}}</span></div>{{end}}
+  {{with .room}}<div class="row"><span class="label">Аудитория</span><span class="value">{{.}}</span></div>{{end}}
+  {{with .duration_minutes}}<div class="row"><span class="label">Продолжительность</span><span class="value">{{.}} мин.</span></div>{{end}}
+</div>
+{{end}}

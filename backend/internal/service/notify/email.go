@@ -16,6 +16,13 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 )
 
+// tmplBase — общий layout (шапка с градиентом, футер, блок "details").
+// Каждый email-шаблон определяет "heading" и "content", которые
+// подставляются в base через template-композицию (см. parseEmail).
+//
+//go:embed templates/base.html
+var tmplBase string
+
 //go:embed templates/retake_scheduled.html
 var tmplRetakeScheduled string
 
@@ -37,31 +44,70 @@ var tmplRetakeUpdatedTeacher string
 //go:embed templates/retake_cancelled_teacher.html
 var tmplRetakeCancelledTeacher string
 
+//go:embed templates/retake_change_approved.html
+var tmplRetakeChangeApproved string
+
+//go:embed templates/retake_change_rejected.html
+var tmplRetakeChangeRejected string
+
+//go:embed templates/retake_request_approved.html
+var tmplRetakeRequestApproved string
+
+//go:embed templates/retake_request_rejected.html
+var tmplRetakeRequestRejected string
+
+//go:embed templates/debt_created.html
+var tmplDebtCreated string
+
+//go:embed templates/teacher_request_approved.html
+var tmplTeacherRequestApproved string
+
+//go:embed templates/teacher_request_rejected.html
+var tmplTeacherRequestRejected string
+
 var emailTemplates map[string]*template.Template
 
 func init() {
-	must := func(src string) *template.Template {
-		return template.Must(template.New("").Parse(src))
+	// parseEmail склеивает base-layout с частным шаблоном: сначала
+	// парсим base (он несёт "base"/"details" и default-блоки), затем
+	// дочитываем content — его define-блоки "heading"/"content"
+	// перекрывают дефолтные. Рендерим через ExecuteTemplate("base").
+	parseEmail := func(content string) *template.Template {
+		return template.Must(template.Must(template.New("email").Parse(tmplBase)).Parse(content))
 	}
 	emailTemplates = map[string]*template.Template{
-		KindRetakeScheduled:        must(tmplRetakeScheduled),
-		KindRetakeUpdated:          must(tmplRetakeUpdated),
-		KindRetakeCancelled:        must(tmplRetakeCancelled),
-		KindRetakeGradeReceived:    must(tmplRetakeGradeReceived),
-		KindRetakeScheduledTeacher: must(tmplRetakeScheduledTeacher),
-		KindRetakeUpdatedTeacher:   must(tmplRetakeUpdatedTeacher),
-		KindRetakeCancelledTeacher: must(tmplRetakeCancelledTeacher),
+		KindRetakeScheduled:        parseEmail(tmplRetakeScheduled),
+		KindRetakeUpdated:          parseEmail(tmplRetakeUpdated),
+		KindRetakeCancelled:        parseEmail(tmplRetakeCancelled),
+		KindRetakeGradeReceived:    parseEmail(tmplRetakeGradeReceived),
+		KindRetakeScheduledTeacher: parseEmail(tmplRetakeScheduledTeacher),
+		KindRetakeUpdatedTeacher:   parseEmail(tmplRetakeUpdatedTeacher),
+		KindRetakeCancelledTeacher: parseEmail(tmplRetakeCancelledTeacher),
+		KindRetakeChangeApproved:   parseEmail(tmplRetakeChangeApproved),
+		KindRetakeChangeRejected:   parseEmail(tmplRetakeChangeRejected),
+		KindRetakeRequestApproved:  parseEmail(tmplRetakeRequestApproved),
+		KindRetakeRequestRejected:  parseEmail(tmplRetakeRequestRejected),
+		KindDebtCreated:            parseEmail(tmplDebtCreated),
+		KindTeacherRequestApproved: parseEmail(tmplTeacherRequestApproved),
+		KindTeacherRequestRejected: parseEmail(tmplTeacherRequestRejected),
 	}
 }
 
 var subjectByKind = map[string]string{
 	KindRetakeScheduled:        "Назначена пересдача",
-	KindRetakeUpdated:          "Изменено расписание пересдачи",
+	KindRetakeUpdated:          "Пересдача перенесена",
 	KindRetakeCancelled:        "Пересдача отменена",
-	KindRetakeGradeReceived:    "Получена оценка за пересдачу",
-	KindRetakeScheduledTeacher: "Назначена пересдача",
-	KindRetakeUpdatedTeacher:   "Изменено расписание пересдачи",
+	KindRetakeGradeReceived:    "Выставлена оценка за пересдачу",
+	KindRetakeScheduledTeacher: "Вы назначены на пересдачу",
+	KindRetakeUpdatedTeacher:   "Пересдача перенесена",
 	KindRetakeCancelledTeacher: "Пересдача отменена",
+	KindRetakeChangeApproved:   "Заявка на перенос одобрена",
+	KindRetakeChangeRejected:   "Заявка на перенос отклонена",
+	KindRetakeRequestApproved:  "Заявка на пересдачу одобрена",
+	KindRetakeRequestRejected:  "Заявка на пересдачу отклонена",
+	KindDebtCreated:            "Зафиксирована академическая задолженность",
+	KindTeacherRequestApproved: "Заявка на роль преподавателя одобрена",
+	KindTeacherRequestRejected: "Заявка на роль преподавателя отклонена",
 }
 
 const emailQueueSize = 100
@@ -135,7 +181,7 @@ func (e *emailNotifier) send(ctx context.Context, ev Event) error {
 	}
 
 	var body bytes.Buffer
-	if err := tmpl.Execute(&body, ev.Payload); err != nil {
+	if err := tmpl.ExecuteTemplate(&body, "base", ev.Payload); err != nil {
 		return fmt.Errorf("email: render %s: %w", ev.Kind, err)
 	}
 

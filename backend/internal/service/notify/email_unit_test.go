@@ -5,6 +5,8 @@ package notify
 // БД не нужна: host="" → send() сразу возвращает nil.
 
 import (
+	"bytes"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +14,36 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+// TestEmailTemplates_RenderAll проверяет, что каждый зарегистрированный
+// шаблон собирается с base-layout и рендерится без ошибок на типовом
+// payload. Ловит опечатки в {{define}}/{{template}} и отсутствие блоков
+// "heading"/"content" — иначе они всплыли бы только в рантайме при отправке.
+func TestEmailTemplates_RenderAll(t *testing.T) {
+	payload := map[string]any{
+		"discipline":       "Математический анализ",
+		"scheduled_at":     "2026-06-10 14:30",
+		"building":         "3",
+		"room":             "222",
+		"duration_minutes": 90,
+		"grade":            4,
+		"reason":           "аудитория занята",
+		"decision_reason":  "согласовано с кафедрой",
+		"notes":            "взять зачётку",
+	}
+	require.NotEmpty(t, emailTemplates)
+	for kind, tmpl := range emailTemplates {
+		var buf bytes.Buffer
+		err := tmpl.ExecuteTemplate(&buf, "base", payload)
+		require.NoError(t, err, "kind=%s должен рендериться", kind)
+		out := buf.String()
+		require.Contains(t, out, "Академический ассистент", "kind=%s: нет шапки base", kind)
+		require.Contains(t, out, "<svg", "kind=%s: нет логотипа в шапке", kind)
+		require.NotContains(t, out, "📋", "kind=%s: остался эмодзи в заголовке", kind)
+		require.NotContains(t, out, "<no value>", "kind=%s: незаполненный плейсхолдер", kind)
+		require.True(t, strings.Contains(out, "<h1>"), "kind=%s: нет заголовка", kind)
+	}
+}
 
 // newTestEmailNotifier создаёт emailNotifier с пустым host (SMTP отключён)
 // и без store (store.GetUserByID никогда не вызывается при host="").

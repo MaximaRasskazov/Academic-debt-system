@@ -14,10 +14,12 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 )
 
@@ -31,12 +33,36 @@ var (
 )
 
 type Service struct {
-	store *repo.Store
-	rbac  *rbac.Service
+	store  *repo.Store
+	rbac   *rbac.Service
+	notify *notify.Service // опционально — уведомление автору о решении
 }
 
-func New(store *repo.Store, rbacSvc *rbac.Service) *Service {
-	return &Service{store: store, rbac: rbacSvc}
+// New собирает Service. notifySvc может быть nil — тогда уведомления о
+// решении по заявке не шлются (удобно в юнит-тестах).
+func New(store *repo.Store, rbacSvc *rbac.Service, notifySvc *notify.Service) *Service {
+	return &Service{store: store, rbac: rbacSvc, notify: notifySvc}
+}
+
+// notifyDecision шлёт автору заявки уведомление о решении деканата.
+// Best-effort: ошибка только логируется и не откатывает уже совершённую
+// смену роли. reason для approved опционален, для rejected — обязателен.
+func (s *Service) notifyDecision(ctx context.Context, userID pgtype.UUID, kind string, reason *string) {
+	if s.notify == nil {
+		return
+	}
+	payload := map[string]any{}
+	if reason != nil && *reason != "" {
+		payload["decision_reason"] = *reason
+	}
+	if err := s.notify.Notify(ctx, notify.Event{
+		UserID:  pgutil.UUID(userID),
+		Kind:    kind,
+		Payload: payload,
+	}); err != nil {
+		slog.Warn("teacher_request: уведомление не отправлено",
+			"kind", kind, "user_id", pgutil.UUID(userID).String(), "err", err)
+	}
 }
 
 // Create подаёт заявку от имени actorID. Один pending на пользователя.
@@ -137,6 +163,8 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 	}); err != nil {
 		return queries.TeacherRoleRequest{}, err
 	}
+
+	s.notifyDecision(ctx, req.RequestedBy, notify.KindTeacherRequestApproved, reason)
 	return approved, nil
 }
 
@@ -181,6 +209,8 @@ func (s *Service) Reject(ctx context.Context, actorID, requestID uuid.UUID, reas
 	}); err != nil {
 		return queries.TeacherRoleRequest{}, err
 	}
+
+	s.notifyDecision(ctx, req.RequestedBy, notify.KindTeacherRequestRejected, &reason)
 	return rejected, nil
 }
 

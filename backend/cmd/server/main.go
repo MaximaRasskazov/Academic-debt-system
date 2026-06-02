@@ -90,7 +90,6 @@ func run() error {
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
-	teacherRequestSvc := teacherrequest.New(store, rbacSvc)
 	usersSvc := usersvc.New(store)
 
 	notifyHub := notify.NewHub()
@@ -104,6 +103,10 @@ func run() error {
 	// Закрываем email-воркер до pool.Close(): воркер может делать запросы
 	// к БД (GetUserByID для адреса), пул должен быть жив.
 	defer notifySvc.Close()
+
+	// teacherRequestSvc создаём после notifySvc — он шлёт автору заявки
+	// письмо о решении (approved/rejected).
+	teacherRequestSvc := teacherrequest.New(store, rbacSvc, notifySvc)
 
 	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)

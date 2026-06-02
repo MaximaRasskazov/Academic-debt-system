@@ -1,23 +1,7 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <title>Пересдача отменена</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 24px; }
-    .header { background: #c62828; color: #fff; padding: 20px 24px; border-radius: 6px 6px 0 0; }
-    .body   { border: 1px solid #e0e0e0; border-top: none; padding: 24px; border-radius: 0 0 6px 6px; }
-  </style>
-</head>
-<body>
-  <div class="header"><h2 style="margin:0">❌ Пересдача отменена</h2></div>
-  <div class="body">
-    <p>Уважаемый преподаватель,</p>
-    <p>Пересдача по дисциплине <strong>{{.discipline}}</strong>, на которую вы были назначены, отменена.</p>
-
-    {{if .reason}}<p><strong>Причина:</strong> {{.reason}}</p>{{end}}
-
-    <p>Для уточнения деталей обратитесь к деканату.</p>
-  </div>
-</body>
-</html>
+{{define "heading"}}Пересдача отменена{{end}}
+{{define "content"}}
+<p>Здравствуйте!</p>
+<p>Пересдача{{with .discipline}} по дисциплине <strong>{{.}}</strong>{{end}}, на приём которой вы были назначены, отменена деканатом.</p>
+{{template "details" .}}
+<p>Дополнительные действия с вашей стороны не требуются.</p>
+{{end}}

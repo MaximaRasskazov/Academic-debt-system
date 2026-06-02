@@ -256,20 +256,25 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 		return Request{}, err
 	}
 
-	// Автору заявки — «вам одобрили изменение пересдачи».
-	// Остальным участникам (студенты, другие преподаватели) — «вам
-	// изменили пересдачу»: для них это не их заявка, а просто факт
-	// изменения расписания деканатом.
-	payload := map[string]any{
-		"retake_id":         req.RetakeID.String(),
-		"change_request_id": pgutil.UUID(approved.ID).String(),
+	// Payload собираем по ОБНОВЛЁННОЙ пересдаче — чтобы письма содержали
+	// актуальные дисциплину/время/место, а не только id (иначе шаблон
+	// рендерит пустые поля).
+	payload := s.retakePayload(ctx, updatedRetake)
+	payload["change_request_id"] = pgutil.UUID(approved.ID).String()
+	if approved.DecisionReason != nil {
+		payload["decision_reason"] = *approved.DecisionReason
 	}
+
+	// Автору заявки — «вам одобрили изменение пересдачи».
 	_ = s.notify.Notify(ctx, notify.Event{
 		UserID:  req.RequestedBy,
 		Kind:    notify.KindRetakeChangeApproved,
 		Payload: payload,
 	})
-	s.notifyOtherParticipants(ctx, req.RetakeID, req.RequestedBy, notify.KindRetakeUpdated, payload)
+	// Остальным участникам — «пересдача перенесена». Тип письма зависит
+	// от роли получателя: студентам студенческий шаблон, преподавателям —
+	// преподавательский (иначе препод получал бы «Здравствуйте, студент»).
+	s.notifyOtherParticipants(ctx, req.RetakeID, req.RequestedBy, payload)
 
 	return fromRow(approved)
 }
@@ -317,25 +322,34 @@ func (s *Service) Reject(ctx context.Context, id, actorID uuid.UUID, decisionRea
 		return Request{}, err
 	}
 
-	// Уведомить подавшего заявку об отклонении.
+	// Уведомить подавшего заявку об отклонении. Payload обогащаем
+	// дисциплиной по текущей пересдаче (расписание не менялось).
+	rejectPayload := map[string]any{
+		"retake_id":         req.RetakeID.String(),
+		"change_request_id": pgutil.UUID(rejected.ID).String(),
+		"decision_reason":   decisionReason,
+	}
+	if r, err := s.store.GetRetakeByID(ctx, pgutil.PgUUID(req.RetakeID)); err == nil {
+		if disc, err := s.store.GetDisciplineByID(ctx, r.DisciplineID); err == nil {
+			rejectPayload["discipline"] = disc.Name
+		}
+	}
 	_ = s.notify.Notify(ctx, notify.Event{
-		UserID: req.RequestedBy,
-		Kind:   notify.KindRetakeChangeRejected,
-		Payload: map[string]any{
-			"retake_id":         req.RetakeID.String(),
-			"change_request_id": pgutil.UUID(rejected.ID).String(),
-			"decision_reason":   decisionReason,
-		},
+		UserID:  req.RequestedBy,
+		Kind:    notify.KindRetakeChangeRejected,
+		Payload: rejectPayload,
 	})
 
 	return fromRow(rejected)
 }
 
-// notifyOtherParticipants рассылает уведомление всем участникам пересдачи,
-// КРОМЕ exclude (обычно — автора заявки, который получает отдельный текст).
+// notifyOtherParticipants рассылает «пересдача перенесена» всем участникам
+// пересдачи, КРОМЕ exclude (обычно — автора заявки, который получает
+// отдельный текст). Тип письма выбирается по роли участника: студенту —
+// студенческий шаблон, преподавателю/члену комиссии — преподавательский.
 // Best-effort: ошибки логируются, но не возвращаются — не должны
 // откатывать уже совершённую транзакцию.
-func (s *Service) notifyOtherParticipants(ctx context.Context, retakeID, exclude uuid.UUID, kind string, payload map[string]any) {
+func (s *Service) notifyOtherParticipants(ctx context.Context, retakeID, exclude uuid.UUID, payload map[string]any) {
 	parts, err := s.store.ListParticipantsForRetake(ctx, pgutil.PgUUID(retakeID))
 	if err != nil {
 		slog.Warn("changerequest: не удалось получить участников для уведомления",
@@ -347,6 +361,10 @@ func (s *Service) notifyOtherParticipants(ctx context.Context, retakeID, exclude
 		if uid == exclude {
 			continue
 		}
+		kind := notify.KindRetakeUpdated
+		if p.Kind != "student" {
+			kind = notify.KindRetakeUpdatedTeacher
+		}
 		if err := s.notify.Notify(ctx, notify.Event{
 			UserID:  uid,
 			Kind:    kind,
@@ -356,6 +374,26 @@ func (s *Service) notifyOtherParticipants(ctx context.Context, retakeID, exclude
 				"user_id", uid, "err", err)
 		}
 	}
+}
+
+// retakePayload собирает payload писем из доменной retake-записи: id,
+// дисциплина (имя + id), время, место, длительность. Если дисциплину
+// не удалось получить — поле discipline опускается, письмо всё равно
+// уходит. Совпадает по ключам с retake.Service.retakePayloadFor, чтобы
+// шаблоны рендерились одинаково независимо от источника события.
+func (s *Service) retakePayload(ctx context.Context, r queries.Retake) map[string]any {
+	p := map[string]any{
+		"retake_id":        pgutil.UUID(r.ID).String(),
+		"discipline_id":    pgutil.UUID(r.DisciplineID).String(),
+		"scheduled_at":     r.ScheduledAt.Time.Format("2006-01-02 15:04"),
+		"building":         r.Building,
+		"room":             r.Room,
+		"duration_minutes": r.DurationMinutes,
+	}
+	if disc, err := s.store.GetDisciplineByID(ctx, r.DisciplineID); err == nil {
+		p["discipline"] = disc.Name
+	}
+	return p
 }
 
 // buildUpdateParams формирует params для q.UpdateRetakeSchedule из Changes.
