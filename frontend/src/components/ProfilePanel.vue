@@ -1,14 +1,85 @@
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { authApi } from '../api/auth'
+import { teacherRequestsApi } from '../api/teacherRequests'
 
-defineProps({ open: Boolean })
+const props = defineProps({ open: Boolean })
 defineEmits(['close'])
 
 const auth = useAuthStore()
 
 const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
+
+// ── Повышение до преподавателя (только для STUDENT) ───────
+const isStudent = computed(() => auth.role === 'STUDENT')
+
+// Статус последней заявки текущего пользователя: '' | 'pending' | 'approved' | 'rejected'.
+const promoStatus  = ref('')
+const promoLoading = ref(false)
+
+const promoModal   = ref(false)
+const promoReason  = ref('')
+const promoError   = ref('')
+const promoSubmitting = ref(false)
+const promoDone    = ref(false)
+
+// Загружаем историю заявок при открытии панели, чтобы знать, есть ли
+// уже заявка на рассмотрении и не плодить дубли.
+async function loadPromoStatus() {
+  if (!isStudent.value) return
+  promoLoading.value = true
+  try {
+    const list = await teacherRequestsApi.listMy()
+    const items = Array.isArray(list) ? list : (list?.items ?? [])
+    // Берём самую свежую заявку (сортировка по created_at desc).
+    const latest = items
+      .slice()
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0]
+    promoStatus.value = latest?.status ?? ''
+  } catch {
+    promoStatus.value = '' // не критично — просто покажем кнопку
+  } finally {
+    promoLoading.value = false
+  }
+}
+
+watch(() => props.open, (open) => {
+  if (open) {
+    promoDone.value = false
+    loadPromoStatus()
+  }
+}, { immediate: true })
+
+function openPromo() {
+  promoReason.value = ''
+  promoError.value = ''
+  promoModal.value = true
+}
+function closePromo() { promoModal.value = false }
+
+async function submitPromo() {
+  const reason = promoReason.value.trim()
+  if (!reason) { promoError.value = 'Заполните описание'; return }
+  promoSubmitting.value = true
+  promoError.value = ''
+  try {
+    await teacherRequestsApi.create(reason)
+    promoStatus.value = 'pending'
+    promoModal.value = false
+    promoDone.value = true
+  } catch (e) {
+    const code = e.response?.data?.error
+    if (code === 'already_pending') {
+      promoStatus.value = 'pending'
+      promoModal.value = false
+    } else {
+      promoError.value = e.response?.data?.message || 'Не удалось отправить заявку'
+    }
+  } finally {
+    promoSubmitting.value = false
+  }
+}
 
 // ── Password ──────────────────────────────────────────────
 const pw = reactive({ current: '', next: '', confirm: '' })
@@ -79,6 +150,34 @@ const fullName = computed(() =>
               </div>
               <div class="hero-name">{{ fullName }}</div>
               <span class="role-chip">{{ ROLE_LABEL[auth.role] }}</span>
+
+              <!-- Повышение до преподавателя (только для студента) -->
+              <template v-if="isStudent">
+                <button
+                  v-if="promoStatus === 'pending'"
+                  class="promo-chip promo-chip--pending"
+                  type="button" disabled
+                >
+                  Заявка на рассмотрении
+                </button>
+                <button
+                  v-else-if="promoStatus === 'rejected'"
+                  class="promo-link"
+                  type="button"
+                  @click="openPromo"
+                >
+                  Заявка отклонена — подать снова
+                </button>
+                <button
+                  v-else-if="promoStatus !== 'approved'"
+                  class="promo-link"
+                  type="button"
+                  :disabled="promoLoading"
+                  @click="openPromo"
+                >
+                  Повысить до преподавателя
+                </button>
+              </template>
             </div>
 
             <div class="divider" />
@@ -116,6 +215,53 @@ const fullName = computed(() =>
             </button>
 
           </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
+
+  <!-- ── Модалка повышения до преподавателя ── -->
+  <Teleport to="body">
+    <Transition name="promo-modal">
+      <div v-if="promoModal" class="promo-overlay" @click.self="closePromo">
+        <div class="promo-modal">
+
+          <div class="promo-head">
+            <span class="promo-title">Повышение до преподавателя</span>
+            <button class="panel-close" @click="closePromo" aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="promo-body">
+            <p class="promo-desc">
+              Вы можете подать заявку на смену роли со «Студента» на «Преподавателя».
+              Заявку рассмотрит деканат: после одобрения вам станут доступны функции
+              преподавателя. Опишите, почему вам нужна эта роль.
+            </p>
+
+            <div class="field-group">
+              <label class="field-label">Описание <span class="required">*</span></label>
+              <textarea
+                class="promo-textarea"
+                v-model="promoReason"
+                rows="4"
+                placeholder="Например: веду семинары по дисциплине и хочу принимать пересдачи…"
+              />
+            </div>
+
+            <p v-if="promoError" class="pw-error">{{ promoError }}</p>
+          </div>
+
+          <div class="promo-foot">
+            <button class="btn-outline" @click="closePromo">Отмена</button>
+            <button class="btn-primary" :disabled="promoSubmitting" @click="submitPromo">
+              {{ promoSubmitting ? 'Отправка…' : 'Отправить' }}
+            </button>
+          </div>
+
         </div>
       </div>
     </Transition>
@@ -169,7 +315,7 @@ const fullName = computed(() =>
   flex-shrink: 0;
 }
 .panel-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 700; color: #3C38B6;
 }
 .panel-close {
@@ -274,6 +420,83 @@ const fullName = computed(() =>
   box-shadow: 0 2px 10px rgba(59,63,224,.14);
 }
 
+
+/* ── Повышение до преподавателя ── */
+.promo-link {
+  margin-top: 6px;
+  background: none; border: none; padding: 2px 4px;
+  font: 600 13px/1.3 'Inter', sans-serif; color: var(--brand);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+  transition: color .15s;
+}
+.promo-link:hover:not(:disabled) { color: var(--brand-ink); }
+.promo-link:disabled { opacity: .5; cursor: default; }
+
+.promo-chip {
+  margin-top: 6px; padding: 4px 12px; border-radius: 20px; border: none;
+  font: 600 12px/1.4 'Inter', sans-serif;
+}
+.promo-chip--pending {
+  background: rgba(245,158,11,.15); color: #b45309; cursor: default;
+}
+
+/* ── Promo modal ── */
+.promo-overlay {
+  position: fixed; inset: 0; z-index: 410;
+  background: rgba(10,12,30,.5);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  --card: #fff; --ink: #1a1d24; --ink-soft: #6b7280; --line: #d7d9e0;
+  --bg: #f3f4f7; --brand: #3b3fe0; --brand-ink: #2a2e9e;
+  --radius: 10px; --ease: cubic-bezier(.2,.7,.2,1);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+.promo-modal {
+  background: var(--card); border-radius: 16px; width: 100%; max-width: 440px;
+  box-shadow: 0 24px 64px -12px rgba(10,12,30,.3);
+  display: flex; flex-direction: column; max-height: 90vh; overflow: hidden;
+}
+.promo-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px; border-bottom: 1px solid var(--line);
+}
+.promo-title {
+  font-family: 'Gerhaus', 'Inter', sans-serif;
+  font-size: 15px; font-weight: 600; color: #3C38B6;
+}
+.promo-body {
+  padding: 20px; display: flex; flex-direction: column; gap: 14px;
+  overflow-y: auto;
+}
+.promo-desc {
+  margin: 0; font: 13px/1.6 'Inter', sans-serif; color: var(--ink-soft);
+}
+.required { color: #dc2626; }
+.promo-textarea {
+  width: 100%; box-sizing: border-box; padding: 10px 12px; resize: vertical;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: 13px/1.5 'Inter', sans-serif; color: var(--ink);
+  outline: none; transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.promo-textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.promo-foot {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 20px; border-top: 1px solid var(--line);
+}
+.btn-primary {
+  padding: 0 20px; height: 40px;
+  border: 1.5px solid var(--brand); border-radius: var(--radius);
+  background: var(--brand); color: #fff;
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--brand-ink); border-color: var(--brand-ink); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+.promo-modal-enter-active, .promo-modal-leave-active { transition: opacity .2s var(--ease); }
+.promo-modal-enter-from, .promo-modal-leave-to { opacity: 0; }
+.promo-modal-enter-active .promo-modal { transition: transform .25s var(--ease); }
+.promo-modal-enter-from .promo-modal, .promo-modal-leave-to .promo-modal { transform: scale(.96) translateY(10px); }
 
 /* ── Transition ── */
 .panel-enter-active .panel-overlay,
