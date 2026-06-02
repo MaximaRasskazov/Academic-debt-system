@@ -24,6 +24,7 @@ export const useAuthStore = defineStore('auth', {
     isStudent: (state) => state.role === 'STUDENT',
     isTeacher: (state) => state.role === 'TEACHER',
     isDean: (state) => state.role === 'DEAN',
+    isAdmin: (state) => state.role === 'ADMIN',
   },
 
   actions: {
