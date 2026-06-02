@@ -54,22 +54,34 @@ var (
 	// одобрения: применять нельзя, иначе шедулер сразу переведёт в
 	// in_progress («Идёт») вместо ожидаемого «Назначена».
 	ErrScheduledInPast = errors.New("changerequest: новое время пересдачи уже прошло")
+	// ErrSlotRequired — преподаватель предложил несколько дат, декан обязан
+	// выбрать одну при одобрении (selected_slot).
+	ErrSlotRequired = errors.New("changerequest: выберите одну из предложенных дат")
+	// ErrSlotNotProposed — выбранный слот отсутствует среди предложенных.
+	ErrSlotNotProposed = errors.New("changerequest: выбранная дата не входит в предложенные")
 )
+
+// maxProposedSlots — потолок числа предложенных дат (согласовано с фронтом).
+const maxProposedSlots = 3
 
 // Changes — поля, которые преподаватель предлагает изменить.
 // Хотя бы одно поле должно быть задано (проверяет сервис через hasAny).
 // Маршалится в JSONB при сохранении, размаршалится при чтении.
 type Changes struct {
-	Building        *string    `json:"building,omitempty"`
-	Room            *string    `json:"room,omitempty"`
-	ScheduledAt     *time.Time `json:"scheduled_at,omitempty"`
-	DurationMinutes *int32     `json:"duration_minutes,omitempty"`
-	Notes           *string    `json:"notes,omitempty"`
+	Building    *string    `json:"building,omitempty"`
+	Room        *string    `json:"room,omitempty"`
+	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	// ProposedSlots — несколько предложенных вариантов новой даты (1..3).
+	// Если их больше одного, декан выбирает конкретный при одобрении, и он
+	// становится ScheduledAt пересдачи.
+	ProposedSlots   []time.Time `json:"proposed_slots,omitempty"`
+	DurationMinutes *int32      `json:"duration_minutes,omitempty"`
+	Notes           *string     `json:"notes,omitempty"`
 }
 
 func (c Changes) hasAny() bool {
 	return c.Building != nil || c.Room != nil || c.ScheduledAt != nil ||
-		c.DurationMinutes != nil || c.Notes != nil
+		len(c.ProposedSlots) > 0 || c.DurationMinutes != nil || c.Notes != nil
 }
 
 // Request — доменная модель заявки. Наружу sqlc-структуры не текут.
@@ -110,6 +122,20 @@ type SubmitInput struct {
 func (s *Service) Submit(ctx context.Context, retakeID, actorID uuid.UUID, in SubmitInput) (Request, error) {
 	if !in.Changes.hasAny() {
 		return Request{}, fmt.Errorf("%w: необходимо указать хотя бы одно изменение", ErrInvalidInput)
+	}
+	// Нормализация дат: при наличии proposed_slots дублируем первый в
+	// ScheduledAt (для клиентов, читающих одно поле), проверяем лимит.
+	if n := len(in.Changes.ProposedSlots); n > 0 {
+		if n > maxProposedSlots {
+			return Request{}, fmt.Errorf("%w: можно предложить не более %d дат", ErrInvalidInput, maxProposedSlots)
+		}
+		for _, slot := range in.Changes.ProposedSlots {
+			if slot.IsZero() {
+				return Request{}, fmt.Errorf("%w: пустая дата в proposed_slots", ErrInvalidInput)
+			}
+		}
+		first := in.Changes.ProposedSlots[0]
+		in.Changes.ScheduledAt = &first
 	}
 
 	retake, err := s.store.GetRetakeByID(ctx, pgutil.PgUUID(retakeID))
@@ -195,13 +221,26 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (Request, error) {
 // Approve одобряет заявку и применяет изменения к пересдаче атомарно.
 // В одной транзакции: пометить approved + обновить расписание пересдачи.
 // После коммита — best-effort уведомление всех участников.
-func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string) (Request, error) {
+// selectedSlot — выбранная деканом дата. Обязательна, если преподаватель
+// предложил несколько вариантов (len(ProposedSlots) > 1) и должна совпадать
+// с одним из них; тогда она и применяется как новое scheduled_at.
+func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string, selectedSlot *time.Time) (Request, error) {
 	req, err := s.Get(ctx, id)
 	if err != nil {
 		return Request{}, err
 	}
 	if req.Status != "pending" {
 		return Request{}, ErrNotPending
+	}
+
+	// Если предложено несколько дат — резолвим выбор декана в одну,
+	// которая станет новым scheduled_at заявки.
+	if len(req.Changes.ProposedSlots) > 1 {
+		chosen, err := resolveSlot(req.Changes.ProposedSlots, selectedSlot)
+		if err != nil {
+			return Request{}, err
+		}
+		req.Changes.ScheduledAt = &chosen
 	}
 
 	// Если заявка меняет время — новое время должно быть в будущем,
@@ -394,6 +433,20 @@ func (s *Service) retakePayload(ctx context.Context, r queries.Retake) map[strin
 		p["discipline"] = disc.Name
 	}
 	return p
+}
+
+// resolveSlot выбирает дату из нескольких предложенных по выбору декана.
+// selectedSlot обязателен и должен точно совпадать с одним из slots.
+func resolveSlot(slots []time.Time, selectedSlot *time.Time) (time.Time, error) {
+	if selectedSlot == nil {
+		return time.Time{}, ErrSlotRequired
+	}
+	for _, s := range slots {
+		if s.Equal(*selectedSlot) {
+			return *selectedSlot, nil
+		}
+	}
+	return time.Time{}, ErrSlotNotProposed
 }
 
 // buildUpdateParams формирует params для q.UpdateRetakeSchedule из Changes.

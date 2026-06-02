@@ -200,7 +200,7 @@ function onDayClick(day) {
   justify-content: space-between; margin-bottom: 20px;
 }
 .modal-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0;
 }
 .modal-close {

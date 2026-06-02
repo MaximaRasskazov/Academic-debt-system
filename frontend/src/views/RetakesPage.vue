@@ -112,15 +112,21 @@ onMounted(async () => {
 const reqChangeOpen   = ref(false)
 const reqChangeTarget = ref(null)
 const reqChangeForm   = reactive({
-  scheduledAt: '',      // ISO без часов — отдельные поля даты+времени
-  hour:        '',
-  minute:      '',
   duration:    '',      // строка чтобы пустое = "не меняем"
   building:    '',
   room:        '',
   notes:       '',
   reason:      '',
 })
+// Слоты предлагаемых дат (0..3). Пустой список = «дату не меняем».
+// Преподаватель может предложить несколько — декан выберет одну.
+const REQ_MAX_SLOTS = 3
+const reqChangeSlots = ref([])
+function reqAddSlot() {
+  if (reqChangeSlots.value.length >= REQ_MAX_SLOTS) return
+  reqChangeSlots.value.push({ date: '', hour: '', minute: '' })
+}
+function reqRemoveSlot(i) { reqChangeSlots.value.splice(i, 1) }
 const reqChangeSaving    = ref(false)
 const reqChangeError     = ref('')
 const reqChangeSuccess   = ref(false)
@@ -131,9 +137,9 @@ const reqChangePartsLoading = ref(false)
 async function openRequestChange(retake) {
   reqChangeTarget.value = retake
   Object.assign(reqChangeForm, {
-    scheduledAt: '', hour: '', minute: '',
     duration: '', building: '', room: '', notes: '', reason: '',
   })
+  reqChangeSlots.value = []
   reqChangeError.value = ''
   reqChangeSuccess.value = false
   reqChangeTeachers.value = []
@@ -187,26 +193,29 @@ async function submitRequestChange() {
   const BUILDING_RE_CH = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
   const ROOM_RE_CH     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
 
-  // Дата+время: если указана дата ИЛИ часы/минуты — собираем полный ISO.
-  // Если только дата без времени — берём 00:00; если только время — ошибка.
-  if (f.scheduledAt || f.hour || f.minute) {
-    if (!f.scheduledAt) {
-      reqChangeError.value = 'Укажите дату вместе с временем'
-      return
-    }
-    const hh = String(f.hour || '00').padStart(2, '0')
-    const mm = String(f.minute || '00').padStart(2, '0')
-    const [d, mo, y] = f.scheduledAt.split('.')
-    if (!d || !mo || !y) {
-      reqChangeError.value = 'Дата в формате дд.мм.гггг'
-      return
-    }
-    const newDt = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`)
-    if (newDt <= new Date()) {
-      reqChangeError.value = 'Новая дата и время должны быть в будущем'
-      return
-    }
-    changes.scheduled_at = newDt.toISOString()
+  // Слоты дат: собираем заполненные в proposed_slots. Пустой список —
+  // дату не меняем. Если слотов несколько, декан выберет один при одобрении.
+  const now = new Date()
+  const proposed = []
+  for (let i = 0; i < reqChangeSlots.value.length; i++) {
+    const sl = reqChangeSlots.value[i]
+    if (!sl.date && !sl.hour && !sl.minute) continue // пустой слот пропускаем
+    if (!sl.date) { reqChangeError.value = `Укажите дату варианта ${i + 1}`; return }
+    const hh = String(sl.hour || '00').padStart(2, '0')
+    const mm = String(sl.minute || '00').padStart(2, '0')
+    const [d, mo, y] = sl.date.split('.')
+    if (!d || !mo || !y) { reqChangeError.value = 'Дата в формате дд.мм.гггг'; return }
+    const dt = new Date(`${y}-${mo}-${d}T${hh}:${mm}:00`)
+    if (dt <= now) { reqChangeError.value = `Дата и время варианта ${i + 1} должны быть в будущем`; return }
+    const iso = dt.toISOString()
+    if (proposed.includes(iso)) { reqChangeError.value = 'Варианты дат не должны повторяться'; return }
+    proposed.push(iso)
+  }
+  if (proposed.length === 1) {
+    changes.scheduled_at = proposed[0]
+  } else if (proposed.length > 1) {
+    changes.proposed_slots = proposed
+    changes.scheduled_at = proposed[0] // дублируем первый для совместимости
   }
 
   if (f.duration !== '' && f.duration != null) {
@@ -724,6 +733,12 @@ async function saveEdit() {
               <p v-if="editError" class="form-error">{{ editError }}</p>
             </div>
 
+            <div class="modal-foot">
+              <button class="btn-cancel" type="button" @click="closeEdit">Отмена</button>
+              <button class="btn-save" type="button" :disabled="editSaving" @click="saveEdit">
+                {{ editSaving ? 'Сохранение…' : 'Сохранить' }}
+              </button>
+            </div>
 
           </div>
         </div>
@@ -786,10 +801,11 @@ async function saveEdit() {
               </div>
 
               <form class="req-form" @submit.prevent="submitRequestChange" novalidate>
-                <div class="form-row">
+                <!-- Новые даты: 0..3 предложенных вариантов. Пусто = дату не меняем. -->
+                <div v-for="(sl, i) in reqChangeSlots" :key="i" class="form-row">
                   <div class="field" style="flex:2">
-                    <label>Новая дата</label>
-                    <VueDatePicker v-model="reqChangeForm.scheduledAt" locale="ru"
+                    <label>{{ i === 0 ? 'Новая дата' : `Новая дата (вариант ${i + 1})` }}</label>
+                    <VueDatePicker v-model="sl.date" locale="ru"
                                    format="dd.MM.yyyy" model-type="format"
                                    :enable-time-picker="false" auto-apply />
                   </div>
@@ -797,14 +813,28 @@ async function saveEdit() {
                     <label>Новое время</label>
                     <div class="time-picker">
                       <input class="time-input" type="text" inputmode="numeric"
-                             v-model="reqChangeForm.hour" maxlength="2"
+                             v-model="sl.hour" maxlength="2"
                              @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
                       <span class="time-colon">:</span>
                       <input class="time-input" type="text" inputmode="numeric"
-                             v-model="reqChangeForm.minute" maxlength="2"
+                             v-model="sl.minute" maxlength="2"
                              @input="(e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0,2)" />
                     </div>
                   </div>
+                  <div class="field field--shrink" style="justify-content:flex-end">
+                    <button type="button" class="btn-slot-remove" @click="reqRemoveSlot(i)" title="Удалить вариант">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div class="slot-add-row">
+                  <button type="button" class="btn-add-slot" :disabled="reqChangeSlots.length >= REQ_MAX_SLOTS" @click="reqAddSlot">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    {{ reqChangeSlots.length ? 'Добавить ещё дату' : 'Предложить новую дату' }}
+                  </button>
+                  <span class="slot-hint">
+                    {{ reqChangeSlots.length >= REQ_MAX_SLOTS ? `Максимум ${REQ_MAX_SLOTS} варианта` : 'Можно предложить несколько — декан выберет одну' }}
+                  </span>
                 </div>
 
                 <div class="form-row">
@@ -896,7 +926,7 @@ async function saveEdit() {
 }
 .head-left { display: flex; align-items: center; gap: 10px; }
 .page-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 22px; font-weight: 700; color: #3C38B6; margin: 0;
 }
 .total-badge {
@@ -1072,7 +1102,7 @@ async function saveEdit() {
   border-bottom: none;
 }
 .modal-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 700; color: #3C38B6;
 }
 .modal-close {
@@ -1089,7 +1119,7 @@ async function saveEdit() {
 .modal-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
 .modal-disc {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 17px; font-weight: 700; color: #3C38B6;
   padding: 0 0 4px;
 }
@@ -1161,6 +1191,29 @@ async function saveEdit() {
 
 /* Request-change modal helpers */
 .req-form { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Date slots (мульти-даты) ── */
+.btn-slot-remove {
+  height: 40px; width: 44px; flex-shrink: 0;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.btn-slot-remove:hover { border-color: #dc2626; color: #dc2626; background: rgba(220,38,38,.05); }
+.btn-slot-remove svg { width: 16px; height: 16px; }
+.slot-add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn-add-slot {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 14px; border-radius: var(--radius);
+  border: 1.5px dashed var(--line); background: #fff; color: var(--brand);
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: border-color .15s, background .15s, opacity .15s;
+}
+.btn-add-slot:hover:not(:disabled) { border-color: var(--brand); background: rgba(59,63,224,.05); }
+.btn-add-slot:disabled { opacity: .45; cursor: not-allowed; color: var(--ink-soft); }
+.btn-add-slot svg { width: 14px; height: 14px; }
+.slot-hint { font: 12px/1.4 'Inter', sans-serif; color: var(--ink-soft); }
 
 .req-participants {
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;

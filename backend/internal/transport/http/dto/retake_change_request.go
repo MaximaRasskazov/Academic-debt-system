@@ -32,8 +32,12 @@ type SubmitChangeRequestBody struct {
 
 // DecisionBody — тело для /approve и /reject.
 // DecisionReason обязателен для reject, опционален для approve.
+// SelectedSlot — выбранная деканом дата при одобрении заявки с несколькими
+// предложенными вариантами (proposed_slots). Игнорируется при reject и для
+// заявок с единственной датой.
 type DecisionBody struct {
-	DecisionReason *string `json:"decision_reason,omitempty"`
+	DecisionReason *string    `json:"decision_reason,omitempty"`
+	SelectedSlot   *time.Time `json:"selected_slot,omitempty"`
 }
 
 // ChangeRequestsListResponse — список с пагинацией для деканата.

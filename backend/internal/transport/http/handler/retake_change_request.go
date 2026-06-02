@@ -80,7 +80,7 @@ func (h *ChangeRequestHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
 		return
 	}
-	result, err := h.svc.Approve(r.Context(), id, userID, body.DecisionReason)
+	result, err := h.svc.Approve(r.Context(), id, userID, body.DecisionReason, body.SelectedSlot)
 	if err != nil {
 		mapChangeRequestError(w, err)
 		return
@@ -131,6 +131,12 @@ func mapChangeRequestError(w http.ResponseWriter, err error) {
 	case errors.Is(err, changerequest.ErrScheduledInPast):
 		writeError(w, http.StatusUnprocessableEntity, "scheduled_in_past",
 			"новое время пересдачи уже прошло — отклоните заявку или попросите преподавателя подать новую")
+	case errors.Is(err, changerequest.ErrSlotRequired):
+		writeError(w, http.StatusUnprocessableEntity, "slot_required",
+			"преподаватель предложил несколько дат — откройте «Подробнее» и выберите одну")
+	case errors.Is(err, changerequest.ErrSlotNotProposed):
+		writeError(w, http.StatusBadRequest, "slot_not_proposed",
+			"выбранная дата не входит в предложенные преподавателем")
 	case errors.Is(err, changerequest.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
 	default:

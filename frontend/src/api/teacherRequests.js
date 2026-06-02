@@ -2,8 +2,10 @@ import http from './http'
 
 // Заявки студентов на роль teacher.
 export const teacherRequestsApi = {
-  create: (motivation) =>
-    http.post('/api/teacher-requests', { motivation }).then((r) => r.data),
+  // Бэк принимает поле `reason` (см. dto.TeacherRequestCreateRequest);
+  // декан видит его в карточке заявки как «Мотивация»/«Описание».
+  create: (reason) =>
+    http.post('/api/teacher-requests', { reason }).then((r) => r.data),
 
   listMy: () => http.get('/api/teacher-requests/my').then((r) => r.data),
 

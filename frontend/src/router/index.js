@@ -12,8 +12,9 @@ import TeacherPage from '../views/TeacherPage.vue'
 import TeacherRequestsPage from '../views/TeacherRequestsPage.vue'
 import StatementsPage from '../views/StatementsPage.vue'
 import UsersPage from '../views/UsersPage.vue'
+import AdminPage from '../views/AdminPage.vue'
 
-const HOME = { STUDENT: '/student', TEACHER: '/teacher', DEAN: '/dean' }
+const HOME = { STUDENT: '/student', TEACHER: '/teacher', DEAN: '/dean', ADMIN: '/admin' }
 const homeFor = (role) => HOME[role] ?? '/login'
 
 const routes = [
@@ -29,6 +30,7 @@ const routes = [
   { path: '/teacher-requests', component: TeacherRequestsPage, meta: { auth: true, roles: ['TEACHER'] } },
   { path: '/statements', component: StatementsPage, meta: { auth: true, roles: ['TEACHER', 'DEAN'] } },
   { path: '/users', component: UsersPage, meta: { auth: true } },
+  { path: '/admin', component: AdminPage, meta: { auth: true, roles: ['ADMIN'] } },
 ]
 
 const router = createRouter({

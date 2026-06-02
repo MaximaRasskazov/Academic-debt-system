@@ -12,6 +12,7 @@ const roleLabel = computed(() => ({
   DEAN: 'Деканат',
   TEACHER: 'Преподаватель',
   STUDENT: 'Студент',
+  ADMIN: 'Администратор',
 }[auth.role] ?? ''))
 </script>
 
@@ -58,7 +59,7 @@ const roleLabel = computed(() => ({
   background:#3C38B6;
 }
 .app-name {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 13px; font-weight: 700; color: #3C38B6;
   text-transform: uppercase; letter-spacing: .04em; line-height: 1.25;
   text-align: left;

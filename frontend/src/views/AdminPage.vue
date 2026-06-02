@@ -1,0 +1,506 @@
+<script setup>
+import { ref, computed, watch, onMounted } from 'vue'
+import AppHeader from '../components/AppHeader.vue'
+import AppSidebar from '../components/AppSidebar.vue'
+import http from '../api/http'
+
+const sidebarOpen = ref(false)
+
+/* ─── State ──────────────────────────────────────────────────── */
+const users     = ref([])
+const total     = ref(0)
+const loading   = ref(false)
+const forbidden = ref(false)
+
+const PAGE_SIZE   = 20
+const searchQuery = ref('')
+const filterRole  = ref('')   // '' = все, 'student', 'teacher', 'dean'
+const currentPage = ref(1)
+
+// id пользователя, для которого сейчас идёт смена роли — блокирует селект.
+const savingId = ref(null)
+// Краткое уведомление об успехе/ошибке.
+const toast = ref(null)
+
+/* ─── Роли ───────────────────────────────────────────────────── */
+// Слаги ролей совпадают с backend (roles.slug): student/teacher/dean.
+// admin намеренно не выдаём через UI — это привилегия выше уровня действий.
+const ASSIGNABLE_ROLES = [
+  { slug: 'STUDENT', label: 'Студент' },
+  { slug: 'TEACHER', label: 'Преподаватель' },
+  { slug: 'DEAN',    label: 'Деканат' },
+]
+const ROLE_LABEL = {
+  STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат', ADMIN: 'Администратор',
+}
+
+const ROLE_STYLE = {
+  DEAN:    { bg: 'rgba(217,119,6,.1)',  color: '#b45309' },
+  TEACHER: { bg: 'rgba(139,61,240,.1)', color: '#7c22d6' },
+  STUDENT: { bg: 'rgba(59,63,224,.1)',  color: '#3b3fe0' },
+  ADMIN:   { bg: 'rgba(16,185,129,.1)', color: '#065f46' },
+}
+const DEFAULT_ROLE_STYLE = { bg: 'rgba(107,114,128,.1)', color: '#374151' }
+function roleStyle(role) { return ROLE_STYLE[role] ?? DEFAULT_ROLE_STYLE }
+
+/* ─── Fetch ──────────────────────────────────────────────────── */
+async function fetchUsers() {
+  loading.value = true
+  forbidden.value = false
+  try {
+    const params = {
+      limit:  PAGE_SIZE,
+      offset: (currentPage.value - 1) * PAGE_SIZE,
+    }
+    if (filterRole.value)         params.role   = filterRole.value
+    if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
+
+    const { data } = await http.get('/api/users', { params })
+    users.value = (data.items ?? []).map(normalizeUser)
+    total.value = data.total ?? 0
+  } catch (e) {
+    if (e.response?.status === 403) forbidden.value = true
+    users.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+function normalizeUser(u) {
+  const role = (u.roles?.[0]?.slug ?? 'student').toUpperCase()
+  return {
+    id:         u.id,
+    role,
+    lastName:   u.last_name   ?? '',
+    firstName:  u.first_name  ?? '',
+    middleName: u.middle_name ?? '',
+    group:      u.group_name  ?? null,
+    email:      u.email,
+  }
+}
+
+/* ─── Смена роли ─────────────────────────────────────────────── */
+// Бэк хранит несколько ролей, но в этой системе у пользователя одна
+// «основная». Меняем: сначала выдаём новую (POST), затем снимаем старую
+// (DELETE), чтобы пользователь ни на миг не остался без роли.
+async function changeRole(user, newRole) {
+  if (newRole === user.role) return
+  const prevRole = user.role
+  savingId.value = user.id
+  toast.value = null
+  // Атомарной замены роли на бэке нет, поэтому сначала ВЫДАЁМ новую роль
+  // (POST), и только при успехе снимаем старую (DELETE). Так пользователь
+  // никогда не остаётся без роли. assigned помечает, что выдача прошла —
+  // тогда визуальный откат на prevRole был бы ложным.
+  let assigned = false
+  try {
+    await http.post(`/api/users/${user.id}/roles`, { role_slug: newRole.toLowerCase() })
+    assigned = true
+    if (prevRole && prevRole !== newRole) {
+      await http.delete(`/api/users/${user.id}/roles/${prevRole.toLowerCase()}`)
+    }
+    user.role = newRole
+    showToast('ok', `Роль изменена: ${fullName(user)} → ${ROLE_LABEL[newRole]}`)
+  } catch (e) {
+    const code = e.response?.data?.error
+    const msg = code === 'privilege_escalation'
+      ? 'Нельзя выдать роль выше своего уровня'
+      : e.response?.data?.message || 'Не удалось изменить роль'
+    showToast('err', msg)
+    // Если новую роль уже выдали, а снять старую не удалось — синхронизируем
+    // карточку с сервером, чтобы показать реальное состояние.
+    if (assigned) { user.role = newRole; fetchUsers() }
+    else { user.role = prevRole }
+  } finally {
+    savingId.value = null
+  }
+}
+
+let toastTimer = null
+function showToast(kind, text) {
+  toast.value = { kind, text }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, 3500)
+}
+
+/* ─── Watchers ───────────────────────────────────────────────── */
+watch(filterRole, () => { currentPage.value = 1; fetchUsers() })
+watch(currentPage, fetchUsers)
+
+let searchTimer = null
+watch(searchQuery, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => { currentPage.value = 1; fetchUsers() }, 350)
+})
+
+onMounted(fetchUsers)
+
+/* ─── Pagination ─────────────────────────────────────────────── */
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const rangeStart = computed(() => total.value === 0 ? 0 : (currentPage.value - 1) * PAGE_SIZE + 1)
+const rangeEnd   = computed(() => Math.min(currentPage.value * PAGE_SIZE, total.value))
+
+const visiblePages = computed(() => {
+  const t = totalPages.value, c = currentPage.value
+  if (t <= 7) return Array.from({ length: t }, (_, i) => i + 1)
+  const pages = [1]
+  if (c > 3) pages.push('…')
+  for (let i = Math.max(2, c - 1); i <= Math.min(t - 1, c + 1); i++) pages.push(i)
+  if (c < t - 2) pages.push('…')
+  pages.push(t)
+  return pages
+})
+
+function goPage(p) {
+  if (typeof p !== 'number') return
+  currentPage.value = Math.max(1, Math.min(totalPages.value, p))
+}
+
+/* ─── Helpers ────────────────────────────────────────────────── */
+function fullName(u) {
+  return [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ')
+}
+
+const AVATAR_PALETTE = [
+  '#3b3fe0','#e63c5a','#f59e0b','#10b981',
+  '#8b3df0','#0ea5e9','#ec4899','#14b8a6',
+  '#f97316','#6366f1','#84cc16','#06b6d4',
+]
+function avatarBg(u) {
+  const key = u.lastName + u.firstName
+  let h = 0
+  for (const c of key) h = ((h << 5) - h + c.charCodeAt(0)) >>> 0
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length]
+}
+function initials(u) {
+  return ((u.lastName?.[0] ?? '') + (u.firstName?.[0] ?? '')).toUpperCase()
+}
+</script>
+
+<template>
+  <div class="admin-root">
+    <AppSidebar :open="sidebarOpen" @close="sidebarOpen = false" />
+
+    <div class="page-admin">
+      <AppHeader @open-sidebar="sidebarOpen = true" />
+
+      <!-- ── Заголовок ── -->
+      <div class="page-bar">
+        <div class="page-bar-left">
+          <h1 class="page-title">Управление ролями</h1>
+          <span v-if="total > 0" class="total-chip">{{ total }} в системе</span>
+        </div>
+      </div>
+
+      <!-- ── Фильтры ── -->
+      <div class="filters-bar">
+        <div class="search-wrap">
+          <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+          <input
+            class="search-input"
+            type="text"
+            v-model="searchQuery"
+            placeholder="Поиск по ФИО, почте или группе..."
+          />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="chips">
+          <button class="chip" :class="{ active: filterRole === '' }" @click="filterRole = ''">Все</button>
+          <button class="chip" :class="{ active: filterRole === 'student' }" @click="filterRole = 'student'">Студенты</button>
+          <button class="chip" :class="{ active: filterRole === 'teacher' }" @click="filterRole = 'teacher'">Преподаватели</button>
+          <button class="chip" :class="{ active: filterRole === 'dean' }" @click="filterRole = 'dean'">Деканат</button>
+        </div>
+      </div>
+
+      <!-- ── Счётчик ── -->
+      <div class="results-bar">
+        <span v-if="loading" class="results-text results-empty">Загрузка…</span>
+        <span v-else-if="total > 0" class="results-text">
+          Показано&nbsp;<strong>{{ rangeStart }}–{{ rangeEnd }}</strong>&nbsp;из&nbsp;<strong>{{ total }}</strong>
+        </span>
+        <span v-else-if="!forbidden" class="results-text results-empty">Никого не найдено</span>
+      </div>
+
+      <!-- ── 403 ── -->
+      <div v-if="forbidden" class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d7d9e0" stroke-width="1.2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+        </svg>
+        <p class="empty-title">Нет доступа</p>
+        <p class="empty-sub">Управление ролями доступно только администратору</p>
+      </div>
+
+      <!-- ── Таблица пользователей ── -->
+      <div class="table-card" v-else-if="!loading && users.length">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr class="head-row">
+                <th>Пользователь</th>
+                <th>Почта</th>
+                <th>Группа</th>
+                <th>Текущая роль</th>
+                <th>Изменить роль</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="u in users" :key="u.id">
+                <td>
+                  <div class="user-cell">
+                    <div class="u-avatar" :style="{ background: avatarBg(u) }">
+                      <span class="u-initials">{{ initials(u) }}</span>
+                    </div>
+                    <span class="u-name">{{ fullName(u) }}</span>
+                  </div>
+                </td>
+                <td class="td-soft">{{ u.email }}</td>
+                <td class="td-soft">{{ u.group || '—' }}</td>
+                <td>
+                  <span class="u-badge" :style="{ background: roleStyle(u.role).bg, color: roleStyle(u.role).color }">
+                    {{ ROLE_LABEL[u.role] ?? u.role }}
+                  </span>
+                </td>
+                <td>
+                  <div class="role-select-wrap">
+                    <select
+                      class="role-select"
+                      :value="u.role"
+                      :disabled="savingId === u.id || u.role === 'ADMIN'"
+                      @change="changeRole(u, $event.target.value)"
+                    >
+                      <option v-for="r in ASSIGNABLE_ROLES" :key="r.slug" :value="r.slug">{{ r.label }}</option>
+                      <option v-if="u.role === 'ADMIN'" value="ADMIN">Администратор</option>
+                    </select>
+                    <span v-if="savingId === u.id" class="select-spinner" />
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Пустое состояние -->
+      <div v-else-if="!loading && !forbidden" class="empty-state">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d7d9e0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+        </svg>
+        <p class="empty-title">Никого не найдено</p>
+        <p class="empty-sub">Попробуйте изменить запрос или сбросить фильтры</p>
+        <button class="btn-reset" @click="searchQuery = ''; filterRole = ''">Сбросить фильтры</button>
+      </div>
+
+      <!-- ── Пагинация ── -->
+      <div v-if="totalPages > 1" class="pagination">
+        <button class="pg-btn" :disabled="currentPage === 1" @click="goPage(currentPage - 1)" title="Предыдущая">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <template v-for="p in visiblePages" :key="p + '-' + currentPage">
+          <span v-if="p === '…'" class="pg-dots">…</span>
+          <button v-else class="pg-btn" :class="{ active: p === currentPage }" @click="goPage(p)">{{ p }}</button>
+        </template>
+        <button class="pg-btn" :disabled="currentPage === totalPages" @click="goPage(currentPage + 1)" title="Следующая">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+        </button>
+      </div>
+
+      <div class="page-bottom-space" />
+    </div>
+
+    <!-- ── Toast ── -->
+    <Transition name="toast">
+      <div v-if="toast" class="toast" :class="`toast--${toast.kind}`">
+        <svg v-if="toast.kind === 'ok'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>{{ toast.text }}</span>
+      </div>
+    </Transition>
+  </div>
+</template>
+
+<style scoped>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
+
+.admin-root {
+  --bg:        #f3f4f7;
+  --card:      #ffffff;
+  --ink:       #1a1d24;
+  --ink-soft:  #6b7280;
+  --line:      #d7d9e0;
+  --brand:     #3b3fe0;
+  --brand-ink: #2a2e9e;
+  --radius:    10px;
+  --shadow:    0 2px 8px rgba(20,22,60,.07);
+  --ease:      cubic-bezier(.2,.7,.2,1);
+
+  min-height: 100dvh;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.page-admin {
+  min-height: 100dvh; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+
+/* ── Page bar ── */
+.page-bar { display: flex; align-items: center; gap: 12px; padding: 20px 24px 0; }
+.page-bar-left { display: flex; align-items: center; gap: 12px; }
+.page-title {
+  font-family: 'Gerhaus', 'Inter', sans-serif;
+  font-size: 20px; font-weight: 700; color: #3C38B6; margin: 0;
+}
+.total-chip {
+  padding: 4px 12px; border-radius: 20px;
+  background: rgba(59,63,224,.1); color: var(--brand);
+  font: 600 12px/1 'Inter', sans-serif;
+}
+
+/* ── Filters ── */
+.filters-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 16px 24px 0; }
+.search-wrap { position: relative; flex: 1; min-width: 220px; max-width: 380px; }
+.search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--ink-soft); pointer-events: none; }
+.search-input {
+  width: 100%; height: 38px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: var(--card); padding: 0 34px;
+  font: 13px/1 'Inter', sans-serif; color: var(--ink); outline: none;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.search-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.search-input::placeholder { color: #b0b3be; }
+.search-clear {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  border: none; background: none; color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; padding: 0;
+  transition: background .15s, color .15s;
+}
+.search-clear:hover { background: rgba(220,38,38,.08); color: #dc2626; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 12px; height: 34px; border: 1.5px solid var(--line); border-radius: 20px;
+  background: var(--card); color: var(--ink-soft);
+  font: 500 13px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.chip:hover { border-color: var(--brand); color: var(--brand); }
+.chip.active { background: rgba(59,63,224,.1); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
+/* ── Results ── */
+.results-bar { padding: 10px 24px 0; }
+.results-text { font-size: 13px; color: var(--ink-soft); }
+.results-text strong { color: var(--ink); font-weight: 600; }
+.results-empty { color: #b0b3be; }
+
+/* ── Table ── */
+.table-card {
+  margin: 16px 24px 0; background: var(--card);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 8px;
+}
+.table-wrap { overflow: auto; border-radius: 8px; }
+.data-table { width: 100%; border-collapse: collapse; font: 13px/1.4 'Inter', sans-serif; }
+.head-row th {
+  position: sticky; top: 0; z-index: 2;
+  background: #f8f9fb; padding: 12px 16px;
+  font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line);
+}
+.data-table tbody tr { transition: background .12s; }
+.data-table tbody tr:hover { background: rgba(59,63,224,.03); }
+.data-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-soft { color: var(--ink-soft); }
+
+.user-cell { display: flex; align-items: center; gap: 12px; }
+.u-avatar {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.u-initials { font: 700 13px/1 'Inter', sans-serif; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.u-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
+
+.u-badge { padding: 3px 10px; border-radius: 20px; font: 600 11px/1 'Inter', sans-serif; white-space: nowrap; }
+
+/* ── Role select ── */
+.role-select-wrap { display: flex; align-items: center; gap: 8px; }
+.role-select {
+  height: 36px; padding: 0 30px 0 12px; min-width: 160px;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: var(--card); color: var(--ink);
+  font: 500 13px/1 'Inter', sans-serif; cursor: pointer; outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.role-select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.role-select:disabled { opacity: .6; cursor: not-allowed; background-color: #f8f9fb; }
+.select-spinner {
+  width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--line); border-top-color: var(--brand);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Empty ── */
+.empty-state { display: flex; flex-direction: column; align-items: center; padding: 60px 24px; gap: 10px; }
+.empty-title { font-size: 16px; font-weight: 600; color: var(--ink); margin: 0; }
+.empty-sub { font-size: 13px; color: var(--ink-soft); margin: 0; text-align: center; line-height: 1.6; }
+.btn-reset {
+  margin-top: 8px; padding: 0 20px; height: 36px; border-radius: var(--radius);
+  border: 1.5px solid var(--line); background: var(--card); color: var(--ink);
+  font: 500 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.btn-reset:hover { border-color: var(--brand); color: var(--brand); }
+
+/* ── Pagination ── */
+.pagination { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 24px 24px 0; }
+.pg-btn {
+  min-width: 36px; height: 36px; padding: 0 8px;
+  border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink-soft);
+  font: 500 13px/1 'Inter', sans-serif; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.pg-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.05); }
+.pg-btn.active { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 700; }
+.pg-btn:disabled { opacity: .35; cursor: not-allowed; }
+.pg-dots { min-width: 36px; text-align: center; color: var(--ink-soft); font-size: 14px; }
+
+.page-bottom-space { height: 32px; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 500; display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; border-radius: 12px;
+  font: 600 13px/1.4 'Inter', sans-serif;
+  box-shadow: 0 12px 32px -8px rgba(10,12,30,.3);
+  max-width: 90vw;
+}
+.toast svg { width: 18px; height: 18px; flex-shrink: 0; }
+.toast--ok  { background: #065f46; color: #fff; }
+.toast--err { background: #dc2626; color: #fff; }
+.toast-enter-active, .toast-leave-active { transition: opacity .25s var(--ease), transform .25s var(--ease); }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 12px); }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .page-bar, .filters-bar, .results-bar, .pagination { padding-left: 16px; padding-right: 16px; }
+  .table-card { margin-left: 16px; margin-right: 16px; }
+  .search-wrap { max-width: 100%; }
+}
+</style>

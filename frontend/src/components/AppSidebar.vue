@@ -26,8 +26,20 @@ function logout() {
 
       <nav class="sidebar-nav">
 
+        <!-- Администратор -->
+        <template v-if="auth.isAdmin">
+          <div class="nav-section">
+            <RouterLink class="nav-item" to="/admin">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+              </svg>
+              Управление ролями
+            </RouterLink>
+          </div>
+        </template>
+
         <!-- Деканат -->
-        <template v-if="auth.isDean">
+        <template v-else-if="auth.isDean">
           <div class="nav-section">
             <RouterLink class="nav-item" to="/dean">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -162,7 +174,7 @@ function logout() {
   padding: 20px 24px 24px;
   display: flex; flex-direction: column; align-items: center; gap: 12px;
   border-bottom: 1px solid var(--line);
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--brand-ink); line-height: 1.5; text-align: center;
 }

@@ -219,9 +219,19 @@ function onTeacherEnter() { if (filteredTeachers.value.length) addTeacher(filter
 // ── Submit form — base fields ─────────────────────────────
 const retakeType     = ref('normal')
 const typeDropdownOpen = ref(false)
-const hourDisplay    = ref('09')
-const minuteDisplay  = ref('00')
-const retakeDate     = ref(null)
+// Слоты дат: 1..3 вариантов «дата + часы + минуты». Преподаватель может
+// предложить несколько — декан выберет один при одобрении. Первый слот
+// обязателен, остальные опциональны.
+const MAX_SLOTS = 3
+const slots = ref([{ date: null, hour: '09', minute: '00' }])
+function addSlot() {
+  if (slots.value.length >= MAX_SLOTS) return
+  slots.value.push({ date: null, hour: '09', minute: '00' })
+}
+function removeSlot(i) {
+  if (slots.value.length <= 1) return
+  slots.value.splice(i, 1)
+}
 const duration       = ref(90)
 const building       = ref('')
 const room           = ref('')
@@ -254,8 +264,8 @@ function applyTeacherDefault() {
 }
 
 function selectType(val) { retakeType.value = val; typeDropdownOpen.value = false }
-function onHourBlur()   { const n = clamp(parseInt(hourDisplay.value,   10), 0, 23); hourDisplay.value   = String(n).padStart(2, '0') }
-function onMinuteBlur() { const n = clamp(parseInt(minuteDisplay.value, 10), 0, 59); minuteDisplay.value = String(n).padStart(2, '0') }
+function onHourBlur(slot)   { const n = clamp(parseInt(slot.hour,   10), 0, 23); slot.hour   = String(n).padStart(2, '0') }
+function onMinuteBlur(slot) { const n = clamp(parseInt(slot.minute, 10), 0, 59); slot.minute = String(n).padStart(2, '0') }
 function onTimeInput(e) { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 2) }
 
 // Форматтеры даты/времени для таблицы «Мои заявки». Без них шаблон
@@ -292,9 +302,9 @@ watch(isCommission, (val) => {
 })
 
 function resetForm() {
-  disciplineId.value = ''; retakeType.value = 'normal'; retakeDate.value = null
+  disciplineId.value = ''; retakeType.value = 'normal'
+  slots.value = [{ date: null, hour: '09', minute: '00' }]
   duration.value = 90; building.value = ''; room.value = ''; description.value = ''
-  hourDisplay.value = '09'; minuteDisplay.value = '00'
   selectedStudents.value = []; selectedTeachers.value = []; groupSelect.value = ''
   formError.value = ''
 }
@@ -305,18 +315,28 @@ const ROOM_RE     = /^[А-Яа-яA-Za-z0-9\s\-\/\.]{1,20}$/
 async function submitForm() {
   formError.value = ''
   if (!disciplineId.value)  { formError.value = 'Выберите дисциплину'; return }
-  if (!retakeDate.value)    { formError.value = 'Укажите дату'; return }
 
-  // VueDatePicker отдаёт дату в формате "ДД.ММ.ГГГГ" (model-type="format").
-  // toUtcISO ждёт "ГГГГ-ММ-ДД", поэтому конвертируем — иначе toUtcISO
-  // получает невалидную дату и падает с RangeError (форма не отправляется).
-  const isoDate = toIsoDate(retakeDate.value)
-  if (!isoDate) { formError.value = 'Некорректная дата'; return }
-
-  // Время вводится в зоне вуза (Ханты, UTC+5) → toUtcISO собирает
-  // корректный UTC ISO, а не интерпретирует как зону устройства.
-  const scheduledAtISO = toUtcISO(isoDate, `${hourDisplay.value}:${minuteDisplay.value}`)
-  if (new Date(scheduledAtISO) <= new Date()) { formError.value = 'Дата и время пересдачи должны быть в будущем'; return }
+  // Собираем заполненные слоты в ISO. Первый слот обязателен; пустые
+  // дополнительные слоты просто игнорируем.
+  // VueDatePicker отдаёт дату в формате "ДД.ММ.ГГГГ" (model-type="format"),
+  // toUtcISO ждёт "ГГГГ-ММ-ДД". Время вводится в зоне вуза (Ханты, UTC+5).
+  const now = new Date()
+  const proposedSlots = []
+  for (let i = 0; i < slots.value.length; i++) {
+    const sl = slots.value[i]
+    if (!sl.date) {
+      if (i === 0) { formError.value = 'Укажите дату'; return }
+      continue // необязательный пустой слот
+    }
+    const isoDate = toIsoDate(sl.date)
+    if (!isoDate) { formError.value = `Некорректная дата (вариант ${i + 1})`; return }
+    const iso = toUtcISO(isoDate, `${sl.hour}:${sl.minute}`)
+    if (new Date(iso) <= now) { formError.value = `Дата и время варианта ${i + 1} должны быть в будущем`; return }
+    if (proposedSlots.includes(iso)) { formError.value = 'Варианты дат не должны повторяться'; return }
+    proposedSlots.push(iso)
+  }
+  if (!proposedSlots.length) { formError.value = 'Укажите хотя бы одну дату'; return }
+  const scheduledAtISO = proposedSlots[0]
 
   // Корпус и аудитория обязательны — иначе бэкенд отклоняет заявку (400),
   // и форма «молча» не отправлялась. Делаем валидацию явной на фронте.
@@ -335,6 +355,9 @@ async function submitForm() {
       discipline_id:    disciplineId.value,
       kind:             isCommission.value ? 'commission' : 'regular',
       scheduled_at:     scheduledAtISO,
+      // proposed_slots отправляем всегда (1..3); бэк продублирует первый
+      // в scheduled_at и при >1 потребует выбора декана при одобрении.
+      proposed_slots:   proposedSlots,
       duration_minutes: duration.value,
       building:         building.value,
       room:             room.value,
@@ -576,20 +599,21 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
                 </div>
               </div>
 
-              <div class="form-row">
+              <!-- Слоты дат: 1 обязательный + до 2 дополнительных вариантов -->
+              <div v-for="(sl, i) in slots" :key="i" class="form-row">
                 <div class="field" style="flex:2">
-                  <label>Дата</label>
-                  <VueDatePicker v-model="retakeDate" locale="ru" format="dd.MM.yyyy" model-type="format" :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг" />
+                  <label>{{ i === 0 ? 'Дата' : `Дата (вариант ${i + 1})` }}</label>
+                  <VueDatePicker v-model="sl.date" locale="ru" format="dd.MM.yyyy" model-type="format" :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг" />
                 </div>
                 <div class="field field--shrink">
                   <label>Время</label>
                   <div class="time-picker">
-                    <input class="time-input" type="text" inputmode="numeric" v-model="hourDisplay"   maxlength="2" placeholder="09" @input="onTimeInput" @blur="onHourBlur" />
+                    <input class="time-input" type="text" inputmode="numeric" v-model="sl.hour"   maxlength="2" placeholder="09" @input="onTimeInput" @blur="onHourBlur(sl)" />
                     <span class="time-colon">:</span>
-                    <input class="time-input" type="text" inputmode="numeric" v-model="minuteDisplay" maxlength="2" placeholder="00" @input="onTimeInput" @blur="onMinuteBlur" />
+                    <input class="time-input" type="text" inputmode="numeric" v-model="sl.minute" maxlength="2" placeholder="00" @input="onTimeInput" @blur="onMinuteBlur(sl)" />
                   </div>
                 </div>
-                <div class="field">
+                <div v-if="i === 0" class="field">
                   <label>Длительность (мин)</label>
                   <div class="stepper">
                     <button type="button" class="stepper-btn" @click="decreaseDuration" :disabled="duration <= DURATION_MIN">−</button>
@@ -597,6 +621,23 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
                     <button type="button" class="stepper-btn" @click="increaseDuration"  :disabled="duration >= DURATION_MAX">+</button>
                   </div>
                 </div>
+                <div v-else class="field field--shrink slot-remove-field">
+                  <label>&nbsp;</label>
+                  <button type="button" class="btn-slot-remove" @click="removeSlot(i)" title="Удалить вариант">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Добавить ещё дату (до MAX_SLOTS вариантов) -->
+              <div class="slot-add-row">
+                <button type="button" class="btn-add-slot" :disabled="slots.length >= MAX_SLOTS" @click="addSlot">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Добавить дату
+                </button>
+                <span class="slot-hint">
+                  {{ slots.length >= MAX_SLOTS ? `Максимум ${MAX_SLOTS} варианта` : 'Можно предложить несколько дат — декан выберет одну' }}
+                </span>
               </div>
 
               <!-- Преподаватели -->
@@ -937,7 +978,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
   box-shadow: var(--shadow); padding: 24px;
 }
 .section-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0 0 20px;
 }
 
@@ -1040,6 +1081,30 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .stepper-input { flex: 1; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line); background: transparent; outline: none; font: 500 13px/1 'Inter', sans-serif; color: var(--ink); text-align: center; -moz-appearance: textfield; }
 .stepper-input::-webkit-outer-spin-button,
 .stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── Date slots ── */
+.slot-remove-field { justify-content: flex-start; }
+.btn-slot-remove {
+  height: 38px; width: 44px; flex-shrink: 0;
+  border: 1.5px solid var(--line); border-radius: var(--radius);
+  background: #fff; color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.btn-slot-remove:hover { border-color: #dc2626; color: #dc2626; background: rgba(220,38,38,.05); }
+.btn-slot-remove svg { width: 16px; height: 16px; }
+.slot-add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: -4px; }
+.btn-add-slot {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 14px; border-radius: var(--radius);
+  border: 1.5px dashed var(--line); background: #fff; color: var(--brand);
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: border-color .15s, background .15s, opacity .15s;
+}
+.btn-add-slot:hover:not(:disabled) { border-color: var(--brand); background: rgba(59,63,224,.05); }
+.btn-add-slot:disabled { opacity: .45; cursor: not-allowed; color: var(--ink-soft); }
+.btn-add-slot svg { width: 14px; height: 14px; }
+.slot-hint { font: 12px/1.4 'Inter', sans-serif; color: var(--ink-soft); }
 
 /* ── Tags ── */
 .tags-wrap {
@@ -1277,7 +1342,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
   padding: 18px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0;
 }
 .modal-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 700; color: #3C38B6;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: calc(100% - 48px);
 }

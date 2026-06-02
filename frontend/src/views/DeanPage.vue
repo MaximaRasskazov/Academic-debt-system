@@ -1010,7 +1010,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .section-card:last-child { margin-bottom: 0; }
 .section-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0 0 20px;
 }
 
@@ -1285,7 +1285,7 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
   gap: 10px; flex-wrap: wrap;
 }
 .debt-table-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 14px; font-weight: 700; color: #3C38B6; margin: 0; white-space: nowrap;
 }
 .debt-table-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

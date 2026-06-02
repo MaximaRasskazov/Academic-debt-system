@@ -60,7 +60,7 @@ function formatDayLabel(r) {
 }
 .section-card:last-child { margin-bottom: 0; }
 .section-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0 0 20px;
 }
 

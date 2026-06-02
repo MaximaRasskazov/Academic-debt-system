@@ -47,7 +47,8 @@ async function onSubmit() {
 
     auth.login({ token: loginData.access_token, role, user: meData.user })
 
-    if (role === 'DEAN') router.push('/dean')
+    if (role === 'ADMIN') router.push('/admin')
+    else if (role === 'DEAN') router.push('/dean')
     else if (role === 'TEACHER') router.push('/teacher')
     else router.push('/student')
   } catch (err) {
@@ -456,7 +457,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
   background-repeat: no-repeat;
 }
 .logo-text {
-  font-family: 'Gerhaus', 'Regular';
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-weight: 500;
   font-size: 20px;
   line-height: 1.10;
@@ -471,7 +472,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
 }
 
 .brand-headline {
-  font-family: 'Gerhaus', 'Regular';
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   text-transform: uppercase;
   font-weight: 500;
   letter-spacing: .01em;
@@ -492,7 +493,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
   min-width: 0;
 }
 .form-title {
-  font-family: 'Gerhaus', 'Regular';
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   text-transform: uppercase;
   color: #3C38B6;
   font-weight: 500;

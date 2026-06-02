@@ -453,7 +453,7 @@ onUnmounted(() => { ws?.close() })
   padding: 14px 20px; border-bottom: 1px solid var(--line); gap: 10px;
 }
 .panel-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 14px; font-weight: 700; color: #3C38B6; margin: 0;
 }
 .panel-head-actions { display: flex; align-items: center; gap: 8px; }
@@ -544,7 +544,7 @@ onUnmounted(() => { ws?.close() })
 }
 .feed-title-row { display: flex; align-items: center; gap: 8px; }
 .feed-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 700; color: #3C38B6; margin: 0;
 }
 .unread-badge {
