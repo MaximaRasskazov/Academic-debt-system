@@ -9,9 +9,13 @@ export const changeRequestsApi = {
   submit: (data) =>
     http.post('/api/retake-change-requests', data),
 
-  // Декан — одобрить
-  approve: (id, decisionReason) =>
-    http.post(`/api/retake-change-requests/${id}/approve`, { decision_reason: decisionReason || '' }),
+  // Декан — одобрить. selectedSlot — ISO-строка выбранной даты для заявок
+  // с несколькими предложенными вариантами (proposed_slots).
+  approve: (id, decisionReason, selectedSlot) =>
+    http.post(`/api/retake-change-requests/${id}/approve`, {
+      decision_reason: decisionReason || '',
+      ...(selectedSlot ? { selected_slot: selectedSlot } : {}),
+    }),
 
   // Декан — отклонить (decision_reason обязателен)
   reject: (id, decisionReason) =>

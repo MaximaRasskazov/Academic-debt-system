@@ -56,6 +56,10 @@ const (
 
 	minRegularTeachers    int32 = 1
 	minCommissionTeachers int32 = 3
+
+	// maxProposedSlots — потолок числа предложенных преподавателем дат.
+	// Согласовано с фронтом (TeacherRequestsPage): 1 основная + до 2 доп.
+	maxProposedSlots = 3
 )
 
 // Sentinel-ошибки. HTTP-слой маппит их в 400/403/404/409/422.
@@ -69,6 +73,13 @@ var (
 	// in_progress («Идёт»), хотя ожидается «Назначена». Декан должен
 	// отклонить заявку или попросить преподавателя подать новую.
 	ErrScheduledInPast = errors.New("retakerequest: время пересдачи уже прошло")
+	// ErrSlotRequired — преподаватель предложил несколько дат, и декан
+	// обязан выбрать одну при одобрении (selected_slot). Без выбора
+	// одобрить нельзя.
+	ErrSlotRequired = errors.New("retakerequest: выберите одну из предложенных дат")
+	// ErrSlotNotProposed — выбранный деканом слот отсутствует среди
+	// предложенных преподавателем.
+	ErrSlotNotProposed = errors.New("retakerequest: выбранная дата не входит в предложенные")
 )
 
 // Payload — содержимое заявки. Маршалится в JSONB при сохранении.
@@ -77,9 +88,16 @@ var (
 // прикрепления студента к пересдаче нужен конкретный долг
 // (см. retake.Service.AddStudent).
 type Payload struct {
-	DisciplineID    uuid.UUID   `json:"discipline_id"`
-	Kind            string      `json:"kind"` // regular / commission
-	ScheduledAt     time.Time   `json:"scheduled_at"`
+	DisciplineID uuid.UUID `json:"discipline_id"`
+	Kind         string    `json:"kind"` // regular / commission
+	// ScheduledAt — единственная дата (легаси-путь и заявки с одной датой).
+	// При наличии нескольких вариантов используется ProposedSlots, а
+	// ScheduledAt дублирует первый слот для обратной совместимости с
+	// клиентами, читающими только scheduled_at.
+	ScheduledAt time.Time `json:"scheduled_at"`
+	// ProposedSlots — несколько предложенных преподавателем дат (1..3).
+	// Если их больше одной, декан обязан выбрать конкретную при одобрении.
+	ProposedSlots   []time.Time `json:"proposed_slots,omitempty"`
 	DurationMinutes int32       `json:"duration_minutes"`
 	Building        string      `json:"building"`
 	Room            string      `json:"room"`
@@ -190,7 +208,12 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (Request, error) {
 
 // Approve одобряет заявку: атомарно создаёт пересдачу и прикрепляет
 // участников. После коммита — best-effort уведомления.
-func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string) (Request, error) {
+//
+// selectedSlot — выбранная деканом дата. Обязательна, если преподаватель
+// предложил несколько вариантов (len(ProposedSlots) > 1); должна совпадать
+// с одним из предложенных слотов. Если вариант один — параметр игнорируется
+// и берётся единственная дата заявки.
+func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string, selectedSlot *time.Time) (Request, error) {
 	req, err := s.Get(ctx, id)
 	if err != nil {
 		return Request{}, err
@@ -211,6 +234,13 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	default:
 		return Request{}, ErrInvalidKind
 	}
+
+	// Определяем итоговую дату пересдачи из предложенных слотов и выбора декана.
+	scheduledAt, err := resolveScheduledAt(p, selectedSlot)
+	if err != nil {
+		return Request{}, err
+	}
+	p.ScheduledAt = scheduledAt
 
 	// Время пересдачи должно быть в будущем на момент одобрения: иначе
 	// созданная пересдача мгновенно уедет в in_progress по шедулеру.
@@ -378,13 +408,52 @@ func (s *Service) Reject(ctx context.Context, id, actorID uuid.UUID, decisionRea
 	return fromRow(rejected)
 }
 
+// resolveScheduledAt вычисляет итоговую дату пересдачи при одобрении.
+//   - Если предложено ≤1 даты (ProposedSlots пуст или из одного элемента) —
+//     берём единственную дату; selectedSlot игнорируется.
+//   - Если предложено несколько — selectedSlot обязателен и должен точно
+//     совпадать с одним из предложенных слотов.
+func resolveScheduledAt(p Payload, selectedSlot *time.Time) (time.Time, error) {
+	slots := p.ProposedSlots
+	if len(slots) <= 1 {
+		if len(slots) == 1 {
+			return slots[0], nil
+		}
+		return p.ScheduledAt, nil // легаси-заявки без proposed_slots
+	}
+	if selectedSlot == nil {
+		return time.Time{}, ErrSlotRequired
+	}
+	for _, s := range slots {
+		if s.Equal(*selectedSlot) {
+			return *selectedSlot, nil
+		}
+	}
+	return time.Time{}, ErrSlotNotProposed
+}
+
 // validatePayload проверяет обязательные поля и нормализует kind.
+// Нормализует даты: если переданы proposed_slots, дублирует первый слот
+// в scheduled_at (обратная совместимость с читателями одной даты).
 func validatePayload(p *Payload) error {
 	if p.DisciplineID == uuid.Nil {
 		return fmt.Errorf("%w: discipline_id обязателен", ErrInvalidInput)
 	}
 	if strings.TrimSpace(p.Building) == "" || strings.TrimSpace(p.Room) == "" {
 		return fmt.Errorf("%w: building и room обязательны", ErrInvalidInput)
+	}
+	// Даты: допускаем либо одиночный scheduled_at, либо 1..3 proposed_slots.
+	if len(p.ProposedSlots) > 0 {
+		if len(p.ProposedSlots) > maxProposedSlots {
+			return fmt.Errorf("%w: можно предложить не более %d дат", ErrInvalidInput, maxProposedSlots)
+		}
+		for _, slot := range p.ProposedSlots {
+			if slot.IsZero() {
+				return fmt.Errorf("%w: пустая дата в proposed_slots", ErrInvalidInput)
+			}
+		}
+		// scheduled_at дублирует первый слот — для клиентов, читающих одно поле.
+		p.ScheduledAt = p.ProposedSlots[0]
 	}
 	if p.ScheduledAt.IsZero() {
 		return fmt.Errorf("%w: scheduled_at обязателен", ErrInvalidInput)

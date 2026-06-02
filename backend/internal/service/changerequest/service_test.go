@@ -238,7 +238,7 @@ func TestApprove_AppliesChangesToRetake(t *testing.T) {
 			"DELETE FROM retake_change_requests WHERE id = $1", pgutil.PgUUID(req.ID))
 	})
 
-	approved, err := f.svc.Approve(context.Background(), req.ID, dean, nil)
+	approved, err := f.svc.Approve(context.Background(), req.ID, dean, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "approved", approved.Status)
 	require.NotNil(t, approved.ReviewedBy)
@@ -270,11 +270,11 @@ func TestApprove_AlreadyProcessed(t *testing.T) {
 			"DELETE FROM retake_change_requests WHERE id = $1", pgutil.PgUUID(req.ID))
 	})
 
-	_, err = f.svc.Approve(context.Background(), req.ID, dean, nil)
+	_, err = f.svc.Approve(context.Background(), req.ID, dean, nil, nil)
 	require.NoError(t, err)
 
 	// Второй approve — заявка уже не pending.
-	_, err = f.svc.Approve(context.Background(), req.ID, dean, nil)
+	_, err = f.svc.Approve(context.Background(), req.ID, dean, nil, nil)
 	require.ErrorIs(t, err, changerequest.ErrNotPending)
 }
 

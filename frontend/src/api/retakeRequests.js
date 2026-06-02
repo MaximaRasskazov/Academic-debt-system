@@ -19,9 +19,12 @@ export const retakeRequestsApi = {
   getAll: (params) =>
     http.get('/api/retake-requests/', { params }),
 
-  approve: (id, decisionReason) =>
+  // selectedSlot — ISO-строка выбранной деканом даты (для заявок с
+  // несколькими предложенными вариантами). Для одиночной даты — не нужна.
+  approve: (id, decisionReason, selectedSlot) =>
     http.post(`/api/retake-requests/${id}/approve`, {
       decision_reason: decisionReason || '',
+      ...(selectedSlot ? { selected_slot: selectedSlot } : {}),
     }),
 
   reject: (id, decisionReason) =>

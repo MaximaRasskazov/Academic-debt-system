@@ -237,33 +237,68 @@ onMounted(async () => {
 // ── Approve / Reject: общий confirm-flow ──────────────────────
 const approving  = ref(null)
 
+// ── Предложенные даты (мульти-слоты) ──────────────────────────
+// create-заявка хранит слоты в payload.proposed_slots, change-заявка —
+// в requested_changes.proposed_slots. Возвращаем массив ISO-строк.
+function slotsOf(r, kind) {
+  if (!r) return []
+  const arr = kind === 'create'
+    ? r.payload?.proposed_slots
+    : r.requested_changes?.proposed_slots
+  return Array.isArray(arr) ? arr : []
+}
+// Нужен ли выбор даты деканом: вариантов больше одного.
+function needsSlotChoice(r, kind) {
+  return slotsOf(r, kind).length > 1
+}
+
+// Лёгкий тост вместо alert — единый для approve/reject ошибок и подсказок.
+const toast = ref(null)
+let toastTimer = null
+function showToast(text, kind = 'err') {
+  toast.value = { text, kind }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, 4000)
+}
+
 async function approveRole(r) {
   approving.value = r.id
   try {
     await teacherRequestsApi.approve(r.id)
     roleRequests.value = roleRequests.value.filter((x) => x.id !== r.id)
   } catch (e) {
-    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+    showToast(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
   } finally { approving.value = null }
 }
 
-async function approveChange(r) {
+// approveChange/approveCreate принимают опциональный selectedSlot (ISO).
+// Если заявка предлагает несколько дат, а слот не выбран — не отправляем
+// запрос, а просим декана открыть «Подробнее» и выбрать дату.
+async function approveChange(r, selectedSlot) {
+  if (needsSlotChoice(r, 'change') && !selectedSlot) {
+    showToast('Преподаватель предложил несколько дат — откройте «Подробнее» и выберите одну', 'warn')
+    return
+  }
   approving.value = r.id
   try {
-    await changeRequestsApi.approve(r.id)
+    await changeRequestsApi.approve(r.id, undefined, selectedSlot)
     changeRequests.value = changeRequests.value.filter((x) => x.id !== r.id)
   } catch (e) {
-    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+    showToast(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
   } finally { approving.value = null }
 }
 
-async function approveCreate(r) {
+async function approveCreate(r, selectedSlot) {
+  if (needsSlotChoice(r, 'create') && !selectedSlot) {
+    showToast('Преподаватель предложил несколько дат — откройте «Подробнее» и выберите одну', 'warn')
+    return
+  }
   approving.value = r.id
   try {
-    await retakeRequestsApi.approve(r.id)
+    await retakeRequestsApi.approve(r.id, undefined, selectedSlot)
     createRequests.value = createRequests.value.filter((x) => x.id !== r.id)
   } catch (e) {
-    alert(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
+    showToast(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
   } finally { approving.value = null }
 }
 
@@ -329,6 +364,9 @@ const rejectSubtitle = computed(() => {
 // ── Detail modal ──────────────────────────────────────────────
 const detailModal = ref(null)
 const studentsExpanded = ref(false)
+// Выбранная деканом дата (ISO) среди предложенных слотов. Сбрасывается
+// при открытии модалки и обязательна для approve при нескольких вариантах.
+const selectedSlot = ref('')
 
 const STUDENTS_PREVIEW = 5
 
@@ -364,8 +402,10 @@ async function openDetailChange(r) {
     teachers:     [],
     students:     [],
     loadingParts: true,
+    slots:        slotsOf(r, 'change'),
     _raw: r,
   }
+  selectedSlot.value = ''
   // Подгружаем участников пересдачи
   try {
     await loadUsers()
@@ -392,7 +432,7 @@ async function openDetailCreate(r) {
     fields: [
       { label: 'Преподаватель', value: userFio(r.requested_by) },
       { label: 'Тип',           value: p.kind === 'commission' ? 'С комиссией' : 'Обычная' },
-      { label: 'Дата и время',  value: p.scheduled_at ? fmtDateTime(p.scheduled_at) : '—' },
+      { label: 'Дата и время',  value: slotsOf(r, 'create').length > 1 ? 'Несколько вариантов (выберите ниже)' : (p.scheduled_at ? fmtDateTime(p.scheduled_at) : '—') },
       { label: 'Длительность',  value: p.duration_minutes ? `${p.duration_minutes} мин` : '—' },
       { label: 'Место',         value: [p.building && `корп. ${p.building}`, p.room && `ауд. ${p.room}`].filter(Boolean).join(', ') || '—' },
       { label: 'Подана',        value: fmtDate(r.created_at) },
@@ -403,8 +443,10 @@ async function openDetailCreate(r) {
     loadingParts: !!(p.student_debt_ids?.length),
     teacherCount: (p.teacher_ids || []).length,
     studentCount: (p.student_debt_ids || []).length,
+    slots:        slotsOf(r, 'create'),
     _raw: r,
   }
+  selectedSlot.value = ''
   // Подгружаем имена студентов: для каждого debt_id запрашиваем сам долг
   // чтобы получить student_id, затем ищем ФИО в userMap.
   if (p.student_debt_ids?.length) {
@@ -726,6 +768,25 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
                 </div>
               </template>
 
+              <!-- Выбор даты из предложенных (если вариантов несколько) -->
+              <template v-if="detailModal.slots && detailModal.slots.length > 1">
+                <div class="detail-section-label">Выберите дату пересдачи <span class="slot-required">*</span></div>
+                <div class="slot-pick-list">
+                  <label
+                    v-for="(s, i) in detailModal.slots" :key="i"
+                    class="slot-pick"
+                    :class="{ active: selectedSlot === s }"
+                  >
+                    <input type="radio" name="slot-pick" :value="s" v-model="selectedSlot" />
+                    <span class="slot-pick-mark" />
+                    <span class="slot-pick-text">{{ fmtDateTime(s) }}</span>
+                  </label>
+                </div>
+                <p v-if="!selectedSlot" class="slot-pick-hint">
+                  Преподаватель предложил несколько дат — выберите одну, чтобы одобрить заявку.
+                </p>
+              </template>
+
               <!-- Участники (для change и create) -->
               <template v-if="detailModal.kind === 'change' || detailModal.kind === 'create'">
                 <div v-if="detailModal.loadingParts" class="parts-loading">
@@ -777,11 +838,15 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
               </template>
               <template v-else-if="detailModal.kind === 'change'">
                 <button class="btn-reject-confirm" @click="openReject(detailModal._raw, 'change'); closeDetail()">Отклонить</button>
-                <button class="btn-approve-confirm" :disabled="approving === detailModal._raw.id" @click="approveChange(detailModal._raw); closeDetail()">Одобрить</button>
+                <button class="btn-approve-confirm"
+                        :disabled="approving === detailModal._raw.id || (detailModal.slots.length > 1 && !selectedSlot)"
+                        @click="approveChange(detailModal._raw, selectedSlot || undefined); closeDetail()">Одобрить</button>
               </template>
               <template v-else-if="detailModal.kind === 'create'">
                 <button class="btn-reject-confirm" @click="openReject(detailModal._raw, 'create'); closeDetail()">Отклонить</button>
-                <button class="btn-approve-confirm" :disabled="approving === detailModal._raw.id" @click="approveCreate(detailModal._raw); closeDetail()">Одобрить</button>
+                <button class="btn-approve-confirm"
+                        :disabled="approving === detailModal._raw.id || (detailModal.slots.length > 1 && !selectedSlot)"
+                        @click="approveCreate(detailModal._raw, selectedSlot || undefined); closeDetail()">Одобрить</button>
               </template>
             </div>
 
@@ -828,6 +893,18 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
             </div>
 
           </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- ── Toast ── -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <div v-if="toast" class="rq-toast" :class="`rq-toast--${toast.kind}`">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>{{ toast.text }}</span>
         </div>
       </Transition>
     </Teleport>
@@ -913,7 +990,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .table-header { margin-bottom: 16px; }
 .title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .section-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6; margin: 0;
 }
 .count-badge {
@@ -991,7 +1068,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 }
 .todo-icon { width: 48px; height: 48px; color: var(--ink-soft); opacity: .4; }
 .todo-stub h2 {
-  margin: 0; font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  margin: 0; font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 16px; font-weight: 600; color: var(--ink);
 }
 .todo-stub p { font: 13px/1.6 'Inter', sans-serif; color: var(--ink-soft); margin: 0; max-width: 520px; }
@@ -1085,6 +1162,42 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .btn-approve-confirm:hover:not(:disabled) { background: rgba(59,63,224,.07); }
 .btn-approve-confirm:disabled { opacity: .5; cursor: not-allowed; }
 
+/* ── Slot picker (выбор даты деканом) ── */
+.slot-required { color: #dc2626; }
+.slot-pick-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.slot-pick {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border: 1.5px solid var(--line); border-radius: 10px;
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.slot-pick:hover { border-color: var(--brand); background: rgba(59,63,224,.03); }
+.slot-pick.active { border-color: var(--brand); background: rgba(59,63,224,.06); }
+.slot-pick input { position: absolute; opacity: 0; pointer-events: none; }
+.slot-pick-mark {
+  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--line); position: relative; transition: border-color .15s;
+}
+.slot-pick.active .slot-pick-mark { border-color: var(--brand); }
+.slot-pick.active .slot-pick-mark::after {
+  content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--brand);
+}
+.slot-pick-text { font: 600 13px/1.3 'Inter', sans-serif; color: var(--ink); }
+.slot-pick-hint { font: 12px/1.4 'Inter', sans-serif; color: #b45309; margin: 4px 0 0; }
+
+/* ── Toast ── */
+.rq-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 500; display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; border-radius: 12px;
+  font: 600 13px/1.4 'Inter', sans-serif; color: #fff;
+  box-shadow: 0 12px 32px -8px rgba(10,12,30,.3); max-width: 90vw;
+}
+.rq-toast svg { width: 18px; height: 18px; flex-shrink: 0; }
+.rq-toast--err  { background: #dc2626; }
+.rq-toast--warn { background: #b45309; }
+.toast-enter-active, .toast-leave-active { transition: opacity .25s, transform .25s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 12px); }
+
 /* ── Modal ── */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 400;
@@ -1112,7 +1225,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
   padding: 18px 20px; border-bottom: 1px solid var(--line);
 }
 .modal-title {
-  font-family: 'Gerhaus', 'Regular', 'Inter', sans-serif;
+  font-family: 'Gerhaus', 'Inter', sans-serif;
   font-size: 15px; font-weight: 600; color: #3C38B6;
 }
 .modal-close {

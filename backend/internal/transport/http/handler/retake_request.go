@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -22,7 +23,7 @@ type RetakeRequestService interface {
 	Submit(ctx context.Context, actorID uuid.UUID, p retakerequest.Payload) (retakerequest.Request, error)
 	ListPending(ctx context.Context, limit, offset int32) ([]retakerequest.Request, error)
 	ListMy(ctx context.Context, teacherID uuid.UUID, limit, offset int32) ([]retakerequest.Request, error)
-	Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string) (retakerequest.Request, error)
+	Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string, selectedSlot *time.Time) (retakerequest.Request, error)
 	Reject(ctx context.Context, id, actorID uuid.UUID, decisionReason string) (retakerequest.Request, error)
 }
 
@@ -54,6 +55,7 @@ func (h *RetakeRequestHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		DisciplineID:    body.DisciplineID,
 		Kind:            body.Kind,
 		ScheduledAt:     body.ScheduledAt,
+		ProposedSlots:   body.ProposedSlots,
 		DurationMinutes: body.DurationMinutes,
 		Building:        body.Building,
 		Room:            body.Room,
@@ -128,7 +130,7 @@ func (h *RetakeRequestHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
 		return
 	}
-	result, err := h.svc.Approve(r.Context(), id, userID, body.DecisionReason)
+	result, err := h.svc.Approve(r.Context(), id, userID, body.DecisionReason, body.SelectedSlot)
 	if err != nil {
 		mapRetakeRequestError(w, err)
 		return
@@ -179,6 +181,12 @@ func mapRetakeRequestError(w http.ResponseWriter, err error) {
 	case errors.Is(err, retakerequest.ErrScheduledInPast):
 		writeError(w, http.StatusUnprocessableEntity, "scheduled_in_past",
 			"время пересдачи уже прошло — отклоните заявку или попросите преподавателя подать новую")
+	case errors.Is(err, retakerequest.ErrSlotRequired):
+		writeError(w, http.StatusUnprocessableEntity, "slot_required",
+			"преподаватель предложил несколько дат — откройте «Подробнее» и выберите одну")
+	case errors.Is(err, retakerequest.ErrSlotNotProposed):
+		writeError(w, http.StatusBadRequest, "slot_not_proposed",
+			"выбранная дата не входит в предложенные преподавателем")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка сервиса")
 	}

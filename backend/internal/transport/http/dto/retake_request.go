@@ -15,9 +15,12 @@ import (
 // закрыться на этой пересдаче. Это симметрично API
 // POST /api/retakes/{id}/students (тот тоже принимает debt_id).
 type SubmitRetakeRequestBody struct {
-	DisciplineID    uuid.UUID   `json:"discipline_id"`
-	Kind            string      `json:"kind"` // "regular" / "commission"
-	ScheduledAt     time.Time   `json:"scheduled_at"`
+	DisciplineID uuid.UUID `json:"discipline_id"`
+	Kind         string    `json:"kind"` // "regular" / "commission"
+	ScheduledAt  time.Time `json:"scheduled_at"`
+	// ProposedSlots — несколько предложенных дат (1..3). Если задано,
+	// scheduled_at можно не присылать: бэк продублирует первый слот.
+	ProposedSlots   []time.Time `json:"proposed_slots,omitempty"`
 	DurationMinutes int32       `json:"duration_minutes"`
 	Building        string      `json:"building"`
 	Room            string      `json:"room"`

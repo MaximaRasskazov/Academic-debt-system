@@ -37,7 +37,7 @@ type retakeRequestServiceStub struct {
 	submitFn      func(ctx context.Context, actorID uuid.UUID, p retakerequest.Payload) (retakerequest.Request, error)
 	listPendingFn func(ctx context.Context, limit, offset int32) ([]retakerequest.Request, error)
 	listMyFn      func(ctx context.Context, teacherID uuid.UUID, limit, offset int32) ([]retakerequest.Request, error)
-	approveFn     func(ctx context.Context, id, actorID uuid.UUID, decisionReason *string) (retakerequest.Request, error)
+	approveFn     func(ctx context.Context, id, actorID uuid.UUID, decisionReason *string, selectedSlot *time.Time) (retakerequest.Request, error)
 	rejectFn      func(ctx context.Context, id, actorID uuid.UUID, decisionReason string) (retakerequest.Request, error)
 }
 
@@ -50,8 +50,8 @@ func (s *retakeRequestServiceStub) ListPending(ctx context.Context, limit, offse
 func (s *retakeRequestServiceStub) ListMy(ctx context.Context, teacherID uuid.UUID, limit, offset int32) ([]retakerequest.Request, error) {
 	return s.listMyFn(ctx, teacherID, limit, offset)
 }
-func (s *retakeRequestServiceStub) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string) (retakerequest.Request, error) {
-	return s.approveFn(ctx, id, actorID, decisionReason)
+func (s *retakeRequestServiceStub) Approve(ctx context.Context, id, actorID uuid.UUID, decisionReason *string, selectedSlot *time.Time) (retakerequest.Request, error) {
+	return s.approveFn(ctx, id, actorID, decisionReason, selectedSlot)
 }
 func (s *retakeRequestServiceStub) Reject(ctx context.Context, id, actorID uuid.UUID, decisionReason string) (retakerequest.Request, error) {
 	return s.rejectFn(ctx, id, actorID, decisionReason)
@@ -222,7 +222,7 @@ func TestRetakeRequestHandler_Approve_OK(t *testing.T) {
 	id := uuid.New()
 	actor := uuid.New()
 	stub := &retakeRequestServiceStub{
-		approveFn: func(_ context.Context, gotID, gotActor uuid.UUID, _ *string) (retakerequest.Request, error) {
+		approveFn: func(_ context.Context, gotID, gotActor uuid.UUID, _ *string, _ *time.Time) (retakerequest.Request, error) {
 			require.Equal(t, id, gotID)
 			require.Equal(t, actor, gotActor)
 			return retakerequest.Request{ID: gotID, Status: "approved", CreatedAt: time.Now()}, nil
@@ -240,7 +240,7 @@ func TestRetakeRequestHandler_Approve_OK(t *testing.T) {
 
 func TestRetakeRequestHandler_Approve_AlreadyProcessed(t *testing.T) {
 	stub := &retakeRequestServiceStub{
-		approveFn: func(context.Context, uuid.UUID, uuid.UUID, *string) (retakerequest.Request, error) {
+		approveFn: func(context.Context, uuid.UUID, uuid.UUID, *string, *time.Time) (retakerequest.Request, error) {
 			return retakerequest.Request{}, retakerequest.ErrNotPending
 		},
 	}
@@ -256,7 +256,7 @@ func TestRetakeRequestHandler_Approve_AlreadyProcessed(t *testing.T) {
 
 func TestRetakeRequestHandler_Approve_NotFound(t *testing.T) {
 	stub := &retakeRequestServiceStub{
-		approveFn: func(context.Context, uuid.UUID, uuid.UUID, *string) (retakerequest.Request, error) {
+		approveFn: func(context.Context, uuid.UUID, uuid.UUID, *string, *time.Time) (retakerequest.Request, error) {
 			return retakerequest.Request{}, retakerequest.ErrNotFound
 		},
 	}
