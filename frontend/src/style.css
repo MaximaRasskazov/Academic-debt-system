@@ -1,3 +1,8 @@
+/* Шрифт интерфейса — подключаем один раз глобально.
+   Раньше @import Inter дублировался в каждом scoped-стиле view.
+   @import обязан стоять до остальных правил (CSS-спека). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @font-face {
   font-family: 'Gerhaus';
   src: url('./assets/fonts/Gerhaus-Regular.ttf') format('truetype');
@@ -67,6 +72,35 @@
 
 body {
   margin: 0;
+}
+
+/* ── Дизайн-токены интерфейса приложения ──────────────────────────
+   Единый источник правды для цветов/радиусов/анимаций. Раньше эти
+   переменные дублировались (одинаковыми значениями) в каждом *-root
+   во view. Объявляем их на тех же корневых классах, поэтому подъём
+   сюда визуально ничего не меняет — а локальные дубли можно удалять.
+   ВАЖНО: namespace по *-root (а не :root), чтобы не пересекаться с
+   токенами лендинга/логина (--bg, --shadow, --text) и dark-mode. */
+.stmt-root,
+.dean-root,
+.requests-root,
+.users-root,
+.retakes-root,
+.teacher-req-root,
+.student-root,
+.teacher-root,
+.admin-root,
+.profile-root {
+  --bg:        #f3f4f7;
+  --card:      #ffffff;
+  --ink:       #1a1d24;
+  --ink-soft:  #6b7280;
+  --line:      #d7d9e0;
+  --brand:     #3b3fe0;
+  --brand-ink: #2a2e9e;
+  --radius:    10px;
+  --shadow:    0 2px 8px rgba(20,22,60,.07);
+  --ease:      cubic-bezier(.2,.7,.2,1);
 }
 
 /* ── VueDatePicker — глобальные переопределения под стили проекта ── */
