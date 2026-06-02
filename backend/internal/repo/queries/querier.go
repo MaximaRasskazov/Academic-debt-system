@@ -28,6 +28,9 @@ type Querier interface {
 	// Деканат отменяет ошибочно поставленный долг.
 	CancelDebt(ctx context.Context, id pgtype.UUID) error
 	CancelRetake(ctx context.Context, id pgtype.UUID) error
+	// open → closed. WHERE status='open' отсекает повторное закрытие/гонку
+	// (вернёт ErrNoRows → сервис трактует как ErrSheetClosed).
+	CloseStatementSheet(ctx context.Context, arg CloseStatementSheetParams) (StatementSheet, error)
 	CountDebts(ctx context.Context) (int64, error)
 	CountDisciplines(ctx context.Context) (int64, error)
 	CountOpenDebtsForStudent(ctx context.Context, studentID pgtype.UUID) (int64, error)
@@ -53,6 +56,12 @@ type Querier interface {
 	CreateRetakeChangeRequest(ctx context.Context, arg CreateRetakeChangeRequestParams) (RetakeChangeRequest, error)
 	CreateRetakeRequest(ctx context.Context, arg CreateRetakeRequestParams) (RetakeRequest, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
+	// Идемпотентный lazy-create ведомости. При гонке первого обращения
+	// (два запроса одновременно) второй INSERT ничего не делает из-за
+	// UNIQUE на retake_id — сервис затем читает строку через
+	// GetStatementSheetByRetake. RETURNING вернёт строку только когда
+	// вставка реально произошла; при конфликте — пусто (ErrNoRows).
+	CreateStatementSheet(ctx context.Context, retakeID pgtype.UUID) (StatementSheet, error)
 	CreateTeacherRoleRequest(ctx context.Context, arg CreateTeacherRoleRequestParams) (TeacherRoleRequest, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// Периодическая чистка таблицы фоновой задачей.
@@ -99,6 +108,7 @@ type Querier interface {
 	GetRetakeRequestByID(ctx context.Context, id pgtype.UUID) (RetakeRequest, error)
 	GetRoleByID(ctx context.Context, id pgtype.UUID) (Role, error)
 	GetRoleBySlug(ctx context.Context, lower string) (Role, error)
+	GetStatementSheetByRetake(ctx context.Context, retakeID pgtype.UUID) (StatementSheet, error)
 	GetTeacherRoleRequestByID(ctx context.Context, id pgtype.UUID) (TeacherRoleRequest, error)
 	// Поиск пользователя по email для логина. Сравнение регистронезависимое
 	// (соответствует UNIQUE-индексу idx_users_email_lower).
@@ -245,6 +255,17 @@ type Querier interface {
 	// Физическое удаление. Если пересдача уже стартовала или есть оценка —
 	// сервис должен отказать (проверка в бизнес-слое, не в БД).
 	RemoveParticipant(ctx context.Context, arg RemoveParticipantParams) error
+	// Откат закрытия долга при «Открыть ведомость» (декан): graded → open.
+	// CHECK debts_grade_consistency требует, чтобы у open-долга
+	// final_grade/graded_at/graded_by были NULL — обнуляем их.
+	// ВНИМАНИЕ: idx_debts_unique_open запрещает 2 open-долга по одной паре
+	// (student, discipline). Если sync создал новый open-долг после закрытия
+	// ведомости — этот UPDATE упадёт с 23505, сервис ловит и пропускает
+	// (best-effort per debt), ведомость всё равно открывается.
+	ReopenDebt(ctx context.Context, id pgtype.UUID) (Debt, error)
+	// closed → open (декан). Сбрасываем closed_*, фиксируем reopened_*.
+	// WHERE status='closed' отсекает повторное открытие/гонку.
+	ReopenStatementSheet(ctx context.Context, arg ReopenStatementSheetParams) (StatementSheet, error)
 	RestoreDiscipline(ctx context.Context, id pgtype.UUID) error
 	RestorePermission(ctx context.Context, id pgtype.UUID) error
 	RestoreRole(ctx context.Context, id pgtype.UUID) error
@@ -278,6 +299,14 @@ type Querier interface {
 	// Точечное обновление профиля. NULL-значения в параметрах оставляют поле
 	// без изменений (COALESCE), что упрощает PATCH-семантику на handler-слое.
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	// Черновик оценки для двухэтапной ведомости. В отличие от
+	// GradeStudentParticipant здесь НЕТ "AND grade IS NULL" — черновик
+	// можно перезаписывать сколько угодно, пока ведомость open. Все три
+	// колонки (grade/graded_at/graded_by) ставятся всегда, иначе нарушится
+	// CHECK participants_grade_consistency. graded_by/at тут означают
+	// "кем/когда внесён черновик". Долг при этом НЕ закрывается — это
+	// делает CloseSheet.
+	UpsertParticipantGradeDraft(ctx context.Context, arg UpsertParticipantGradeDraftParams) (RetakeParticipant, error)
 	// Точечная проверка на конкретный permission по slug. Используется в
 	// RBAC-middleware на каждом защищённом запросе.
 	UserHasPermission(ctx context.Context, arg UserHasPermissionParams) (bool, error)

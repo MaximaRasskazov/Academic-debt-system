@@ -33,6 +33,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakerequest"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/statement"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
@@ -52,6 +53,7 @@ type Deps struct {
 	Disciplines     *discipline.Service
 	Debts           *debt.Service
 	Retakes         *retake.Service
+	Statements      *statement.Service
 	ChangeRequests  *changerequest.Service
 	RetakeRequests  *retakerequest.Service
 	Reports         *report.Service

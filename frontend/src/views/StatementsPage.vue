@@ -57,12 +57,18 @@ const selectedId     = ref(null)
 const selectedRetake = computed(() => allRetakes.value.find(r => r.id === selectedId.value) ?? null)
 const detailLoading  = ref(false)
 
-// Оценки редактируемы только преподавателем и пока ведомость не
-// зафиксирована. completed-пересдачу бэкенд грейдить запрещает,
-// поэтому на ней оценки read-only. То есть редактируемо = teacher
-// + статус in_progress + оценка ещё не стоит.
+// Двухэтапная ведомость: оценки редактируемы преподавателем, пока
+// ведомость НЕ закрыта (sheetStatus !== 'closed'). Привязка к статусу
+// ведомости, а не пересдачи: препод может дозаполнять оценки и после
+// окончания слота (completed), пока сам не закрыл ведомость.
 function canGrade(retake) {
-  return isTeacher.value && retake && retake.status === 'in_progress'
+  return isTeacher.value && retake && retake.sheetStatus !== 'closed'
+}
+function sheetClosed(retake) {
+  return retake && retake.sheetStatus === 'closed'
+}
+function canReopen(retake) {
+  return auth.isDean && sheetClosed(retake)
 }
 
 watch(selectedId, async (id) => {
@@ -70,30 +76,88 @@ watch(selectedId, async (id) => {
   await loadParticipants(id)
 })
 
-/* ─── Grade ──────────────────────────────────────────────────── */
-const gradingId   = ref(null)   // student_id, по которому идёт запрос
-const gradeError  = ref('')
-const saveSuccess = ref(false)
+/* ─── Grade (черновик) ───────────────────────────────────────── */
+const gradeError   = ref('')
+const saveSuccess  = ref(false)
+const sheetBusy    = ref(false) // идёт save/close/reopen
 
-async function setGrade(retake, student, grade) {
+// setDraft — только локальный выбор оценки (без сети). Отправляется
+// батчем по кнопке «Сохранить». Перезапись разрешена, пока ведомость open.
+function setDraft(retake, student, grade) {
   if (!canGrade(retake)) return
-  if (student.result !== null) return        // переставить нельзя
-  if (gradingId.value) return                 // не плодим параллельные
+  student.draft = grade
+}
 
-  gradingId.value = student.id
+// hasUnsavedDrafts — есть ли студенты с черновиком, отличным от
+// сохранённого результата (для подсветки кнопки «Сохранить»).
+function hasUnsavedDrafts(retake) {
+  return retake.students.some(s => s.draft !== null && s.draft !== s.result)
+}
+
+// saveDrafts — отправляет на бэк все изменённые черновики. Долги
+// остаются open: закрытие — отдельной кнопкой «Закрыть ведомость».
+async function saveDrafts(retake) {
+  if (sheetBusy.value) return
+  const changed = retake.students.filter(s => s.draft !== null && s.draft !== s.result)
+  if (!changed.length) return
+
+  sheetBusy.value = true
   gradeError.value = ''
   try {
-    await retakesApi.gradeStudent(retake.id, student.id, grade)
-    // Оптимистично фиксируем результат и дату — повторно грузить не нужно
-    student.result   = grade
-    student.gradedAt = new Date().toISOString()
+    await Promise.all(changed.map(s => retakesApi.saveDraftGrade(retake.id, s.id, s.draft)))
+    for (const s of changed) {
+      s.result = s.draft
+      s.gradedAt = new Date().toISOString()
+    }
     saveSuccess.value = true
     setTimeout(() => (saveSuccess.value = false), 2000)
   } catch (e) {
-    gradeError.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось выставить оценку'
+    gradeError.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось сохранить черновик'
     setTimeout(() => (gradeError.value = ''), 4000)
   } finally {
-    gradingId.value = null
+    sheetBusy.value = false
+  }
+}
+
+// closeSheet — фиксация ведомости: бэк закрывает долги + write-back.
+async function closeSheet(retake) {
+  if (sheetBusy.value) return
+  // Несохранённые черновики сохраняем перед закрытием, чтобы они попали
+  // в фиксацию.
+  if (hasUnsavedDrafts(retake)) await saveDrafts(retake)
+
+  sheetBusy.value = true
+  gradeError.value = ''
+  try {
+    await retakesApi.closeSheet(retake.id)
+    retake.sheetStatus = 'closed'
+    retake.sheetClosedAt = new Date().toISOString()
+    saveSuccess.value = true
+    setTimeout(() => (saveSuccess.value = false), 2000)
+  } catch (e) {
+    gradeError.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось закрыть ведомость'
+    setTimeout(() => (gradeError.value = ''), 4000)
+  } finally {
+    sheetBusy.value = false
+  }
+}
+
+// reopenSheet — декан возвращает закрытую ведомость в open.
+async function reopenSheet(retake) {
+  if (sheetBusy.value) return
+  sheetBusy.value = true
+  gradeError.value = ''
+  try {
+    await retakesApi.reopenSheet(retake.id)
+    retake.sheetStatus = 'open'
+    retake.sheetClosedAt = null
+    saveSuccess.value = true
+    setTimeout(() => (saveSuccess.value = false), 2000)
+  } catch (e) {
+    gradeError.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось открыть ведомость'
+    setTimeout(() => (gradeError.value = ''), 4000)
+  } finally {
+    sheetBusy.value = false
   }
 }
 
@@ -241,6 +305,12 @@ async function loadParticipants(retakeId) {
     const partRes = await retakesApi.getParticipants(retakeId).catch(() => null)
     const parts = partRes ? (partRes.data.items ?? partRes.data ?? []) : []
 
+    // Статус ведомости (open/closed) — определяет, редактируемы ли оценки.
+    // Lazy-create на бэке: первый GET создаёт ведомость в статусе open.
+    const sheetRes = await retakesApi.getSheet(retakeId).catch(() => null)
+    retake.sheetStatus = sheetRes?.data?.status ?? 'open'
+    retake.sheetClosedAt = sheetRes?.data?.closed_at ?? null
+
     // ФИО студентов: преподаватель не имеет users.view, поэтому берём
     // из directoryApi.listDebtors по дисциплине (он отдаёт ФИО+группу).
     // Декан может тянуть users напрямую, но listDebtors проще и единообразно.
@@ -259,6 +329,10 @@ async function loadParticipants(retakeId) {
           middleName:u?.middleName|| '',
           group:     u?.group     || '',
           result:    p.grade ?? null,
+          // draft — текущий выбор оценки в UI (черновик). Инициализируем
+          // тем, что уже сохранено на бэке; меняется кликом, отправляется
+          // кнопкой «Сохранить».
+          draft:     p.grade ?? null,
           gradedAt:  p.graded_at || null,
           debtId:    p.debt_id || null,
         })
@@ -697,19 +771,29 @@ function downloadBlob(blob, filename) {
             <div class="students-card">
               <div class="students-head">
                 <h3 class="students-title">Список студентов</h3>
-                <span class="progress-text">
-                  Оценено:&nbsp;<strong>{{ gradeCount(selectedRetake.students) }}</strong>&nbsp;из&nbsp;<strong>{{ selectedRetake.students.length }}</strong>
-                </span>
+                <div class="students-head-right">
+                  <!-- Статус ведомости: черновик / зафиксирована -->
+                  <span class="sheet-badge" :class="sheetClosed(selectedRetake) ? 'sheet-badge--closed' : 'sheet-badge--open'">
+                    {{ sheetClosed(selectedRetake) ? 'Зафиксирована' : 'Черновик' }}
+                  </span>
+                  <span class="progress-text">
+                    Оценено:&nbsp;<strong>{{ gradeCount(selectedRetake.students) }}</strong>&nbsp;из&nbsp;<strong>{{ selectedRetake.students.length }}</strong>
+                  </span>
+                </div>
               </div>
 
               <!-- Подсказка о режиме редактирования -->
               <div v-if="canGrade(selectedRetake)" class="grade-note grade-note--active">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
-                Пересдача идёт — выставьте оценки студентам.
+                Выставьте оценки и нажмите «Сохранить». Долги закроются только при «Закрыть ведомость».
               </div>
-              <div v-else-if="isTeacher && selectedRetake.status === 'completed'" class="grade-note">
+              <div v-else-if="isTeacher && sheetClosed(selectedRetake)" class="grade-note">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                Пересдача завершена. Ведомость доступна только для просмотра и выгрузки.
+                Ведомость зафиксирована. Изменить оценки может только декан — открыв ведомость заново.
+              </div>
+              <div v-else-if="canReopen(selectedRetake)" class="grade-note">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                Ведомость зафиксирована. Вы можете открыть её для исправления оценок.
               </div>
 
               <div v-if="detailLoading" class="detail-loading">
@@ -741,24 +825,21 @@ function downloadBlob(blob, filename) {
                       <td class="td-name">{{ fullName(s) }}</td>
                       <td class="td-group">{{ s.group }}</td>
                       <td class="td-grade">
-                        <!-- Преподаватель, пересдача идёт, оценка ещё не стоит → можно выставить -->
-                        <div v-if="canGrade(selectedRetake) && s.result === null" class="grade-picker">
+                        <!-- Ведомость open + преподаватель → можно выбирать
+                             оценку (черновик, перезаписываемо). Выбранный
+                             draft подсвечивается. -->
+                        <div v-if="canGrade(selectedRetake)" class="grade-picker">
                           <button
                             v-for="g in [2, 3, 4, 5]"
                             :key="g"
                             class="g-btn"
-                            :class="`g${g}`"
-                            :disabled="gradingId !== null"
-                            @click="setGrade(selectedRetake, s, g)"
+                            :class="[`g${g}`, { 'g-active': s.draft === g }]"
+                            :disabled="sheetBusy"
+                            @click="setDraft(selectedRetake, s, g)"
                           >{{ g }}</button>
-                          <button
-                            class="g-btn g-na"
-                            :disabled="gradingId !== null"
-                            @click="setGrade(selectedRetake, s, 0)"
-                          >Н/я</button>
-                          <span v-if="gradingId === s.id" class="grade-spinner" />
+                          <span v-if="s.draft !== null && s.draft !== s.result" class="draft-dot" title="Не сохранено" />
                         </div>
-                        <!-- Оценка проставлена ИЛИ режим только для чтения -->
+                        <!-- Ведомость закрыта ИЛИ не teacher → read-only -->
                         <div v-else class="result-cell">
                           <span
                             class="result-text"
@@ -779,8 +860,32 @@ function downloadBlob(blob, filename) {
               <div v-else-if="saveSuccess" class="table-footer">
                 <span class="save-ok">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  Оценка выставлена, долг закрыт
+                  Сохранено
                 </span>
+              </div>
+
+              <!-- Действия с ведомостью -->
+              <div v-if="selectedRetake.students.length" class="sheet-actions">
+                <!-- Препод, ведомость open: Сохранить черновик + Закрыть -->
+                <template v-if="canGrade(selectedRetake)">
+                  <button
+                    class="sheet-btn sheet-btn--save"
+                    :disabled="sheetBusy || !hasUnsavedDrafts(selectedRetake)"
+                    @click="saveDrafts(selectedRetake)"
+                  >Сохранить</button>
+                  <button
+                    class="sheet-btn sheet-btn--close"
+                    :disabled="sheetBusy"
+                    @click="closeSheet(selectedRetake)"
+                  >Закрыть ведомость</button>
+                </template>
+                <!-- Декан, ведомость closed: Открыть -->
+                <button
+                  v-else-if="canReopen(selectedRetake)"
+                  class="sheet-btn sheet-btn--reopen"
+                  :disabled="sheetBusy"
+                  @click="reopenSheet(selectedRetake)"
+                >Открыть ведомость</button>
               </div>
             </div>
 
@@ -1176,12 +1281,46 @@ function downloadBlob(blob, filename) {
 
 .g-btn:not(:disabled):hover { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); }
 .g-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* Выбранный черновик подсвечен своим цветом. */
+.g-btn.g-active { color: #fff; border-color: var(--c); background: var(--c); }
 
 .grade-spinner {
   width: 16px; height: 16px; border-radius: 50%;
   border: 2px solid var(--line); border-top-color: var(--brand);
   animation: stmt-spin .7s linear infinite; margin-left: 4px;
 }
+/* Маркер несохранённого черновика. */
+.draft-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f59e0b; margin-left: 4px; flex-shrink: 0;
+}
+
+/* ── Статус ведомости + действия ─────────────────────────────── */
+.students-head-right { display: flex; align-items: center; gap: 12px; }
+.sheet-badge {
+  font: 600 11px/1 'Inter', sans-serif; padding: 4px 9px; border-radius: 20px;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.sheet-badge--open   { background: rgba(245,158,11,.14); color: #b45309; }
+.sheet-badge--closed { background: rgba(5,150,105,.12);  color: #047857; }
+
+.sheet-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 14px 24px; border-top: 1px solid var(--line);
+}
+.sheet-btn {
+  height: 38px; padding: 0 18px; border-radius: 9px;
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  border: 1.5px solid transparent; transition: opacity .15s, transform .1s, background .15s;
+}
+.sheet-btn:disabled { opacity: .45; cursor: not-allowed; }
+.sheet-btn:not(:disabled):active { transform: translateY(1px); }
+.sheet-btn--save   { background: #fff; border-color: var(--brand); color: var(--brand); }
+.sheet-btn--save:not(:disabled):hover { background: rgba(59,63,224,.06); }
+.sheet-btn--close  { background: var(--brand); color: #fff; }
+.sheet-btn--close:not(:disabled):hover { background: #2f33c4; }
+.sheet-btn--reopen { background: #fff; border-color: #d97706; color: #b45309; }
+.sheet-btn--reopen:not(:disabled):hover { background: rgba(245,158,11,.08); }
 
 /* Результат (проставленная оценка / долг) + дата фиксации */
 .result-cell { display: flex; flex-direction: column; gap: 2px; }

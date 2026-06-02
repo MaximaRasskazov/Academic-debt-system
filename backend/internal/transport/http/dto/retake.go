@@ -73,11 +73,6 @@ type AddRetakeTeacherRequest struct {
 	TeacherID uuid.UUID `json:"teacher_id"`
 }
 
-// GradeRetakeStudentRequest — PATCH /api/retakes/:id/students/:user_id/grade.
-type GradeRetakeStudentRequest struct {
-	Grade int32 `json:"grade"`
-}
-
 // RetakesListResponse — список с пагинацией для деканата.
 type RetakesListResponse struct {
 	Items  []RetakeResponse `json:"items"`

@@ -58,8 +58,10 @@ func mountRetakes(r chi.Router, d Deps) {
 			r.Delete("/{id}/teachers/{user_id}", h.RemoveTeacher)
 		})
 
-		r.With(mw.RequirePermission(d.RBAC, "retakes.assign_grade")).
-			Patch("/{id}/students/{user_id}/grade", h.GradeStudent)
+		// Выставление оценок переехало в ведомость (statement sheet):
+		// см. mountStatements — PATCH /{id}/sheet/grades/{user_id} (черновик),
+		// POST /{id}/sheet/close (фиксация), POST /{id}/sheet/reopen (декан).
+		mountStatements(r, d)
 	})
 }
 

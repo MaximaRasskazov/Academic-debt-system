@@ -111,6 +111,25 @@ WHERE id = $1
   AND deleted_at IS NULL
 RETURNING *;
 
+-- name: ReopenDebt :one
+-- Откат закрытия долга при «Открыть ведомость» (декан): graded → open.
+-- CHECK debts_grade_consistency требует, чтобы у open-долга
+-- final_grade/graded_at/graded_by были NULL — обнуляем их.
+-- ВНИМАНИЕ: idx_debts_unique_open запрещает 2 open-долга по одной паре
+-- (student, discipline). Если sync создал новый open-долг после закрытия
+-- ведомости — этот UPDATE упадёт с 23505, сервис ловит и пропускает
+-- (best-effort per debt), ведомость всё равно открывается.
+UPDATE debts
+SET status      = 'open',
+    final_grade = NULL,
+    graded_at   = NULL,
+    graded_by   = NULL,
+    updated_at  = NOW()
+WHERE id = $1
+  AND status = 'graded'
+  AND deleted_at IS NULL
+RETURNING *;
+
 -- name: CancelDebt :exec
 -- Деканат отменяет ошибочно поставленный долг.
 UPDATE debts

@@ -306,3 +306,43 @@ func (q *Queries) RemoveParticipant(ctx context.Context, arg RemoveParticipantPa
 	_, err := q.db.Exec(ctx, removeParticipant, arg.RetakeID, arg.UserID)
 	return err
 }
+
+const upsertParticipantGradeDraft = `-- name: UpsertParticipantGradeDraft :one
+UPDATE retake_participants
+SET grade     = $2,
+    graded_at = NOW(),
+    graded_by = $3
+WHERE id = $1
+  AND kind = 'student'
+RETURNING id, retake_id, user_id, kind, debt_id, grade, graded_at, graded_by, created_at
+`
+
+type UpsertParticipantGradeDraftParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Grade    *int32      `json:"grade"`
+	GradedBy pgtype.UUID `json:"graded_by"`
+}
+
+// Черновик оценки для двухэтапной ведомости. В отличие от
+// GradeStudentParticipant здесь НЕТ "AND grade IS NULL" — черновик
+// можно перезаписывать сколько угодно, пока ведомость open. Все три
+// колонки (grade/graded_at/graded_by) ставятся всегда, иначе нарушится
+// CHECK participants_grade_consistency. graded_by/at тут означают
+// "кем/когда внесён черновик". Долг при этом НЕ закрывается — это
+// делает CloseSheet.
+func (q *Queries) UpsertParticipantGradeDraft(ctx context.Context, arg UpsertParticipantGradeDraftParams) (RetakeParticipant, error) {
+	row := q.db.QueryRow(ctx, upsertParticipantGradeDraft, arg.ID, arg.Grade, arg.GradedBy)
+	var i RetakeParticipant
+	err := row.Scan(
+		&i.ID,
+		&i.RetakeID,
+		&i.UserID,
+		&i.Kind,
+		&i.DebtID,
+		&i.Grade,
+		&i.GradedAt,
+		&i.GradedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
