@@ -35,6 +35,10 @@ var (
 	ErrAlreadyParticipant    = errors.New("retake: пользователь уже участник этой пересдачи")
 	ErrStudentNeedsDebt      = errors.New("retake: студент должен быть привязан к долгу (debt_id)")
 	ErrParticipantNotStudent = errors.New("retake: оценить можно только участника-студента")
+	// ErrLastStudent / ErrMinTeachers — нельзя оголить состав пересдачи:
+	// должен остаться ≥1 студент и ≥min_teachers преподавателей.
+	ErrLastStudent = errors.New("retake: в пересдаче должен остаться хотя бы один студент")
+	ErrMinTeachers = errors.New("retake: преподавателей не может быть меньше минимально допустимого")
 )
 
 // AddStudent добавляет студента-участника с обязательной привязкой к
@@ -173,7 +177,28 @@ func (s *Service) removeParticipant(ctx context.Context, retakeID, userID uuid.U
 		return fmt.Errorf("%w: участнику уже выставлена оценка", ErrInvalidStatus)
 	}
 
-	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+	// Нельзя оголить состав: после удаления должен остаться хотя бы один
+	// студент, а преподавателей — не меньше min_teachers (1 для regular,
+	// ≥3 для commission). Иначе пересдачу нельзя будет провести.
+	if existing.Kind == ParticipantStudent {
+		students, err := s.store.ListStudentParticipantsForRetake(ctx, current.ID)
+		if err != nil {
+			return fmt.Errorf("count students: %w", err)
+		}
+		if len(students) <= 1 {
+			return ErrLastStudent
+		}
+	} else {
+		teachers, err := s.store.CountTeachersInRetake(ctx, current.ID)
+		if err != nil {
+			return fmt.Errorf("count teachers: %w", err)
+		}
+		if teachers-1 < int64(current.MinTeachers) {
+			return ErrMinTeachers
+		}
+	}
+
+	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		if err := q.RemoveParticipant(ctx, queries.RemoveParticipantParams{
 			RetakeID: current.ID,
 			UserID:   pgutil.PgUUID(userID),
@@ -188,6 +213,20 @@ func (s *Service) removeParticipant(ctx context.Context, retakeID, userID uuid.U
 			Details:    map[string]any{"user_id": userID.String()},
 		})
 	})
+	if err != nil {
+		return err
+	}
+
+	// Уведомляем снятого участника — симметрично Add*. Тип письма зависит
+	// от роли: студенту студенческий шаблон, преподавателю/члену комиссии —
+	// преподавательский. Best-effort: ошибки логируются внутри notify*.
+	payload := s.retakePayloadFor(ctx, current)
+	if existing.Kind == ParticipantStudent {
+		s.notifyStudent(ctx, userID, notify.KindRetakeParticipantRemoved, payload)
+	} else {
+		s.notifyTeacher(ctx, userID, notify.KindRetakeParticipantRemovedTeacher, payload)
+	}
+	return nil
 }
 
 // GradeStudent выставляет оценку студенту-участнику и атомарно

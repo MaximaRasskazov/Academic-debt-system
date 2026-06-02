@@ -28,6 +28,12 @@ const (
 	KindRetakeScheduledTeacher = "retake_scheduled_teacher"
 	KindRetakeUpdatedTeacher   = "retake_updated_teacher"
 	KindRetakeCancelledTeacher = "retake_cancelled_teacher"
+
+	// KindRetakeParticipantRemoved / _Teacher — участника сняли с пересдачи
+	// (декан убрал из состава). Студенту и преподавателю — разный текст.
+	KindRetakeParticipantRemoved        = "retake_participant_removed"
+	KindRetakeParticipantRemovedTeacher = "retake_participant_removed_teacher"
+
 	KindTeacherRequestApproved = "teacher_request_approved"
 	KindTeacherRequestRejected = "teacher_request_rejected"
 

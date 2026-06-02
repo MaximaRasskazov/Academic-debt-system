@@ -485,6 +485,10 @@ func mapRetakeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_kind", "kind должен быть regular или commission")
 	case errors.Is(err, retake.ErrNotEnoughTeachers):
 		writeError(w, http.StatusUnprocessableEntity, "not_enough_teachers", "для комиссии нужно минимум 3 преподавателя")
+	case errors.Is(err, retake.ErrLastStudent):
+		writeError(w, http.StatusConflict, "last_student", err.Error())
+	case errors.Is(err, retake.ErrMinTeachers):
+		writeError(w, http.StatusConflict, "min_teachers", err.Error())
 	case errors.Is(err, retake.ErrAlreadyParticipant):
 		writeError(w, http.StatusConflict, "already_participant", "пользователь уже участник этой пересдачи")
 	case errors.Is(err, retake.ErrStudentNeedsDebt):
