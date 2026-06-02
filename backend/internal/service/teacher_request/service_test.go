@@ -47,7 +47,7 @@ func setup(t *testing.T) *fixture {
 
 	store := repo.NewStore(pool)
 	rbacSvc := rbac.New(store)
-	svc := teacherrequest.New(store, rbacSvc)
+	svc := teacherrequest.New(store, rbacSvc, nil)
 	return &fixture{store: store, rbac: rbacSvc, svc: svc}
 }
 

@@ -339,14 +339,27 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	}
 
 	// Уведомляем подавшего, что заявка одобрена и пересдача создана.
+	// Payload обогащаем деталями созданной пересдачи, чтобы письмо
+	// показывало дисциплину/время/место, а не только id.
 	if s.notify != nil {
+		payload := map[string]any{
+			"retake_request_id": pgutil.UUID(approved.ID).String(),
+			"retake_id":         pgutil.UUID(createdRetake.ID).String(),
+			"scheduled_at":      createdRetake.ScheduledAt.Time.Format("2006-01-02 15:04"),
+			"building":          createdRetake.Building,
+			"room":              createdRetake.Room,
+			"duration_minutes":  createdRetake.DurationMinutes,
+		}
+		if disc, err := s.store.GetDisciplineByID(ctx, createdRetake.DisciplineID); err == nil {
+			payload["discipline"] = disc.Name
+		}
+		if decisionReason != nil {
+			payload["decision_reason"] = *decisionReason
+		}
 		if err := s.notify.Notify(ctx, notify.Event{
-			UserID: req.RequestedBy,
-			Kind:   notify.KindRetakeRequestApproved,
-			Payload: map[string]any{
-				"retake_request_id": pgutil.UUID(approved.ID).String(),
-				"retake_id":         pgutil.UUID(createdRetake.ID).String(),
-			},
+			UserID:  req.RequestedBy,
+			Kind:    notify.KindRetakeRequestApproved,
+			Payload: payload,
 		}); err != nil {
 			slog.Warn("retakerequest: уведомление не отправлено", "err", err)
 		}

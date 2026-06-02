@@ -1,29 +1,7 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <title>Назначена пересдача</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 24px; }
-    .header { background: #1976d2; color: #fff; padding: 20px 24px; border-radius: 6px 6px 0 0; }
-    .body   { border: 1px solid #e0e0e0; border-top: none; padding: 24px; border-radius: 0 0 6px 6px; }
-    .field  { margin: 12px 0; }
-    .label  { font-weight: bold; color: #555; }
-  </style>
-</head>
-<body>
-  <div class="header"><h2 style="margin:0">📋 Назначена пересдача</h2></div>
-  <div class="body">
-    <p>Уважаемый студент,</p>
-    <p>Вам назначена пересдача. Подробности ниже:</p>
-
-    <div class="field"><span class="label">Дисциплина:</span> {{.discipline}}</div>
-    <div class="field"><span class="label">Дата и время:</span> {{.scheduled_at}}</div>
-    <div class="field"><span class="label">Корпус:</span> {{.building}}</div>
-    <div class="field"><span class="label">Аудитория:</span> {{.room}}</div>
-    <div class="field"><span class="label">Продолжительность:</span> {{.duration_minutes}} мин.</div>
-
-    <p>Пожалуйста, явитесь заблаговременно с документами.</p>
-  </div>
-</body>
-</html>
+{{define "heading"}}Назначена пересдача{{end}}
+{{define "content"}}
+<p>Здравствуйте!</p>
+<p>Вам назначена пересдача{{with .discipline}} по дисциплине <strong>{{.}}</strong>{{end}}. Детали ниже.</p>
+{{template "details" .}}
+<p>Пожалуйста, явитесь заблаговременно и возьмите с собой документы.</p>
+{{end}}
