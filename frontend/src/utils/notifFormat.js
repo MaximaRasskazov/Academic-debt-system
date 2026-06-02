@@ -6,6 +6,7 @@ export function notifMeta(kind) {
   switch (kind) {
     case 'retake_scheduled':
     case 'retake_scheduled_teacher':
+    case 'retake_request_approved':
     case 'teacher_request_approved':
       return { img: iconAppointed,   bg: 'rgba(110,114,200,.12)', label: 'appointed' }
     case 'retake_change_approved':
@@ -15,6 +16,7 @@ export function notifMeta(kind) {
     case 'retake_cancelled':
     case 'retake_cancelled_teacher':
     case 'retake_change_rejected':
+    case 'retake_request_rejected':
     case 'teacher_request_rejected':
       return { img: null,            bg: 'rgba(220,38,38,.08)',   label: 'cancelled' }
     case 'retake_grade_received':
@@ -34,10 +36,12 @@ export function notifTitle(n) {
     case 'retake_cancelled':          return 'Пересдача отменена'
     case 'retake_cancelled_teacher':  return 'Пересдача отменена'
     case 'retake_grade_received':     return 'Выставлена оценка'
-    case 'retake_change_approved':    return 'Запрос на изменение одобрен'
-    case 'retake_change_rejected':    return 'Запрос на изменение отклонён'
-    case 'teacher_request_approved':  return 'Заявка на пересдачу одобрена'
-    case 'teacher_request_rejected':  return 'Заявка на пересдачу отклонена'
+    case 'retake_change_approved':    return 'Изменение пересдачи одобрено'
+    case 'retake_change_rejected':    return 'Изменение пересдачи отклонено'
+    case 'retake_request_approved':   return 'Заявка на пересдачу одобрена'
+    case 'retake_request_rejected':   return 'Заявка на пересдачу отклонена'
+    case 'teacher_request_approved':  return 'Заявка на преподавателя одобрена'
+    case 'teacher_request_rejected':  return 'Заявка на преподавателя отклонена'
     default:                          return 'Уведомление'
   }
 }
@@ -94,20 +98,28 @@ export function notifBody(n) {
         : 'По результатам пересдачи выставлена итоговая оценка.'
 
     case 'retake_change_approved':
-      return 'Деканат одобрил ваш запрос на изменение пересдачи. Изменения применены.'
+      return 'Деканат одобрил вашу заявку на изменение пересдачи. Изменения применены.'
 
     case 'retake_change_rejected':
       return reason
-        ? `Деканат отклонил запрос на изменение. Причина: ${reason}.`
-        : 'Деканат отклонил ваш запрос на изменение пересдачи.'
+        ? `Деканат отклонил вашу заявку на изменение пересдачи. Причина: ${reason}.`
+        : 'Деканат отклонил вашу заявку на изменение пересдачи.'
+
+    case 'retake_request_approved':
+      return 'Деканат одобрил вашу заявку на пересдачу. Пересдача создана.'
+
+    case 'retake_request_rejected':
+      return reason
+        ? `Деканат отклонил вашу заявку на пересдачу. Причина: ${reason}.`
+        : 'Деканат отклонил вашу заявку на пересдачу.'
 
     case 'teacher_request_approved':
-      return 'Ваша заявка на создание пересдачи одобрена деканатом.'
+      return 'Ваша заявка на роль преподавателя одобрена деканатом.'
 
     case 'teacher_request_rejected':
       return reason
-        ? `Ваша заявка на создание пересдачи отклонена. Причина: ${reason}.`
-        : 'Ваша заявка на создание пересдачи отклонена деканатом.'
+        ? `Ваша заявка на роль преподавателя отклонена. Причина: ${reason}.`
+        : 'Ваша заявка на роль преподавателя отклонена деканатом.'
 
     default:
       return ''

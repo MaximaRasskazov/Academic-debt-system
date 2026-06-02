@@ -256,10 +256,20 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 		return Request{}, err
 	}
 
-	s.notifyParticipants(ctx, req.RetakeID, notify.KindRetakeChangeApproved, map[string]any{
+	// Автору заявки — «вам одобрили изменение пересдачи».
+	// Остальным участникам (студенты, другие преподаватели) — «вам
+	// изменили пересдачу»: для них это не их заявка, а просто факт
+	// изменения расписания деканатом.
+	payload := map[string]any{
 		"retake_id":         req.RetakeID.String(),
 		"change_request_id": pgutil.UUID(approved.ID).String(),
+	}
+	_ = s.notify.Notify(ctx, notify.Event{
+		UserID:  req.RequestedBy,
+		Kind:    notify.KindRetakeChangeApproved,
+		Payload: payload,
 	})
+	s.notifyOtherParticipants(ctx, req.RetakeID, req.RequestedBy, notify.KindRetakeUpdated, payload)
 
 	return fromRow(approved)
 }
@@ -321,10 +331,11 @@ func (s *Service) Reject(ctx context.Context, id, actorID uuid.UUID, decisionRea
 	return fromRow(rejected)
 }
 
-// notifyParticipants рассылает уведомление всем участникам пересдачи.
+// notifyOtherParticipants рассылает уведомление всем участникам пересдачи,
+// КРОМЕ exclude (обычно — автора заявки, который получает отдельный текст).
 // Best-effort: ошибки логируются, но не возвращаются — не должны
 // откатывать уже совершённую транзакцию.
-func (s *Service) notifyParticipants(ctx context.Context, retakeID uuid.UUID, kind string, payload map[string]any) {
+func (s *Service) notifyOtherParticipants(ctx context.Context, retakeID, exclude uuid.UUID, kind string, payload map[string]any) {
 	parts, err := s.store.ListParticipantsForRetake(ctx, pgutil.PgUUID(retakeID))
 	if err != nil {
 		slog.Warn("changerequest: не удалось получить участников для уведомления",
@@ -332,13 +343,17 @@ func (s *Service) notifyParticipants(ctx context.Context, retakeID uuid.UUID, ki
 		return
 	}
 	for _, p := range parts {
+		uid := pgutil.UUID(p.UserID)
+		if uid == exclude {
+			continue
+		}
 		if err := s.notify.Notify(ctx, notify.Event{
-			UserID:  pgutil.UUID(p.UserID),
+			UserID:  uid,
 			Kind:    kind,
 			Payload: payload,
 		}); err != nil {
 			slog.Warn("changerequest: не удалось отправить уведомление",
-				"user_id", pgutil.UUID(p.UserID), "err", err)
+				"user_id", uid, "err", err)
 		}
 	}
 }

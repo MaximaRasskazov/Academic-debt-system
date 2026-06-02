@@ -33,6 +33,13 @@ const (
 
 	KindRetakeChangeApproved = "retake_change_approved"
 	KindRetakeChangeRejected = "retake_change_rejected"
+
+	// KindRetakeRequestApproved / Rejected — заявка преподавателя на
+	// СОЗДАНИЕ пересдачи (retakerequest), решение деканата.
+	// Отличается от KindRetakeChange* (изменение существующей) и от
+	// KindTeacherRequest* (заявка на роль преподавателя).
+	KindRetakeRequestApproved = "retake_request_approved"
+	KindRetakeRequestRejected = "retake_request_rejected"
 )
 
 // Event — входные данные для отправки уведомления.

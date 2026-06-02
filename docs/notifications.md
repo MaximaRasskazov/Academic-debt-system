@@ -47,8 +47,17 @@ backend/internal/config/config.go  — добавлены SMTP-поля
 | `KindRetakeUpdated` | `retake_updated` | `retake_updated.html` |
 | `KindRetakeCancelled` | `retake_cancelled` | `retake_cancelled.html` |
 | `KindRetakeGradeReceived` | `retake_grade_received` | нет (только DB + WS) |
-| `KindTeacherRequestApproved` | `teacher_request_approved` | нет |
-| `KindTeacherRequestRejected` | `teacher_request_rejected` | нет |
+| `KindRetakeRequestApproved` | `retake_request_approved` | нет — заявка преподавателя на создание пересдачи одобрена |
+| `KindRetakeRequestRejected` | `retake_request_rejected` | нет — заявка на создание отклонена |
+| `KindRetakeChangeApproved` | `retake_change_approved` | нет — заявка на изменение одобрена (автору) |
+| `KindRetakeChangeRejected` | `retake_change_rejected` | нет — заявка на изменение отклонена |
+| `KindTeacherRequestApproved` | `teacher_request_approved` | нет — заявка на роль преподавателя |
+| `KindTeacherRequestRejected` | `teacher_request_rejected` | нет — заявка на роль преподавателя |
+
+> При одобрении заявки на изменение (`changerequest`) автор получает
+> `retake_change_approved` («вам одобрили изменение»), а остальные участники
+> (студенты, другие преподаватели) — `retake_updated` («вам изменили
+> пересдачу»), как при прямом изменении деканатом.
 
 Для типов без шаблона email не отправляется — `emailNotifier.send` тихо возвращает `nil`.
 

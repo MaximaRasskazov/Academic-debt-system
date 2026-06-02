@@ -13,6 +13,8 @@ const KIND_LABELS = {
   teacher_request_rejected: 'Заявка на преподавателя отклонена',
   retake_change_approved:   'Изменение пересдачи одобрено',
   retake_change_rejected:   'Изменение пересдачи отклонено',
+  retake_request_approved:  'Заявка на пересдачу одобрена',
+  retake_request_rejected:  'Заявка на пересдачу отклонена',
 }
 
 export function kindLabel(kind) {

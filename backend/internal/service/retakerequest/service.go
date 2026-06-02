@@ -312,7 +312,7 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	if s.notify != nil {
 		if err := s.notify.Notify(ctx, notify.Event{
 			UserID: req.RequestedBy,
-			Kind:   notify.KindRetakeChangeApproved, // переиспользуем близкое по смыслу событие
+			Kind:   notify.KindRetakeRequestApproved,
 			Payload: map[string]any{
 				"retake_request_id": pgutil.UUID(approved.ID).String(),
 				"retake_id":         pgutil.UUID(createdRetake.ID).String(),
@@ -368,7 +368,7 @@ func (s *Service) Reject(ctx context.Context, id, actorID uuid.UUID, decisionRea
 	if s.notify != nil {
 		_ = s.notify.Notify(ctx, notify.Event{
 			UserID: req.RequestedBy,
-			Kind:   notify.KindRetakeChangeRejected,
+			Kind:   notify.KindRetakeRequestRejected,
 			Payload: map[string]any{
 				"retake_request_id": pgutil.UUID(rejected.ID).String(),
 				"decision_reason":   decisionReason,
