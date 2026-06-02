@@ -173,7 +173,7 @@ func (s *Service) removeParticipant(ctx context.Context, retakeID, userID uuid.U
 		return fmt.Errorf("%w: участнику уже выставлена оценка", ErrInvalidStatus)
 	}
 
-	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		if err := q.RemoveParticipant(ctx, queries.RemoveParticipantParams{
 			RetakeID: current.ID,
 			UserID:   pgutil.PgUUID(userID),
@@ -188,6 +188,20 @@ func (s *Service) removeParticipant(ctx context.Context, retakeID, userID uuid.U
 			Details:    map[string]any{"user_id": userID.String()},
 		})
 	})
+	if err != nil {
+		return err
+	}
+
+	// Уведомляем снятого участника — симметрично Add*. Тип письма зависит
+	// от роли: студенту студенческий шаблон, преподавателю/члену комиссии —
+	// преподавательский. Best-effort: ошибки логируются внутри notify*.
+	payload := s.retakePayloadFor(ctx, current)
+	if existing.Kind == ParticipantStudent {
+		s.notifyStudent(ctx, userID, notify.KindRetakeParticipantRemoved, payload)
+	} else {
+		s.notifyTeacher(ctx, userID, notify.KindRetakeParticipantRemovedTeacher, payload)
+	}
+	return nil
 }
 
 // GradeStudent выставляет оценку студенту-участнику и атомарно

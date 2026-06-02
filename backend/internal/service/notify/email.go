@@ -44,6 +44,12 @@ var tmplRetakeUpdatedTeacher string
 //go:embed templates/retake_cancelled_teacher.html
 var tmplRetakeCancelledTeacher string
 
+//go:embed templates/retake_participant_removed.html
+var tmplRetakeParticipantRemoved string
+
+//go:embed templates/retake_participant_removed_teacher.html
+var tmplRetakeParticipantRemovedTeacher string
+
 //go:embed templates/retake_change_approved.html
 var tmplRetakeChangeApproved string
 
@@ -76,38 +82,42 @@ func init() {
 		return template.Must(template.Must(template.New("email").Parse(tmplBase)).Parse(content))
 	}
 	emailTemplates = map[string]*template.Template{
-		KindRetakeScheduled:        parseEmail(tmplRetakeScheduled),
-		KindRetakeUpdated:          parseEmail(tmplRetakeUpdated),
-		KindRetakeCancelled:        parseEmail(tmplRetakeCancelled),
-		KindRetakeGradeReceived:    parseEmail(tmplRetakeGradeReceived),
-		KindRetakeScheduledTeacher: parseEmail(tmplRetakeScheduledTeacher),
-		KindRetakeUpdatedTeacher:   parseEmail(tmplRetakeUpdatedTeacher),
-		KindRetakeCancelledTeacher: parseEmail(tmplRetakeCancelledTeacher),
-		KindRetakeChangeApproved:   parseEmail(tmplRetakeChangeApproved),
-		KindRetakeChangeRejected:   parseEmail(tmplRetakeChangeRejected),
-		KindRetakeRequestApproved:  parseEmail(tmplRetakeRequestApproved),
-		KindRetakeRequestRejected:  parseEmail(tmplRetakeRequestRejected),
-		KindDebtCreated:            parseEmail(tmplDebtCreated),
-		KindTeacherRequestApproved: parseEmail(tmplTeacherRequestApproved),
-		KindTeacherRequestRejected: parseEmail(tmplTeacherRequestRejected),
+		KindRetakeScheduled:                 parseEmail(tmplRetakeScheduled),
+		KindRetakeUpdated:                   parseEmail(tmplRetakeUpdated),
+		KindRetakeCancelled:                 parseEmail(tmplRetakeCancelled),
+		KindRetakeGradeReceived:             parseEmail(tmplRetakeGradeReceived),
+		KindRetakeScheduledTeacher:          parseEmail(tmplRetakeScheduledTeacher),
+		KindRetakeUpdatedTeacher:            parseEmail(tmplRetakeUpdatedTeacher),
+		KindRetakeCancelledTeacher:          parseEmail(tmplRetakeCancelledTeacher),
+		KindRetakeParticipantRemoved:        parseEmail(tmplRetakeParticipantRemoved),
+		KindRetakeParticipantRemovedTeacher: parseEmail(tmplRetakeParticipantRemovedTeacher),
+		KindRetakeChangeApproved:            parseEmail(tmplRetakeChangeApproved),
+		KindRetakeChangeRejected:            parseEmail(tmplRetakeChangeRejected),
+		KindRetakeRequestApproved:           parseEmail(tmplRetakeRequestApproved),
+		KindRetakeRequestRejected:           parseEmail(tmplRetakeRequestRejected),
+		KindDebtCreated:                     parseEmail(tmplDebtCreated),
+		KindTeacherRequestApproved:          parseEmail(tmplTeacherRequestApproved),
+		KindTeacherRequestRejected:          parseEmail(tmplTeacherRequestRejected),
 	}
 }
 
 var subjectByKind = map[string]string{
-	KindRetakeScheduled:        "Назначена пересдача",
-	KindRetakeUpdated:          "Пересдача перенесена",
-	KindRetakeCancelled:        "Пересдача отменена",
-	KindRetakeGradeReceived:    "Выставлена оценка за пересдачу",
-	KindRetakeScheduledTeacher: "Вы назначены на пересдачу",
-	KindRetakeUpdatedTeacher:   "Пересдача перенесена",
-	KindRetakeCancelledTeacher: "Пересдача отменена",
-	KindRetakeChangeApproved:   "Заявка на перенос одобрена",
-	KindRetakeChangeRejected:   "Заявка на перенос отклонена",
-	KindRetakeRequestApproved:  "Заявка на пересдачу одобрена",
-	KindRetakeRequestRejected:  "Заявка на пересдачу отклонена",
-	KindDebtCreated:            "Зафиксирована академическая задолженность",
-	KindTeacherRequestApproved: "Заявка на роль преподавателя одобрена",
-	KindTeacherRequestRejected: "Заявка на роль преподавателя отклонена",
+	KindRetakeScheduled:                 "Назначена пересдача",
+	KindRetakeUpdated:                   "Пересдача перенесена",
+	KindRetakeCancelled:                 "Пересдача отменена",
+	KindRetakeGradeReceived:             "Выставлена оценка за пересдачу",
+	KindRetakeScheduledTeacher:          "Вы назначены на пересдачу",
+	KindRetakeUpdatedTeacher:            "Пересдача перенесена",
+	KindRetakeCancelledTeacher:          "Пересдача отменена",
+	KindRetakeParticipantRemoved:        "Вы сняты с пересдачи",
+	KindRetakeParticipantRemovedTeacher: "Вы сняты с приёма пересдачи",
+	KindRetakeChangeApproved:            "Заявка на перенос одобрена",
+	KindRetakeChangeRejected:            "Заявка на перенос отклонена",
+	KindRetakeRequestApproved:           "Заявка на пересдачу одобрена",
+	KindRetakeRequestRejected:           "Заявка на пересдачу отклонена",
+	KindDebtCreated:                     "Зафиксирована академическая задолженность",
+	KindTeacherRequestApproved:          "Заявка на роль преподавателя одобрена",
+	KindTeacherRequestRejected:          "Заявка на роль преподавателя отклонена",
 }
 
 const emailQueueSize = 100
