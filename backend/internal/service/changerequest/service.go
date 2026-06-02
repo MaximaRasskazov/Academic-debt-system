@@ -50,6 +50,10 @@ var (
 	ErrForbidden       = errors.New("changerequest: преподаватель не является участником пересдачи")
 	ErrInvalidInput    = errors.New("changerequest: некорректные параметры")
 	ErrRetakeNotActive = errors.New("changerequest: пересдача завершена или отменена")
+	// ErrScheduledInPast — новое время пересдачи уже прошло к моменту
+	// одобрения: применять нельзя, иначе шедулер сразу переведёт в
+	// in_progress («Идёт») вместо ожидаемого «Назначена».
+	ErrScheduledInPast = errors.New("changerequest: новое время пересдачи уже прошло")
 )
 
 // Changes — поля, которые преподаватель предлагает изменить.
@@ -198,6 +202,12 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	}
 	if req.Status != "pending" {
 		return Request{}, ErrNotPending
+	}
+
+	// Если заявка меняет время — новое время должно быть в будущем,
+	// иначе пересдача мгновенно уедет в in_progress по шедулеру.
+	if req.Changes.ScheduledAt != nil && !req.Changes.ScheduledAt.After(time.Now()) {
+		return Request{}, ErrScheduledInPast
 	}
 
 	// Snapshot пересдачи до изменений — для changelog before-state.

@@ -64,6 +64,11 @@ var (
 	ErrNotPending   = errors.New("retakerequest: заявка уже обработана")
 	ErrInvalidInput = errors.New("retakerequest: некорректные параметры")
 	ErrInvalidKind  = errors.New("retakerequest: kind должен быть regular или commission")
+	// ErrScheduledInPast — время пересдачи уже прошло к моменту одобрения.
+	// Создавать такую пересдачу нельзя: шедулер сразу переведёт её в
+	// in_progress («Идёт»), хотя ожидается «Назначена». Декан должен
+	// отклонить заявку или попросить преподавателя подать новую.
+	ErrScheduledInPast = errors.New("retakerequest: время пересдачи уже прошло")
 )
 
 // Payload — содержимое заявки. Маршалится в JSONB при сохранении.
@@ -205,6 +210,12 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 		minTeachers = minCommissionTeachers
 	default:
 		return Request{}, ErrInvalidKind
+	}
+
+	// Время пересдачи должно быть в будущем на момент одобрения: иначе
+	// созданная пересдача мгновенно уедет в in_progress по шедулеру.
+	if !p.ScheduledAt.After(time.Now()) {
+		return Request{}, ErrScheduledInPast
 	}
 
 	var approved queries.RetakeRequest

@@ -176,6 +176,9 @@ func mapRetakeRequestError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_kind", "kind должен быть regular или commission")
 	case errors.Is(err, retakerequest.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
+	case errors.Is(err, retakerequest.ErrScheduledInPast):
+		writeError(w, http.StatusUnprocessableEntity, "scheduled_in_past",
+			"время пересдачи уже прошло — отклоните заявку или попросите преподавателя подать новую")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка сервиса")
 	}

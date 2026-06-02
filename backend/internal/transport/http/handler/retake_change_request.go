@@ -128,6 +128,9 @@ func mapChangeRequestError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "forbidden", "преподаватель не является участником пересдачи")
 	case errors.Is(err, changerequest.ErrRetakeNotActive):
 		writeError(w, http.StatusUnprocessableEntity, "retake_not_active", "пересдача завершена или отменена")
+	case errors.Is(err, changerequest.ErrScheduledInPast):
+		writeError(w, http.StatusUnprocessableEntity, "scheduled_in_past",
+			"новое время пересдачи уже прошло — отклоните заявку или попросите преподавателя подать новую")
 	case errors.Is(err, changerequest.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
 	default:

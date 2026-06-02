@@ -8,8 +8,10 @@ import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
 import { retakeRequestsApi } from '../api/retakeRequests'
 import { debtsApi } from '../api/debts'
+import { useAuthStore } from '../stores/auth'
 import { fmtDate as fmtDateTZ, fmtTime, toUtcISO } from '../utils/datetime'
 
+const auth = useAuthStore()
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────
@@ -56,7 +58,8 @@ onMounted(async () => {
   // редирект на форму создания. См. коммит про этот flow.
   await Promise.allSettled([
     loadMyRequests(),
-    disciplinesApi.getAll({ limit: 500 }).then(r => { disciplines.value = r.data.items ?? [] }).catch(() => {}),
+    // Преподаватель может запрашивать пересдачу только по СВОИМ дисциплинам.
+    disciplinesApi.myAsTeacher().then(r => { disciplines.value = r.data.items ?? r.data ?? [] }).catch(() => {}),
   ])
 })
 onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
@@ -175,6 +178,8 @@ watch(disciplineId, async (id) => {
         name: [t.last_name, t.first_name, t.middle_name].filter(Boolean).join(' '),
       }))
     }
+    // Обычная пересдача → автоматически проставляем самого автора.
+    applyTeacherDefault()
   } finally { loadingParticipants.value = false }
 })
 
@@ -198,13 +203,14 @@ function onStudentEnter() { if (filteredStudents.value.length) addStudent(filter
 
 function addTeacher(t) {
   clearTimeout(teacherBlurTimer)
+  if (teacherLocked.value) return            // обычная пересдача — состав фиксирован
   if (selectedTeacherIds.value.has(t.id)) return
-  if (!isCommission.value && selectedTeachers.value.length >= 1) return
   selectedTeachers.value.push(t)
   teacherSearch.value = ''
-  teacherOpen.value = isCommission.value
+  teacherOpen.value = true
 }
 function removeTeacher(id) {
+  if (teacherLocked.value) return            // нельзя убрать самого автора в обычной
   selectedTeachers.value = selectedTeachers.value.filter(t => t.id !== id)
   teacherOpen.value = true
 }
@@ -228,6 +234,25 @@ const isCommission   = computed(() => retakeType.value === 'commission')
 const minTeachers    = computed(() => isCommission.value ? 3 : 1)
 const teacherCountOk = computed(() => selectedTeachers.value.length >= minTeachers.value)
 
+// Текущий преподаватель как участник. Для обычной пересдачи он
+// автоматически назначается единственным преподавателем (и не редактируется).
+const selfTeacher = computed(() => {
+  const u = auth.user
+  if (!u?.id) return null
+  return {
+    id:   u.id,
+    name: [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ') || u.email || 'Я',
+  }
+})
+// Для обычной пересдачи выбор преподавателя заблокирован — это всегда сам автор.
+const teacherLocked = computed(() => !isCommission.value)
+
+// Приводит список преподавателей к правилу типа: обычная → только сам автор.
+function applyTeacherDefault() {
+  if (isCommission.value) return
+  selectedTeachers.value = selfTeacher.value ? [selfTeacher.value] : []
+}
+
 function selectType(val) { retakeType.value = val; typeDropdownOpen.value = false }
 function onHourBlur()   { const n = clamp(parseInt(hourDisplay.value,   10), 0, 23); hourDisplay.value   = String(n).padStart(2, '0') }
 function onMinuteBlur() { const n = clamp(parseInt(minuteDisplay.value, 10), 0, 59); minuteDisplay.value = String(n).padStart(2, '0') }
@@ -242,11 +267,29 @@ function fmtDate(iso) {
   if (!iso) return '—'
   return fmtDateTZ(iso, { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
+
+// Приводит дату из VueDatePicker ("ДД.ММ.ГГГГ") к "ГГГГ-ММ-ДД".
+// Допускает и уже-ISO значение. Возвращает '' для некорректного ввода.
+function toIsoDate(v) {
+  if (!v) return ''
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10)
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(v)
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : ''
+}
 function decreaseDuration() { if (duration.value > DURATION_MIN) duration.value -= DURATION_STEP }
 function increaseDuration()  { if (duration.value < DURATION_MAX) duration.value += DURATION_STEP }
 function clampDuration()     { duration.value = clamp(duration.value, DURATION_MIN, DURATION_MAX) }
 
-watch(isCommission, val => { if (!val && selectedTeachers.value.length > 1) selectedTeachers.value.splice(1) })
+// Смена типа: обычная → жёстко сам автор; комиссия → свободный выбор
+// (начинаем с пустого списка, чтобы автор осознанно собрал состав ≥3).
+watch(isCommission, (val) => {
+  if (!val) {
+    applyTeacherDefault()
+  } else {
+    // переход в комиссию: убираем авто-выбор, чтобы не путать с обычной
+    selectedTeachers.value = []
+  }
+})
 
 function resetForm() {
   disciplineId.value = ''; retakeType.value = 'normal'; retakeDate.value = null
@@ -264,15 +307,25 @@ async function submitForm() {
   if (!disciplineId.value)  { formError.value = 'Выберите дисциплину'; return }
   if (!retakeDate.value)    { formError.value = 'Укажите дату'; return }
 
+  // VueDatePicker отдаёт дату в формате "ДД.ММ.ГГГГ" (model-type="format").
+  // toUtcISO ждёт "ГГГГ-ММ-ДД", поэтому конвертируем — иначе toUtcISO
+  // получает невалидную дату и падает с RangeError (форма не отправляется).
+  const isoDate = toIsoDate(retakeDate.value)
+  if (!isoDate) { formError.value = 'Некорректная дата'; return }
+
   // Время вводится в зоне вуза (Ханты, UTC+5) → toUtcISO собирает
   // корректный UTC ISO, а не интерпретирует как зону устройства.
-  const scheduledAtISO = toUtcISO(retakeDate.value, `${hourDisplay.value}:${minuteDisplay.value}`)
+  const scheduledAtISO = toUtcISO(isoDate, `${hourDisplay.value}:${minuteDisplay.value}`)
   if (new Date(scheduledAtISO) <= new Date()) { formError.value = 'Дата и время пересдачи должны быть в будущем'; return }
 
+  // Корпус и аудитория обязательны — иначе бэкенд отклоняет заявку (400),
+  // и форма «молча» не отправлялась. Делаем валидацию явной на фронте.
   const bld = building.value.trim()
   const rm  = room.value.trim()
-  if (bld && !BUILDING_RE.test(bld)) { formError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'; return }
-  if (rm  && !ROOM_RE.test(rm))      { formError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'; return }
+  if (!bld) { formError.value = 'Укажите корпус'; return }
+  if (!BUILDING_RE.test(bld)) { formError.value = 'Некорректный номер корпуса (только буквы, цифры, до 20 символов)'; return }
+  if (!rm)  { formError.value = 'Укажите аудиторию'; return }
+  if (!ROOM_RE.test(rm))      { formError.value = 'Некорректный номер аудитории (только буквы, цифры, до 20 символов)'; return }
 
   if (!teacherCountOk.value) { formError.value = `Минимум ${minTeachers.value} преподавател${minTeachers.value > 1 ? 'я' : 'ь'}`; return }
 
@@ -550,6 +603,20 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
               <div class="form-row">
                 <div class="field field--full picker-wrap">
                   <label>{{ isCommission ? 'Преподаватели (мин. 3)' : 'Преподаватель' }}</label>
+
+                  <!-- Обычная пересдача: автор назначается автоматически, выбор заблокирован -->
+                  <template v-if="teacherLocked">
+                    <div class="token-input token-input--locked">
+                      <span v-for="t in selectedTeachers" :key="t.id" class="token-chip">
+                        <span class="token-chip-text">{{ t.name }}</span>
+                      </span>
+                      <span v-if="!selectedTeachers.length" class="locked-hint">Вы будете назначены преподавателем</span>
+                    </div>
+                    <p class="field-hint">Для обычной пересдачи преподавателем автоматически назначаетесь вы.</p>
+                  </template>
+
+                  <!-- Комиссия: свободный выбор состава -->
+                  <template v-else>
                   <div
                     class="token-input"
                     :class="{ 'token-input--focused': teacherOpen, 'token-input--disabled': !disciplineId || loadingParticipants }"
@@ -581,6 +648,7 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
                       {{ loadingParticipants ? 'Загрузка...' : 'Нет совпадений' }}
                     </div>
                   </div>
+                  </template>
                   <p v-if="isCommission && selectedTeachers.length > 0 && !teacherCountOk" class="field-hint-warn">
                     Для пересдачи с комиссией необходимо минимум 3 преподавателя
                   </p>
@@ -1007,6 +1075,9 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
 .token-input::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
 .token-input--focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
 .token-input--disabled { background: #f9fafb; opacity: .7; cursor: not-allowed; }
+.token-input--locked { background: #f9fafb; cursor: default; }
+.locked-hint { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); padding: 3px 2px; }
+.field-hint { font: 12px/1.4 'Inter', sans-serif; color: var(--ink-soft); margin: 4px 0 0; }
 .token-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 6px 4px 10px; border-radius: 20px;

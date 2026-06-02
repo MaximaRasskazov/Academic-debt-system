@@ -5,12 +5,15 @@ import iconAppreciated from '../assets/icons/appreciated.svg'
 export function notifMeta(kind) {
   switch (kind) {
     case 'retake_scheduled':
+    case 'retake_scheduled_teacher':
     case 'teacher_request_approved':
       return { img: iconAppointed,   bg: 'rgba(110,114,200,.12)', label: 'appointed' }
     case 'retake_change_approved':
     case 'retake_updated':
+    case 'retake_updated_teacher':
       return { img: iconChanged,     bg: 'rgba(59,63,224,.10)',   label: 'changed'   }
     case 'retake_cancelled':
+    case 'retake_cancelled_teacher':
     case 'retake_change_rejected':
     case 'teacher_request_rejected':
       return { img: null,            bg: 'rgba(220,38,38,.08)',   label: 'cancelled' }
@@ -25,8 +28,11 @@ export function notifTitle(n) {
   if (n.title) return n.title
   switch (n.kind ?? n.type) {
     case 'retake_scheduled':          return 'Назначена пересдача'
+    case 'retake_scheduled_teacher':  return 'Вы назначены на пересдачу'
     case 'retake_updated':            return 'Пересдача перенесена'
+    case 'retake_updated_teacher':    return 'Пересдача перенесена'
     case 'retake_cancelled':          return 'Пересдача отменена'
+    case 'retake_cancelled_teacher':  return 'Пересдача отменена'
     case 'retake_grade_received':     return 'Выставлена оценка'
     case 'retake_change_approved':    return 'Запрос на изменение одобрен'
     case 'retake_change_rejected':    return 'Запрос на изменение отклонён'
@@ -61,7 +67,15 @@ export function notifBody(n) {
         where && `Место: ${where}.`,
       ].filter(Boolean).join(' ')
 
+    case 'retake_scheduled_teacher':
+      return [
+        'Вы назначены преподавателем на пересдачу.',
+        when  && `Дата: ${when}.`,
+        where && `Место: ${where}.`,
+      ].filter(Boolean).join(' ')
+
     case 'retake_updated':
+    case 'retake_updated_teacher':
       return [
         'Детали пересдачи изменены.',
         when  && `Новое время: ${when}.`,
@@ -69,6 +83,7 @@ export function notifBody(n) {
       ].filter(Boolean).join(' ')
 
     case 'retake_cancelled':
+    case 'retake_cancelled_teacher':
       return reason
         ? `Пересдача отменена деканатом. Причина: ${reason}.`
         : 'Пересдача была отменена деканатом.'
