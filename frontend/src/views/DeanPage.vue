@@ -10,6 +10,8 @@ import UpcomingRetakes from '../components/UpcomingRetakes.vue'
 import StatCard from '../components/StatCard.vue'
 import EmptyPlate from '../components/EmptyPlate.vue'
 import FilterSelect from '../components/FilterSelect.vue'
+import { makeParagraph, makeCell, universityHeader, makeDocument, downloadBlob } from '../utils/exportDocx'
+import { appendAoaSheet } from '../utils/exportXlsx'
 import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
@@ -159,42 +161,23 @@ async function doExportExcel() {
     ['№', 'Дисциплина', 'Код', 'Студент', 'Группа', 'Преподаватель'],
     ...filteredDebtRows.value.map((r, i) => [i + 1, r.discipline, r.disciplineCode, r.student, r.group, r.teacher]),
   ]
-  const ws = XLSX.utils.aoa_to_sheet(aoa)
-  ws['!cols'] = [{ wch: 5 }, { wch: 34 }, { wch: 12 }, { wch: 32 }, { wch: 12 }, { wch: 30 }]
-  ws['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } },
-  ]
-  XLSX.utils.book_append_sheet(wb, ws, 'Задолженности')
+  appendAoaSheet(XLSX, wb, aoa, {
+    cols: [{ wch: 5 }, { wch: 34 }, { wch: 12 }, { wch: 32 }, { wch: 12 }, { wch: 30 }],
+    merges: [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 5 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } },
+    ],
+    name: 'Задолженности',
+  })
   XLSX.writeFile(wb, `Академические_задолженности_${new Date().toISOString().slice(0, 10)}.xlsx`)
 }
 
 async function doExportWord() {
   const libs = await import('docx')
-  const {
-    Document, Packer, Paragraph, Table, TableRow, TableCell,
-    TextRun, AlignmentType, WidthType,
-  } = libs
-
-  const PT = n => n * 2
-  const CM = n => Math.round(n * 567)
-  const brd = { style: 'single', size: 4, color: '000000' }
-  const allBorders = { top: brd, bottom: brd, left: brd, right: brd }
-
-  const p = (text, o = {}) => new Paragraph({
-    alignment: o.align ?? AlignmentType.LEFT,
-    spacing: { before: CM(o.before ?? 0), after: CM(o.after ?? 0.18) },
-    children: [new TextRun({ text: String(text), bold: !!o.bold, size: PT(o.size ?? 12), font: 'Times New Roman' })],
-  })
-  const cell = (text, o = {}) => new TableCell({
-    width: o.w ? { size: o.w, type: WidthType.PERCENTAGE } : undefined,
-    shading: o.shade ? { fill: 'EEEEEE' } : undefined,
-    borders: allBorders,
-    children: [new Paragraph({
-      alignment: o.align ?? AlignmentType.LEFT,
-      children: [new TextRun({ text: String(text), bold: !!o.bold, size: PT(o.size ?? 11), font: 'Times New Roman' })],
-    })],
-  })
+  const { Packer, Table, TableRow, WidthType, AlignmentType } = libs
+  // Локальные шорткаты к общим фабрикам (см. utils/exportDocx).
+  const p    = (text, opts) => makeParagraph(libs, text, opts)
+  const cell = (text, opts) => makeCell(libs, text, opts)
 
   const rows = filteredDebtRows.value
   const header = new TableRow({
@@ -217,31 +200,19 @@ async function doExportWord() {
     ],
   }))
 
-  const doc = new Document({
-    styles: { default: { document: { run: { font: 'Times New Roman', size: PT(12) } } } },
-    sections: [{
-      properties: { page: { margin: { top: CM(2), right: CM(1.5), bottom: CM(2), left: CM(3) } } },
-      children: [
-        p('ФЕДЕРАЛЬНОЕ ГОСУДАРСТВЕННОЕ БЮДЖЕТНОЕ ОБРАЗОВАТЕЛЬНОЕ УЧРЕЖДЕНИЕ ВЫСШЕГО ОБРАЗОВАНИЯ', { align: AlignmentType.CENTER, size: 13 }),
-        p('ЮГОРСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ', { align: AlignmentType.CENTER, size: 13, after: 0.3 }),
-        p('СВЕДЕНИЯ ОБ АКАДЕМИЧЕСКИХ ЗАДОЛЖЕННОСТЯХ', { align: AlignmentType.CENTER, bold: true, size: 16, before: 0.3, after: 0.4 }),
-        p(`Выборка: ${activeFilterCaption()}`, { size: 11 }),
-        p(`Дата формирования: ${todayLong()}`, { size: 11, after: 0.35 }),
-        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [header, ...bodyRows] }),
-        p(`Всего задолженностей: ${rows.length}`, { bold: true, before: 0.4 }),
-        p('Декан: ___________________________ /________________/', { before: 0.7 }),
-        p(`Дата составления: ${new Date().toLocaleDateString('ru-RU')}`, { before: 0.25 }),
-      ],
-    }],
-  })
+  const doc = makeDocument(libs, [
+    // Шапка: org-строки 13pt, отступ после заголовка 0.4 (как было у декана).
+    ...universityHeader(libs, 'СВЕДЕНИЯ ОБ АКАДЕМИЧЕСКИХ ЗАДОЛЖЕННОСТЯХ', { orgSize: 13, titleAfter: 0.4 }),
+    p(`Выборка: ${activeFilterCaption()}`, { size: 11 }),
+    p(`Дата формирования: ${todayLong()}`, { size: 11, after: 0.35 }),
+    new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [header, ...bodyRows] }),
+    p(`Всего задолженностей: ${rows.length}`, { bold: true, before: 0.4 }),
+    p('Декан: ___________________________ /________________/', { before: 0.7 }),
+    p(`Дата составления: ${new Date().toLocaleDateString('ru-RU')}`, { before: 0.25 }),
+  ])
 
   const blob = await Packer.toBlob(doc)
-  const url = URL.createObjectURL(blob)
-  const a = Object.assign(document.createElement('a'), {
-    href: url, download: `Академические_задолженности_${new Date().toISOString().slice(0, 10)}.docx`,
-  })
-  document.body.appendChild(a); a.click(); document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  downloadBlob(blob, `Академические_задолженности_${new Date().toISOString().slice(0, 10)}.docx`)
 }
 
 // ── Запланированные пересдачи (вторая карточка) ───────────────

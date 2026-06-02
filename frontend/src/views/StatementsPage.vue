@@ -6,6 +6,8 @@ import AppSidebar from '../components/AppSidebar.vue'
 import FilterSelect from '../components/FilterSelect.vue'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
+import { makeParagraph, makeCell, universityHeader, makeDocument, downloadBlob } from '../utils/exportDocx'
+import { appendAoaSheet } from '../utils/exportXlsx'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
@@ -594,10 +596,11 @@ function appendSheet(XLSX, wb, retake, students, sheetName) {
     ['Преподаватель:', retake.teachers[0] || ''],
     ['Дата составления:', formatShort(todayStr())],
   ]
-  const ws = XLSX.utils.aoa_to_sheet(rows)
-  ws['!cols']   = [{ wch: 6 }, { wch: 36 }, { wch: 12 }, { wch: 10 }]
-  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }]
-  XLSX.utils.book_append_sheet(wb, ws, (sheetName || retake.subject).slice(0, 31))
+  appendAoaSheet(XLSX, wb, rows, {
+    cols:   [{ wch: 6 }, { wch: 36 }, { wch: 12 }, { wch: 10 }],
+    merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }],
+    name:   sheetName || retake.subject,
+  })
 }
 
 /* ─── Word export ────────────────────────────────────────────── */
@@ -618,49 +621,10 @@ async function doWordAll() {
 }
 
 function buildWordDoc(libs, items) {
-  const {
-    Document, Paragraph, Table, TableRow, TableCell,
-    TextRun, AlignmentType, WidthType,
-  } = libs
-
-  const PT  = n => n * 2
-  const CM  = n => Math.round(n * 567)
-
-  const brd = { style: 'single', size: 4, color: '000000' }
-  const allBorders = { top: brd, bottom: brd, left: brd, right: brd }
-
-  function p(text, opts = {}) {
-    return new Paragraph({
-      alignment: opts.align ?? AlignmentType.LEFT,
-      pageBreakBefore: !!opts.pageBreak,
-      spacing: { before: CM(opts.before ?? 0), after: CM(opts.after ?? 0.18) },
-      children: [new TextRun({
-        text: String(text),
-        bold:      !!opts.bold,
-        size:      PT(opts.size ?? 12),
-        font:      'Times New Roman',
-        underline: opts.underline ? {} : undefined,
-      })],
-    })
-  }
-
-  function cell(text, opts = {}) {
-    return new TableCell({
-      columnSpan: opts.span,
-      width: opts.w ? { size: opts.w, type: WidthType.PERCENTAGE } : undefined,
-      shading: opts.shade ? { fill: 'EEEEEE' } : undefined,
-      borders: allBorders,
-      children: [new Paragraph({
-        alignment: opts.align ?? AlignmentType.LEFT,
-        children: [new TextRun({
-          text:  String(text),
-          bold:  !!opts.bold,
-          size:  PT(opts.size ?? 11),
-          font:  'Times New Roman',
-        })],
-      })],
-    })
-  }
+  const { Table, TableRow, WidthType, AlignmentType } = libs
+  // Локальные шорткаты к общим фабрикам (см. utils/exportDocx).
+  const p    = (text, opts) => makeParagraph(libs, text, opts)
+  const cell = (text, opts) => makeCell(libs, text, opts)
 
   const children = []
 
@@ -668,11 +632,7 @@ function buildWordDoc(libs, items) {
     if (idx > 0) children.push(p('', { pageBreak: true }))
 
     /* Шапка */
-    children.push(
-      p('ФЕДЕРАЛЬНОЕ ГОСУДАРСТВЕННОЕ БЮДЖЕТНОЕ ОБРАЗОВАТЕЛЬНОЕ УЧРЕЖДЕНИЕ ВЫСШЕГО ОБРАЗОВАНИЯ', { align: AlignmentType.CENTER, size: 14 }),
-      p('ЮГОРСКИЙ ГОСУДАРСТВЕННЫЙ УНИВЕРСИТЕТ', { align: AlignmentType.CENTER, size: 14, after: 0.3 }),
-      p('ВЕДОМОСТЬ ПЕРЕСДАЧИ', { align: AlignmentType.CENTER, bold: true, size: 16, before: 0.3, after: 0.5 }),
-    )
+    children.push(...universityHeader(libs, 'ВЕДОМОСТЬ ПЕРЕСДАЧИ'))
 
     /* Таблица с информацией о пересдаче */
     children.push(new Table({
@@ -739,26 +699,7 @@ function buildWordDoc(libs, items) {
     )
   })
 
-  return new Document({
-    styles: {
-      default: { document: { run: { font: 'Times New Roman', size: PT(12) } } },
-    },
-    sections: [{
-      properties: {
-        page: { margin: { top: CM(2), right: CM(1.5), bottom: CM(2), left: CM(3) } },
-      },
-      children,
-    }],
-  })
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a   = Object.assign(document.createElement('a'), { href: url, download: filename })
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return makeDocument(libs, children)
 }
 </script>
 
