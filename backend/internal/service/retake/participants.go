@@ -22,19 +22,17 @@ const (
 	ParticipantTeacher          = "teacher"
 	ParticipantCommissionMember = "commission_member"
 
-	actionStudentAdded      = "retake.student_added"
-	actionStudentRemoved    = "retake.student_removed"
-	actionTeacherAdded      = "retake.teacher_added"
-	actionTeacherRemoved    = "retake.teacher_removed"
-	actionParticipantGraded = "retake.participant_graded"
+	actionStudentAdded   = "retake.student_added"
+	actionStudentRemoved = "retake.student_removed"
+	actionTeacherAdded   = "retake.teacher_added"
+	actionTeacherRemoved = "retake.teacher_removed"
 )
 
 var (
-	ErrParticipantNotFound   = errors.New("retake: участник не найден")
-	ErrInvalidParticipant    = errors.New("retake: некорректные параметры участника")
-	ErrAlreadyParticipant    = errors.New("retake: пользователь уже участник этой пересдачи")
-	ErrStudentNeedsDebt      = errors.New("retake: студент должен быть привязан к долгу (debt_id)")
-	ErrParticipantNotStudent = errors.New("retake: оценить можно только участника-студента")
+	ErrParticipantNotFound = errors.New("retake: участник не найден")
+	ErrInvalidParticipant  = errors.New("retake: некорректные параметры участника")
+	ErrAlreadyParticipant  = errors.New("retake: пользователь уже участник этой пересдачи")
+	ErrStudentNeedsDebt    = errors.New("retake: студент должен быть привязан к долгу (debt_id)")
 	// ErrLastStudent / ErrMinTeachers — нельзя оголить состав пересдачи:
 	// должен остаться ≥1 студент и ≥min_teachers преподавателей.
 	ErrLastStudent = errors.New("retake: в пересдаче должен остаться хотя бы один студент")
@@ -229,111 +227,10 @@ func (s *Service) removeParticipant(ctx context.Context, retakeID, userID uuid.U
 	return nil
 }
 
-// GradeStudent выставляет оценку студенту-участнику и атомарно
-// закрывает связанный долг в той же транзакции.
-//
-// Инварианты:
-//   - оценка 2..5 (БД-CHECK + явная проверка);
-//   - пересдача в статусе scheduled или in_progress;
-//   - участник — student с привязанным debt_id;
-//   - на участнике ещё нет grade;
-//   - связанный debt в статусе 'open' (иначе q.GradeDebt вернёт ErrNoRows).
-//
-// При невозможности любого из условий — sentinel-ошибка без побочных
-// эффектов в БД (RunInTx откатит).
-func (s *Service) GradeStudent(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, gradedBy uuid.UUID) error {
-	if grade < 2 || grade > 5 {
-		return fmt.Errorf("%w: оценка должна быть 2..5", ErrInvalidInput)
-	}
-	current, err := s.Get(ctx, retakeID)
-	if err != nil {
-		return err
-	}
-	if current.Status != StatusScheduled && current.Status != StatusInProgress {
-		return fmt.Errorf("%w: оценку можно ставить только в активной пересдаче", ErrInvalidStatus)
-	}
-
-	participant, err := s.store.GetParticipantByRetakeAndUser(ctx, queries.GetParticipantByRetakeAndUserParams{
-		RetakeID: current.ID,
-		UserID:   pgutil.PgUUID(studentID),
-	})
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return ErrParticipantNotFound
-		}
-		return fmt.Errorf("get participant: %w", err)
-	}
-	if participant.Kind != ParticipantStudent {
-		return ErrParticipantNotStudent
-	}
-	if participant.Grade != nil {
-		return ErrAlreadyHasGrade
-	}
-	if !participant.DebtID.Valid {
-		return ErrStudentNeedsDebt
-	}
-
-	var closedDebt queries.Debt
-	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		// 1. Оценка участнику. SQL содержит AND grade IS NULL — при гонке
-		// второй UPDATE вернёт ErrNoRows: возвращаем ErrAlreadyHasGrade,
-		// а не пробрасываем raw-ошибку как 500.
-		_, err := q.GradeStudentParticipant(ctx, queries.GradeStudentParticipantParams{
-			ID:       participant.ID,
-			Grade:    &grade,
-			GradedBy: pgutil.PgUUID(gradedBy),
-		})
-		if err != nil {
-			if repo.IsNotFound(err) {
-				return ErrAlreadyHasGrade
-			}
-			return fmt.Errorf("grade participant: %w", err)
-		}
-
-		// 2. Закрытие связанного долга. WHERE status='open' защищает
-		// от двойного закрытия — если долг уже graded/cancelled,
-		// q.GradeDebt вернёт ErrNoRows, откатит транзакцию.
-		closedDebt, err = q.GradeDebt(ctx, queries.GradeDebtParams{
-			ID:         participant.DebtID,
-			FinalGrade: &grade,
-			GradedBy:   pgutil.PgUUID(gradedBy),
-		})
-		if err != nil {
-			if repo.IsNotFound(err) {
-				return fmt.Errorf("%w: связанный долг не в статусе open", ErrInvalidStatus)
-			}
-			return fmt.Errorf("grade debt: %w", err)
-		}
-
-		return s.audit.LogTx(ctx, q, audit.Event{
-			ActorID:    gradedBy,
-			Action:     actionParticipantGraded,
-			TargetType: entityType,
-			TargetID:   pgutil.UUID(current.ID).String(),
-			Details: map[string]any{
-				"student_id":     studentID.String(),
-				"participant_id": pgutil.UUID(participant.ID).String(),
-				"grade":          grade,
-			},
-		})
-	}); err != nil {
-		return err
-	}
-
-	// Обратный sync оценки в эмулятор — best-effort, в фоне.
-	s.sendGradeToEmulator(closedDebt.ExternalID,
-		pgutil.UUID(closedDebt.ID).String(), grade)
-
-	// Студент должен узнать оценку сразу, не дожидаясь email-дайджеста
-	// или ручного refresh. Payload минимальный — фронт сам подтянет
-	// детали по retake_id, если нужно показать карточку.
-	s.notifyStudent(ctx, studentID, notify.KindRetakeGradeReceived, retakePayload{
-		"retake_id":     pgutil.UUID(current.ID).String(),
-		"discipline_id": pgutil.UUID(current.DisciplineID).String(),
-		"grade":         grade,
-	})
-	return nil
-}
+// Выставление оценки переехало в пакет statement (двухэтапная
+// ведомость: SaveDraftGrade → CloseSheet). retake-сервис больше НЕ
+// закрывает долги при грейдинге — этим занимается statement.CloseSheet.
+// Здесь остаётся только управление составом участников.
 
 // ListParticipants возвращает всех участников пересдачи (студенты +
 // преподаватели + члены комиссии). Handler-слой при желании фильтрует

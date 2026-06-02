@@ -496,6 +496,49 @@ func (q *Queries) ListDisciplineIDsByIssuer(ctx context.Context, issuedBy pgtype
 	return items, nil
 }
 
+const reopenDebt = `-- name: ReopenDebt :one
+UPDATE debts
+SET status      = 'open',
+    final_grade = NULL,
+    graded_at   = NULL,
+    graded_by   = NULL,
+    updated_at  = NOW()
+WHERE id = $1
+  AND status = 'graded'
+  AND deleted_at IS NULL
+RETURNING id, student_id, discipline_id, issued_by, status, final_grade, graded_at, graded_by, external_id, source, notes, created_at, updated_at, deleted_at, deleted_by
+`
+
+// Откат закрытия долга при «Открыть ведомость» (декан): graded → open.
+// CHECK debts_grade_consistency требует, чтобы у open-долга
+// final_grade/graded_at/graded_by были NULL — обнуляем их.
+// ВНИМАНИЕ: idx_debts_unique_open запрещает 2 open-долга по одной паре
+// (student, discipline). Если sync создал новый open-долг после закрытия
+// ведомости — этот UPDATE упадёт с 23505, сервис ловит и пропускает
+// (best-effort per debt), ведомость всё равно открывается.
+func (q *Queries) ReopenDebt(ctx context.Context, id pgtype.UUID) (Debt, error) {
+	row := q.db.QueryRow(ctx, reopenDebt, id)
+	var i Debt
+	err := row.Scan(
+		&i.ID,
+		&i.StudentID,
+		&i.DisciplineID,
+		&i.IssuedBy,
+		&i.Status,
+		&i.FinalGrade,
+		&i.GradedAt,
+		&i.GradedBy,
+		&i.ExternalID,
+		&i.Source,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DeletedBy,
+	)
+	return i, err
+}
+
 const softDeleteDebt = `-- name: SoftDeleteDebt :exec
 UPDATE debts
 SET deleted_at = NOW(),

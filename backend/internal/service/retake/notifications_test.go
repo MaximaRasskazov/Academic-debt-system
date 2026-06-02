@@ -167,26 +167,8 @@ func TestNotify_RetakeCancelled_OnCancel(t *testing.T) {
 		"студент должен получить retake_cancelled при отмене пересдачи")
 }
 
-func TestNotify_GradeReceived_OnGradeStudent(t *testing.T) {
-	f := setupWithNotify(t)
-	teacher := seedUser(t, f.store, "t-grd")
-	student := seedUser(t, f.store, "s-grd")
-	disc := seedDiscipline(t, f.fixture, "NGRD", teacher, student)
-	debtID := seedDebt(t, f.fixture, student, teacher, disc)
-	r := createScheduledRetake(t, f.fixture, disc, teacher, retake.KindRegular)
-	require.NoError(t, f.svc.AddStudent(context.Background(),
-		pgutil.UUID(r.ID), student, debtID, teacher))
-	require.NoError(t, f.svc.AddTeacher(context.Background(),
-		pgutil.UUID(r.ID), teacher, teacher))
-	markAllRead(t, f.store, student)
-
-	require.NoError(t, f.svc.GradeStudent(context.Background(),
-		pgutil.UUID(r.ID), student, 4, teacher))
-
-	require.True(t,
-		hasUnreadKind(t, f.store, f.notifySvc, student.String(), notify.KindRetakeGradeReceived),
-		"студент должен получить retake_grade_received после выставления оценки")
-}
+// Уведомление retake_grade_received теперь шлёт statement.CloseSheet
+// (двухэтапная ведомость), тест переехал в internal/service/statement.
 
 func TestNotify_NoNotifyWhenServiceIsNil(t *testing.T) {
 	// Защитный тест: retake.Service с nil notify не падает на

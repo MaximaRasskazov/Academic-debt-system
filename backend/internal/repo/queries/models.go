@@ -197,6 +197,18 @@ type RoleUser struct {
 	DeletedBy pgtype.UUID        `json:"deleted_by"`
 }
 
+type StatementSheet struct {
+	ID         pgtype.UUID        `json:"id"`
+	RetakeID   pgtype.UUID        `json:"retake_id"`
+	Status     string             `json:"status"`
+	ClosedAt   pgtype.Timestamptz `json:"closed_at"`
+	ClosedBy   pgtype.UUID        `json:"closed_by"`
+	ReopenedAt pgtype.Timestamptz `json:"reopened_at"`
+	ReopenedBy pgtype.UUID        `json:"reopened_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type StudentDiscipline struct {
 	ID           pgtype.UUID        `json:"id"`
 	StudentID    pgtype.UUID        `json:"student_id"`

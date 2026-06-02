@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -271,75 +269,8 @@ func TestRetake_Start_RequiresEnoughTeachers(t *testing.T) {
 	require.Equal(t, "in_progress", got.Status)
 }
 
-func TestRetake_GradeStudent_ClosesDebtAtomically(t *testing.T) {
-	f := setup(t)
-	teacher := seedUser(t, f.store, "tr-g")
-	student := seedUser(t, f.store, "st-g")
-	dean := seedUser(t, f.store, "dean-g")
-	discID := seedDiscipline(t, f, "GR", teacher, student)
-	debtID := seedDebt(t, f, student, teacher, discID)
-	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
-
-	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, debtID, dean))
-	require.NoError(t, f.svc.AddTeacher(context.Background(), pgutil.UUID(r.ID), teacher, dean))
-
-	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 4, teacher))
-
-	// 1. У участника появилась оценка
-	parts, _ := f.svc.ListParticipants(context.Background(), pgutil.UUID(r.ID))
-	var studentPart *queries.RetakeParticipant
-	for i := range parts {
-		if parts[i].Kind == "student" {
-			studentPart = &parts[i]
-			break
-		}
-	}
-	require.NotNil(t, studentPart)
-	require.NotNil(t, studentPart.Grade)
-	require.Equal(t, int32(4), *studentPart.Grade)
-
-	// 2. Связанный долг закрылся: status=graded, final_grade=4
-	debtRow, err := f.debt.Get(context.Background(), debtID)
-	require.NoError(t, err)
-	require.Equal(t, "graded", debtRow.Status)
-	require.NotNil(t, debtRow.FinalGrade)
-	require.Equal(t, int32(4), *debtRow.FinalGrade)
-}
-
-func TestRetake_GradeStudent_RejectsRepeatedGrade(t *testing.T) {
-	f := setup(t)
-	teacher := seedUser(t, f.store, "tr-rg")
-	student := seedUser(t, f.store, "st-rg")
-	dean := seedUser(t, f.store, "dean-rg")
-	discID := seedDiscipline(t, f, "RG", teacher, student)
-	debtID := seedDebt(t, f, student, teacher, discID)
-	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
-
-	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, debtID, dean))
-	require.NoError(t, f.svc.AddTeacher(context.Background(), pgutil.UUID(r.ID), teacher, dean))
-	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 5, teacher))
-
-	// Повторное выставление — ErrAlreadyHasGrade
-	err := f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 4, teacher)
-	require.ErrorIs(t, err, retake.ErrAlreadyHasGrade)
-}
-
-func TestRetake_GradeStudent_RejectsInvalidGrade(t *testing.T) {
-	f := setup(t)
-	teacher := seedUser(t, f.store, "tr-ig")
-	student := seedUser(t, f.store, "st-ig")
-	dean := seedUser(t, f.store, "dean-ig")
-	discID := seedDiscipline(t, f, "IG", teacher, student)
-	debtID := seedDebt(t, f, student, teacher, discID)
-	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
-	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, debtID, dean))
-
-	for _, badGrade := range []int32{0, 1, 6, 10, -3} {
-		err := f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, badGrade, teacher)
-		require.ErrorIs(t, err, retake.ErrInvalidInput,
-			"оценка %d должна быть отвергнута", badGrade)
-	}
-}
+// Выставление оценок переехало в пакет statement (двухэтапная
+// ведомость). Тесты grade-flow теперь в internal/service/statement.
 
 func TestRetake_Cancel_ReleasesRetake(t *testing.T) {
 	f := setup(t)
@@ -378,66 +309,4 @@ func TestRetake_ListForUser_OnlyOwn(t *testing.T) {
 	rowsB, err := f.svc.ListForUser(context.Background(), studentB)
 	require.NoError(t, err)
 	require.Empty(t, rowsB)
-}
-
-type gradeCall struct {
-	extID string
-	grade emulator.Grade
-	idem  string
-}
-
-// mockGradeSender потокобезопасен: write-back идёт в фоновой горутине.
-type mockGradeSender struct {
-	mu    sync.Mutex
-	calls []gradeCall
-}
-
-func (m *mockGradeSender) PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, gradeCall{debtExternalID, grade, idempotencyKey})
-	return nil
-}
-
-// waitCalls ждёт n вызовов фоновой отправки и возвращает их копию.
-func (m *mockGradeSender) waitCalls(t *testing.T, n int) []gradeCall {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return len(m.calls) >= n
-	}, 2*time.Second, 10*time.Millisecond, "ожидали %d вызовов PatchDebtGrade", n)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]gradeCall, len(m.calls))
-	copy(out, m.calls)
-	return out
-}
-
-func TestRetake_GradeStudent_SyncsToEmulator(t *testing.T) {
-	f := setup(t)
-	teacher := seedUser(t, f.store, "tr-gsync")
-	student := seedUser(t, f.store, "st-gsync")
-	dean := seedUser(t, f.store, "dean-gsync")
-	discID := seedDiscipline(t, f, "GSYNC", teacher, student)
-
-	sender := &mockGradeSender{}
-	f.svc.SetGradeSender(sender)
-
-	extID := "ext-retake-debt-777"
-	debtRow, err := f.debt.Create(context.Background(), debt.CreateInput{
-		StudentID: student, DisciplineID: discID, ExternalID: &extID,
-	}, teacher)
-	require.NoError(t, err)
-
-	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
-	require.NoError(t, f.svc.AddStudent(context.Background(), pgutil.UUID(r.ID), student, pgutil.UUID(debtRow.ID), dean))
-	require.NoError(t, f.svc.GradeStudent(context.Background(), pgutil.UUID(r.ID), student, 3, teacher))
-
-	calls := sender.waitCalls(t, 1)
-	require.Len(t, calls, 1, "PatchDebtGrade должен быть вызван при выставлении оценки через пересдачу")
-	require.Equal(t, "ext-retake-debt-777", calls[0].extID)
-	require.Equal(t, "numeric", calls[0].grade.Type)
-	require.Equal(t, 3, calls[0].grade.Value)
-	require.NotEmpty(t, calls[0].idem)
 }

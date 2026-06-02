@@ -8,11 +8,14 @@ const props = defineProps({
   modelValue:  { type: [String, Number], default: '' },
   options:     { type: Array, default: () => [] },   // [{ value, label }] | [string]
   placeholder: { type: String, default: 'Все' },
+  // Поиск внутри списка. true | 'auto' (включается при >5 вариантах).
+  searchable:  { type: [Boolean, String], default: false },
 })
 const emit = defineEmits(['update:modelValue'])
 
-const open = ref(false)
-const root = ref(null)
+const open   = ref(false)
+const root   = ref(null)
+const search = ref('')
 
 // Нормализуем опции к { value, label }
 const norm = computed(() =>
@@ -20,6 +23,15 @@ const norm = computed(() =>
     (o && typeof o === 'object') ? { value: o.value, label: o.label } : { value: o, label: String(o) }
   )
 )
+
+const showSearch = computed(() =>
+  props.searchable === true || (props.searchable === 'auto' && norm.value.length > 5)
+)
+const filtered = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return norm.value
+  return norm.value.filter(o => o.label.toLowerCase().includes(q))
+})
 
 const selectedLabel = computed(() => {
   const hit = norm.value.find(o => o.value === props.modelValue)
@@ -29,6 +41,12 @@ const selectedLabel = computed(() => {
 function select(value) {
   emit('update:modelValue', value)
   open.value = false
+  search.value = ''
+}
+
+function toggle() {
+  open.value = !open.value
+  if (open.value) search.value = ''
 }
 
 function onOutside(e) {
@@ -40,22 +58,28 @@ onUnmounted(() => document.removeEventListener('mousedown', onOutside))
 
 <template>
   <div ref="root" class="fsel" :class="{ open }">
-    <button type="button" class="fsel-trigger" @click="open = !open">
+    <button type="button" class="fsel-trigger" @click="toggle">
       <span :class="{ placeholder: !selectedLabel }">{{ selectedLabel || placeholder }}</span>
       <svg class="fsel-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
     <div v-show="open" class="fsel-dropdown">
-      <button
-        type="button" class="fsel-option"
-        :class="{ selected: modelValue === '' }"
-        @click="select('')"
-      >{{ placeholder }}</button>
-      <button
-        v-for="o in norm" :key="o.value"
-        type="button" class="fsel-option"
-        :class="{ selected: modelValue === o.value }"
-        @click="select(o.value)"
-      >{{ o.label }}</button>
+      <div v-if="showSearch" class="fsel-search-wrap">
+        <input class="fsel-search" v-model="search" placeholder="Поиск..." @click.stop @mousedown.stop />
+      </div>
+      <div class="fsel-scroll">
+        <button
+          type="button" class="fsel-option"
+          :class="{ selected: modelValue === '' }"
+          @click="select('')"
+        >{{ placeholder }}</button>
+        <button
+          v-for="o in filtered" :key="o.value"
+          type="button" class="fsel-option"
+          :class="{ selected: modelValue === o.value }"
+          @click="select(o.value)"
+        >{{ o.label }}</button>
+        <div v-if="!filtered.length" class="fsel-empty">Ничего не найдено</div>
+      </div>
     </div>
   </div>
 </template>
@@ -92,11 +116,20 @@ onUnmounted(() => document.removeEventListener('mousedown', onOutside))
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;
   background: #fff; border: 1.5px solid var(--line); border-radius: 8px;
   box-shadow: 0 8px 24px -4px rgba(20,22,60,.14);
-  max-height: 260px; overflow-y: auto; padding: 4px;
+  overflow: hidden;
 }
-.fsel-dropdown::-webkit-scrollbar { width: 4px; }
-.fsel-dropdown::-webkit-scrollbar-track { background: transparent; }
-.fsel-dropdown::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.fsel-search-wrap { padding: 6px 6px 4px; border-bottom: 1px solid #eceef2; }
+.fsel-search {
+  width: 100%; height: 30px; border: 1.5px solid var(--line); border-radius: 6px;
+  padding: 0 10px; font: 12.5px/1 'Inter', sans-serif; color: var(--ink);
+  outline: none; background: #fff;
+}
+.fsel-search:focus { border-color: var(--brand); }
+.fsel-scroll { max-height: 240px; overflow-y: auto; padding: 4px; }
+.fsel-scroll::-webkit-scrollbar { width: 4px; }
+.fsel-scroll::-webkit-scrollbar-track { background: transparent; }
+.fsel-scroll::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.fsel-empty { padding: 9px 12px; font: 12.5px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .fsel-option {
   display: block; width: 100%; text-align: left;
   padding: 9px 12px; border: none; border-radius: 6px;

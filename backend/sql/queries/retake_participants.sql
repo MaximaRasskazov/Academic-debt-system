@@ -54,6 +54,22 @@ WHERE id = $1
   AND grade IS NULL
 RETURNING *;
 
+-- name: UpsertParticipantGradeDraft :one
+-- Черновик оценки для двухэтапной ведомости. В отличие от
+-- GradeStudentParticipant здесь НЕТ "AND grade IS NULL" — черновик
+-- можно перезаписывать сколько угодно, пока ведомость open. Все три
+-- колонки (grade/graded_at/graded_by) ставятся всегда, иначе нарушится
+-- CHECK participants_grade_consistency. graded_by/at тут означают
+-- "кем/когда внесён черновик". Долг при этом НЕ закрывается — это
+-- делает CloseSheet.
+UPDATE retake_participants
+SET grade     = $2,
+    graded_at = NOW(),
+    graded_by = $3
+WHERE id = $1
+  AND kind = 'student'
+RETURNING *;
+
 -- name: GetParticipant :one
 SELECT *
 FROM retake_participants

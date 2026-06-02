@@ -38,6 +38,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/scheduler"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/statement"
 	syncsvc "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/sync"
 	teacherrequest "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/teacher_request"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
@@ -112,13 +113,14 @@ func run() error {
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)
 	changeRequestSvc := changerequest.New(store, auditSvc, changelogSvc, notifySvc)
 	retakeRequestSvc := retakerequest.New(store, auditSvc, changelogSvc, notifySvc)
+	statementSvc := statement.New(store, auditSvc, notifySvc)
 
 	// Обратный sync оценок в эмулятор (write-back). Подключаем тот же
 	// клиент, что и для proxy-login/sync. Если EMULATOR_URL пуст —
 	// emulatorClient == nil, и сервисы оставляют write-back выключенным.
 	if emulatorClient != nil {
 		debtSvc.SetGradeSender(emulatorClient)
-		retakeSvc.SetGradeSender(emulatorClient)
+		statementSvc.SetGradeSender(emulatorClient)
 	}
 
 	// Шедулер автопереходов retake-статусов крутится параллельно
@@ -184,6 +186,7 @@ func run() error {
 		Disciplines:     disciplineSvc,
 		Debts:           debtSvc,
 		Retakes:         retakeSvc,
+		Statements:      statementSvc,
 		ChangeRequests:  changeRequestSvc,
 		RetakeRequests:  retakeRequestSvc,
 		Reports:         reportSvc,
