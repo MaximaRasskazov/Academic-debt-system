@@ -301,23 +301,11 @@ function initials(u) {
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 *, *::before, *::after { box-sizing: border-box; }
 
 /* ── Variables ───────────────────────────────────────────────── */
 .users-root {
-  --bg:        #f3f4f7;
-  --card:      #ffffff;
-  --ink:       #1a1d24;
-  --ink-soft:  #6b7280;
-  --line:      #d7d9e0;
-  --brand:     #3b3fe0;
-  --brand-ink: #2a2e9e;
-  --radius:    10px;
-  --shadow:    0 2px 8px rgba(20,22,60,.07);
-  --ease:      cubic-bezier(.2,.7,.2,1);
-
   min-height: 100dvh;
   font-family: 'Inter', system-ui, sans-serif;
   color: var(--ink);
