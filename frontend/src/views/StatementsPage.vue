@@ -1,8 +1,11 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import FilterSelect from '../components/FilterSelect.vue'
+import VueDatePicker from '@vuepic/vue-datepicker'
+import '@vuepic/vue-datepicker/dist/main.css'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
@@ -43,14 +46,62 @@ const userMap    = ref({})         // user_id → { lastName, firstName, middleN
 /* ─── Left panel ─────────────────────────────────────────────── */
 const searchQuery  = ref('')
 const filterStatus = ref('all')
+const filterGroup    = ref('')   // '' = все
+const filterTeacher  = ref('')
+const filterSubject  = ref('')
 
-const filteredRetakes = computed(() =>
-  allRetakes.value.filter(r => {
-    const q = searchQuery.value.toLowerCase()
-    return (!q || r.subject.toLowerCase().includes(q)) &&
-           (filterStatus.value === 'all' || r.status === filterStatus.value)
-  })
+// Списки значений для пикеров фильтров — собираем из загруженных
+// пересдач. Группы/преподаватели подтягиваются по мере открытия
+// карточек (lazy), поэтому пересобираются реактивно.
+const subjectOptions = computed(() =>
+  [...new Set(allRetakes.value.map(r => r.subject))].sort((a, b) => a.localeCompare(b, 'ru'))
 )
+const teacherOptions = computed(() => {
+  const set = new Set()
+  for (const r of allRetakes.value) for (const t of r.teachers) if (t) set.add(t)
+  return [...set].sort((a, b) => a.localeCompare(b, 'ru'))
+})
+const groupOptions = computed(() => {
+  const set = new Set()
+  for (const r of allRetakes.value) for (const s of r.students) if (s.group) set.add(s.group)
+  return [...set].sort((a, b) => a.localeCompare(b, 'ru'))
+})
+
+const activeFilterCount = computed(() =>
+  [filterGroup.value, filterTeacher.value, filterSubject.value].filter(Boolean).length +
+  (filterStatus.value !== 'all' ? 1 : 0)
+)
+function resetFilters() {
+  filterStatus.value = 'all'
+  filterGroup.value = ''
+  filterTeacher.value = ''
+  filterSubject.value = ''
+  searchQuery.value = ''
+}
+
+const filteredRetakes = computed(() => {
+  const q = searchQuery.value.toLowerCase()
+  const list = allRetakes.value.filter(r => {
+    if (q && !r.subject.toLowerCase().includes(q)) return false
+    if (filterStatus.value !== 'all' && r.status !== filterStatus.value) return false
+    if (filterSubject.value && r.subject !== filterSubject.value) return false
+    if (filterTeacher.value && !r.teachers.includes(filterTeacher.value)) return false
+    // Группа известна только после подгрузки участников; нерасжатые
+    // карточки (students пустой) под фильтр группы не подходят.
+    if (filterGroup.value && !r.students.some(s => s.group === filterGroup.value)) return false
+    return true
+  })
+  return [...list].sort(sortRetakes)
+})
+
+// Сортировка: сначала активные (in_progress), затем завершённые;
+// внутри каждой группы — по дате, новые сверху.
+function sortRetakes(a, b) {
+  const rank = s => (s === 'in_progress' ? 0 : 1)
+  const ra = rank(a.status), rb = rank(b.status)
+  if (ra !== rb) return ra - rb
+  return a.date < b.date ? 1 : a.date > b.date ? -1 : 0
+}
 
 /* ─── Selection ──────────────────────────────────────────────── */
 const selectedId     = ref(null)
@@ -73,8 +124,21 @@ function canReopen(retake) {
 
 watch(selectedId, async (id) => {
   if (!id) return
-  await loadParticipants(id)
+  const retake = allRetakes.value.find(r => r.id === id)
+  // Первый показ — с лоадером; повторный — тихий refresh в фоне, чтобы
+  // подхватить изменения состава, сделанные деканом (до старта пересдачи).
+  if (retake && retake._loaded) loadParticipants(id, true)
+  else await loadParticipants(id)
 })
+
+// Ручное обновление выбранной пересдачи (кнопка в шапке списка студентов).
+const refreshing = ref(false)
+async function refreshSelected() {
+  if (!selectedId.value || refreshing.value) return
+  refreshing.value = true
+  try { await loadParticipants(selectedId.value, true) }
+  finally { refreshing.value = false }
+}
 
 /* ─── Grade (черновик) ───────────────────────────────────────── */
 const gradeError   = ref('')
@@ -168,11 +232,33 @@ const expDateFrom     = ref('')
 const expDateTo       = ref('')
 const expStatus       = ref('all')
 
-const allSubjects = computed(() => [...new Set(allRetakes.value.map(r => r.subject))])
+// При закрытии панели экспорта сворачиваем внутренний список дисциплин.
+watch(exportPanelOpen, (open) => { if (!open) { expSubjectsOpen.value = false; expSubjectSearch.value = '' } })
+
+const allSubjects = computed(() =>
+  [...new Set(allRetakes.value.map(r => r.subject))].sort((a, b) => a.localeCompare(b, 'ru'))
+)
+
+// Поиск + раскрывающийся список дисциплин в панели экспорта.
+const expSubjectsOpen   = ref(false)
+const expSubjectSearch  = ref('')
+// Список сворачиваем в дропдаун, если дисциплин много (>5).
+const expSubjectsCollapsible = computed(() => allSubjects.value.length > 5)
+const expSubjectsFiltered = computed(() => {
+  const q = expSubjectSearch.value.trim().toLowerCase()
+  if (!q) return allSubjects.value
+  return allSubjects.value.filter(s => s.toLowerCase().includes(q))
+})
 
 function toggleSubject(s) {
   const i = expSubjects.value.indexOf(s)
   i === -1 ? expSubjects.value.push(s) : expSubjects.value.splice(i, 1)
+}
+function clearSubjects() { expSubjects.value = [] }
+
+// Закрытие выпадающего списка дисциплин по клику вне него.
+function onExpOutside(e) {
+  if (expSubjectsOpen.value && !e.target.closest('.ep-msel')) expSubjectsOpen.value = false
 }
 
 const exportFiltered = computed(() =>
@@ -205,10 +291,12 @@ function resultLabel(result, status) {
   return status === 'completed' ? 'Долг' : '—'
 }
 
+// Приглушённая палитра оценок в тон бренда: сохраняем смысл
+// (2 — плохо … 5 — хорошо), но без кислотных тонов.
+const GRADE_COLORS = { 0: '#8b8f9e', 2: '#c0566a', 3: '#c98a3b', 4: '#5b6bd6', 5: '#3a9d78' }
 function resultColor(result, status) {
-  const map = { 0: '#6b7280', 2: '#dc2626', 3: '#d97706', 4: '#3b82f6', 5: '#059669' }
-  if (result !== null && result !== undefined) return map[result] || '#b0b3be'
-  return status === 'completed' ? '#dc2626' : '#b0b3be'
+  if (result !== null && result !== undefined) return GRADE_COLORS[result] || '#b0b3be'
+  return status === 'completed' ? '#c0566a' : '#b0b3be'
 }
 
 function fmtDateTime(iso) {
@@ -285,9 +373,13 @@ async function loadData() {
       rows = items.filter(r => VEDOMOST_STATUSES.includes(r.status))
     }
 
-    allRetakes.value = rows
-      .map(normalizeRetake)
-      .sort((a, b) => (a.date < b.date ? 1 : -1))
+    allRetakes.value = rows.map(normalizeRetake)
+    // Финальный порядок задаёт computed filteredRetakes (sortRetakes).
+
+    // Префетч участников всех пересдач в фоне: нужен для фильтров по
+    // группам/преподавателям и для «Экспорта всех». Не блокирует UI и
+    // не ломает выбор — loadParticipants идемпотентен (refresh-aware).
+    prefetchAllParticipants()
   } catch (e) {
     loadError.value = e.response?.data?.message || 'Не удалось загрузить ведомости'
   } finally {
@@ -295,12 +387,30 @@ async function loadData() {
   }
 }
 
-// Подгрузка участников выбранной пересдачи + резолв ФИО.
-async function loadParticipants(retakeId) {
-  const retake = allRetakes.value.find(r => r.id === retakeId)
-  if (!retake || retake._loaded) return
+// Фоновая подгрузка участников всех пересдач (для фильтров и экспорта).
+let _prefetchDone = false
+async function prefetchAllParticipants() {
+  if (_prefetchDone) return
+  _prefetchDone = true
+  // Последовательными «пачками», чтобы не положить бэк залпом.
+  const ids = allRetakes.value.map(r => r.id)
+  for (let i = 0; i < ids.length; i += 5) {
+    await Promise.all(ids.slice(i, i + 5).map(id => loadParticipants(id)))
+  }
+}
 
-  detailLoading.value = true
+// Подгрузка участников выбранной пересдачи + резолв ФИО.
+// force=true — игнорировать кеш и перечитать с бэка (кнопка «Обновить»,
+// устранение рассинхрона состава после правок деканом до старта).
+async function loadParticipants(retakeId, force = false) {
+  const retake = allRetakes.value.find(r => r.id === retakeId)
+  if (!retake) return
+  if (retake._loaded && !force) return
+
+  // Лоадер показываем только при первой загрузке. force-refresh идёт
+  // тихо, не пряча уже показанную таблицу.
+  const showLoader = !retake._loaded
+  if (showLoader) detailLoading.value = true
   try {
     const partRes = await retakesApi.getParticipants(retakeId).catch(() => null)
     const parts = partRes ? (partRes.data.items ?? partRes.data ?? []) : []
@@ -314,7 +424,20 @@ async function loadParticipants(retakeId) {
     // ФИО студентов: преподаватель не имеет users.view, поэтому берём
     // из directoryApi.listDebtors по дисциплине (он отдаёт ФИО+группу).
     // Декан может тянуть users напрямую, но listDebtors проще и единообразно.
-    await ensureNamesForDiscipline(retake.disciplineId)
+    // force — перечитываем справочники, чтобы подтянуть ФИО студентов,
+    // добавленных деканом уже после первой загрузки (баг с пустой строкой).
+    await ensureNamesForDiscipline(retake.disciplineId, force)
+    // Если после справочника по дисциплине у кого-то всё ещё нет ФИО
+    // (например, добавлен студент из другой группы) — добираем точечно.
+    const missing = parts.filter(p => !userMap.value[p.user_id]).map(p => p.user_id)
+    if (missing.length) await resolveMissingNames(missing, retake.disciplineId)
+
+    // При refresh сохраняем несохранённые черновики оценок, чтобы тихое
+    // обновление состава не сбросило то, что препод уже выбрал.
+    const prevDrafts = {}
+    for (const s of retake.students) {
+      if (s.draft !== null && s.draft !== s.result) prevDrafts[s.id] = s.draft
+    }
 
     const teachers = []
     const students = []
@@ -322,17 +445,18 @@ async function loadParticipants(retakeId) {
       const u = userMap.value[p.user_id]
       const name = u ? [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ') : p.user_id
       if (p.kind === 'student') {
+        const result = p.grade ?? null
         students.push({
           id:        p.user_id,
           lastName:  u?.lastName  || '',
           firstName: u?.firstName || '',
           middleName:u?.middleName|| '',
           group:     u?.group     || '',
-          result:    p.grade ?? null,
+          result,
           // draft — текущий выбор оценки в UI (черновик). Инициализируем
-          // тем, что уже сохранено на бэке; меняется кликом, отправляется
-          // кнопкой «Сохранить».
-          draft:     p.grade ?? null,
+          // сохранённым результатом, но восстанавливаем несохранённый
+          // выбор препода при refresh.
+          draft:     prevDrafts[p.user_id] ?? result,
           gradedAt:  p.graded_at || null,
           debtId:    p.debt_id || null,
         })
@@ -347,14 +471,16 @@ async function loadParticipants(retakeId) {
     retake.students = students
     retake._loaded  = true
   } finally {
-    detailLoading.value = false
+    if (showLoader) detailLoading.value = false
   }
 }
 
 // Заполняет userMap ФИО студентов-должников по дисциплине.
 // Кеширует по дисциплине, чтобы не дёргать listDebtors повторно.
+// force — сбросить кеш дисциплины и перечитать (после правок состава).
 const _discNamesLoaded = new Set()
-async function ensureNamesForDiscipline(disciplineId) {
+async function ensureNamesForDiscipline(disciplineId, force = false) {
+  if (force) { _discNamesLoaded.delete(disciplineId); _allUsersLoaded = false }
   if (_discNamesLoaded.has(disciplineId)) return
   _discNamesLoaded.add(disciplineId)
 
@@ -399,7 +525,34 @@ async function ensureNamesForDiscipline(disciplineId) {
 }
 let _allUsersLoaded = false
 
-onMounted(loadData)
+// Точечный резолв ФИО для участников, которых не оказалось в общих
+// справочниках (например, студент добавлен из группы вне выборки, или
+// users.getAll обрезал лимитом). Декан тянет users по id; преподаватель
+// довольствуется справочником по дисциплине (уже загружен выше).
+async function resolveMissingNames(userIds, disciplineId) {
+  if (auth.isDean || auth.isAdmin) {
+    await Promise.all(userIds.map(async (id) => {
+      const res = await usersApi.getById(id).catch(() => null)
+      const u = res?.data
+      if (u) {
+        userMap.value[id] = {
+          lastName: u.last_name, firstName: u.first_name,
+          middleName: u.middle_name, group: u.group_name || '',
+        }
+      }
+    }))
+  }
+  // Для преподавателя дополнительных источников нет: listDebtors уже
+  // перечитан в ensureNamesForDiscipline. disciplineId оставлен в
+  // сигнатуре для возможного расширения.
+  void disciplineId
+}
+
+onMounted(() => {
+  loadData()
+  document.addEventListener('mousedown', onExpOutside)
+})
+onUnmounted(() => document.removeEventListener('mousedown', onExpOutside))
 
 /* ─── Excel export ───────────────────────────────────────────── */
 async function doExcelOne(retake, students) {
@@ -651,10 +804,27 @@ function downloadBlob(blob, filename) {
               />
             </div>
 
-            <div class="chips">
-              <button class="chip" :class="{ active: filterStatus === 'all' }"         @click="filterStatus = 'all'">Все</button>
-              <button class="chip" :class="{ active: filterStatus === 'in_progress' }" @click="filterStatus = 'in_progress'">Проводится</button>
-              <button class="chip" :class="{ active: filterStatus === 'completed' }"   @click="filterStatus = 'completed'">Завершена</button>
+            <div class="filters">
+              <div class="filter-row-head">
+                <span class="filter-label">Статус</span>
+                <button v-if="activeFilterCount" class="filter-reset" @click="resetFilters">
+                  Сбросить
+                </button>
+              </div>
+              <div class="chips">
+                <button class="chip" :class="{ active: filterStatus === 'all' }"         @click="filterStatus = 'all'">Все</button>
+                <button class="chip" :class="{ active: filterStatus === 'in_progress' }" @click="filterStatus = 'in_progress'">Проводится</button>
+                <button class="chip" :class="{ active: filterStatus === 'completed' }"   @click="filterStatus = 'completed'">Завершена</button>
+              </div>
+
+              <span class="filter-label">Дисциплина</span>
+              <FilterSelect v-model="filterSubject" :options="subjectOptions" placeholder="Все дисциплины" searchable="auto" />
+
+              <span class="filter-label">Преподаватель</span>
+              <FilterSelect v-model="filterTeacher" :options="teacherOptions" placeholder="Все преподаватели" searchable="auto" />
+
+              <span class="filter-label">Группа</span>
+              <FilterSelect v-model="filterGroup" :options="groupOptions" placeholder="Все группы" searchable="auto" />
             </div>
 
             <div class="retakes-list">
@@ -772,13 +942,24 @@ function downloadBlob(blob, filename) {
               <div class="students-head">
                 <h3 class="students-title">Список студентов</h3>
                 <div class="students-head-right">
-                  <!-- Статус ведомости: черновик / зафиксирована -->
+                  <!-- Статус ведомости: открыта / закрыта -->
                   <span class="sheet-badge" :class="sheetClosed(selectedRetake) ? 'sheet-badge--closed' : 'sheet-badge--open'">
-                    {{ sheetClosed(selectedRetake) ? 'Зафиксирована' : 'Черновик' }}
+                    {{ sheetClosed(selectedRetake) ? 'Ведомость закрыта' : 'Ведомость открыта' }}
                   </span>
                   <span class="progress-text">
                     Оценено:&nbsp;<strong>{{ gradeCount(selectedRetake.students) }}</strong>&nbsp;из&nbsp;<strong>{{ selectedRetake.students.length }}</strong>
                   </span>
+                  <button
+                    class="refresh-btn"
+                    :class="{ spinning: refreshing }"
+                    title="Обновить состав и оценки"
+                    :disabled="refreshing || detailLoading"
+                    @click="refreshSelected"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                    </svg>
+                  </button>
                 </div>
               </div>
 
@@ -806,7 +987,8 @@ function downloadBlob(blob, filename) {
                     <col style="width:46px">
                     <col>
                     <col style="width:104px">
-                    <col style="width:280px">
+                    <col style="width:240px">
+                    <col style="width:160px">
                   </colgroup>
                   <thead>
                     <tr>
@@ -814,6 +996,7 @@ function downloadBlob(blob, filename) {
                       <th>ФИО студента</th>
                       <th>Группа</th>
                       <th>Результат</th>
+                      <th>Время</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -839,18 +1022,22 @@ function downloadBlob(blob, filename) {
                           >{{ g }}</button>
                           <span v-if="s.draft !== null && s.draft !== s.result" class="draft-dot" title="Не сохранено" />
                         </div>
-                        <!-- Ведомость закрыта ИЛИ не teacher → read-only -->
-                        <div v-else class="result-cell">
-                          <span
-                            class="result-text"
-                            :style="{ color: resultColor(s.result, selectedRetake.status), fontWeight: 600 }"
-                          >{{ resultLabel(s.result, selectedRetake.status) }}</span>
-                          <span v-if="s.gradedAt" class="result-date">{{ fmtDateTime(s.gradedAt) }}</span>
-                        </div>
+                        <!-- Ведомость закрыта ИЛИ не teacher → read-only.
+                             Оценка показывается чипом — как кнопка пикера
+                             при наведении (рамка + лёгкая заливка в цвет). -->
+                        <span
+                          v-else
+                          class="result-chip"
+                          :style="{ '--c': resultColor(s.result, selectedRetake.status) }"
+                        >{{ resultLabel(s.result, selectedRetake.status) }}</span>
+                      </td>
+                      <td class="td-time">
+                        <span v-if="s.gradedAt" class="result-date">{{ fmtDateTime(s.gradedAt) }}</span>
+                        <span v-else class="td-time-dash">—</span>
                       </td>
                     </tr>
                     <tr v-if="!selectedRetake.students.length">
-                      <td colspan="4" class="empty-cell">На пересдачу не записаны студенты</td>
+                      <td colspan="5" class="empty-cell">На пересдачу не записаны студенты</td>
                     </tr>
                   </tbody>
                 </table>
@@ -909,13 +1096,41 @@ function downloadBlob(blob, filename) {
         <div class="ep-body">
 
           <div class="ep-field">
-            <label class="ep-label">Дисциплина</label>
-            <div class="ep-subjects">
+            <div class="ep-label-row">
+              <label class="ep-label">Дисциплина</label>
+              <button v-if="expSubjects.length" class="ep-clear" @click="clearSubjects">Очистить</button>
+            </div>
+
+            <!-- Много дисциплин → раскрывающийся список с поиском -->
+            <div v-if="expSubjectsCollapsible" class="ep-msel" :class="{ open: expSubjectsOpen }">
+              <button type="button" class="ep-msel-trigger" @click="expSubjectsOpen = !expSubjectsOpen">
+                <span :class="{ placeholder: !expSubjects.length }">
+                  {{ expSubjects.length ? `Выбрано: ${expSubjects.length}` : 'Все дисциплины' }}
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div v-show="expSubjectsOpen" class="ep-msel-dropdown">
+                <div class="ep-msel-search-wrap">
+                  <input class="ep-msel-search" v-model="expSubjectSearch" placeholder="Поиск дисциплины..." />
+                </div>
+                <div class="ep-msel-scroll">
+                  <label v-for="s in expSubjectsFiltered" :key="s" class="ep-check">
+                    <input type="checkbox" :checked="expSubjects.includes(s)" @change="toggleSubject(s)" />
+                    <span class="ep-check-text">{{ s }}</span>
+                  </label>
+                  <div v-if="!expSubjectsFiltered.length" class="ep-msel-empty">Ничего не найдено</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Мало дисциплин → плоский список чекбоксов -->
+            <div v-else class="ep-subjects">
               <label v-for="s in allSubjects" :key="s" class="ep-check">
                 <input type="checkbox" :checked="expSubjects.includes(s)" @change="toggleSubject(s)" />
                 <span class="ep-check-text">{{ s }}</span>
               </label>
             </div>
+
             <p v-if="!expSubjects.length" class="ep-hint-gray">Не выбрано — экспортируются все</p>
           </div>
 
@@ -924,11 +1139,23 @@ function downloadBlob(blob, filename) {
             <div class="ep-daterange">
               <div class="ep-date-wrap">
                 <span class="ep-date-lbl">С</span>
-                <input type="date" class="ep-input" v-model="expDateFrom" />
+                <!-- model-type yyyy-MM-dd: сохраняем ISO-строку для
+                     лексикографического сравнения с r.date в exportFiltered. -->
+                <VueDatePicker
+                  v-model="expDateFrom"
+                  locale="ru" format="dd.MM.yyyy" model-type="yyyy-MM-dd"
+                  :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг"
+                  :max-date="expDateTo || undefined" :teleport="true"
+                />
               </div>
               <div class="ep-date-wrap">
                 <span class="ep-date-lbl">По</span>
-                <input type="date" class="ep-input" v-model="expDateTo" />
+                <VueDatePicker
+                  v-model="expDateTo"
+                  locale="ru" format="dd.MM.yyyy" model-type="yyyy-MM-dd"
+                  :enable-time-picker="false" auto-apply placeholder="дд.мм.гггг"
+                  :min-date="expDateFrom || undefined" :teleport="true"
+                />
               </div>
             </div>
           </div>
@@ -1053,7 +1280,9 @@ function downloadBlob(blob, filename) {
   box-shadow: var(--shadow);
   display: flex; flex-direction: column;
   max-height: calc(100dvh - 140px);
-  overflow: hidden;
+  /* visible — чтобы выпадающие списки фильтров не обрезались карточкой.
+     Скролл вынесен в .retakes-list (свой overflow-y). */
+  overflow: visible;
 }
 
 .left-head {
@@ -1088,9 +1317,30 @@ function downloadBlob(blob, filename) {
 .search-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
 .search-input::placeholder { color: #b0b3be; }
 
-.chips {
-  display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 12px;
+/* ── Filters block ───────────────────────────────────────────── */
+.filters {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 0 12px 12px;
 }
+.filter-row-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 2px;
+}
+.filter-label {
+  font: 600 10.5px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: .05em; margin-top: 4px;
+}
+.filter-reset {
+  border: none; background: none; cursor: pointer; padding: 0;
+  font: 600 11px/1 'Inter', sans-serif; color: var(--brand);
+  transition: opacity .15s;
+}
+.filter-reset:hover { opacity: .7; }
+
+.chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+/* отступ снизу остаётся прежним там, где chips вне .filters (нет таких) */
 .chip {
   padding: 4px 11px; height: 28px; border: 1.5px solid var(--line); border-radius: 20px;
   background: #fff; color: var(--ink-soft);
@@ -1106,6 +1356,7 @@ function downloadBlob(blob, filename) {
 .retakes-list {
   flex: 1; overflow-y: auto; padding: 4px 8px 12px;
   display: flex; flex-direction: column; gap: 6px;
+  border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
 }
 .retakes-list::-webkit-scrollbar { width: 4px; }
 .retakes-list::-webkit-scrollbar-track { background: transparent; }
@@ -1163,12 +1414,12 @@ function downloadBlob(blob, filename) {
 /* ── Grade note (banner о режиме) ────────────────────────────── */
 .grade-note {
   display: flex; align-items: center; gap: 8px;
-  margin: 14px 24px 0; padding: 10px 14px; border-radius: 8px;
+  margin: 16px 24px 18px; padding: 11px 14px; border-radius: 8px;
   font: 500 12.5px/1.4 'Inter', sans-serif;
   background: rgba(107,114,128,.08); color: var(--ink-soft);
 }
 .grade-note svg { flex-shrink: 0; }
-.grade-note--active { background: rgba(245,158,11,.1); color: #b45309; }
+.grade-note--active { background: rgba(59,63,224,.08); color: #3b3fe0; }
 
 /* ── Right column ────────────────────────────────────────────── */
 .right-col { display: flex; flex-direction: column; gap: 16px; }
@@ -1273,11 +1524,12 @@ function downloadBlob(blob, filename) {
 }
 .g-btn:hover { border-color: currentColor; transform: translateY(-1px); }
 
-.g2  { --c: #dc2626; }
-.g3  { --c: #d97706; }
-.g4  { --c: #3b82f6; }
-.g5  { --c: #059669; }
-.g-na { --c: #6b7280; min-width: 42px; }
+/* Приглушённая палитра в тон бренда (см. GRADE_COLORS в script). */
+.g2  { --c: #c0566a; }
+.g3  { --c: #f0c591; }
+.g4  { --c: #7587fa; }
+.g5  { --c: #85d6b8; }
+.g-na { --c: #8b8f9e; min-width: 42px; }
 
 .g-btn:not(:disabled):hover { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); }
 .g-btn:disabled { opacity: .4; cursor: not-allowed; }
@@ -1301,8 +1553,8 @@ function downloadBlob(blob, filename) {
   font: 600 11px/1 'Inter', sans-serif; padding: 4px 9px; border-radius: 20px;
   text-transform: uppercase; letter-spacing: .03em;
 }
-.sheet-badge--open   { background: rgba(245,158,11,.14); color: #b45309; }
-.sheet-badge--closed { background: rgba(5,150,105,.12);  color: #047857; }
+.sheet-badge--open   { background: rgba(59,63,224,.10); color: #3b3fe0; }
+.sheet-badge--closed { background: rgba(107,114,128,.12); color: #6b7280; }
 
 .sheet-actions {
   display: flex; gap: 10px; justify-content: flex-end;
@@ -1322,10 +1574,31 @@ function downloadBlob(blob, filename) {
 .sheet-btn--reopen { background: #fff; border-color: #d97706; color: #b45309; }
 .sheet-btn--reopen:not(:disabled):hover { background: rgba(245,158,11,.08); }
 
-/* Результат (проставленная оценка / долг) + дата фиксации */
-.result-cell { display: flex; flex-direction: column; gap: 2px; }
-.result-text { font-size: 15px; font-weight: 600; }
-.result-date { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
+/* Результат (проставленная оценка / долг) + время выставления.
+   Чип повторяет вид .g-btn при наведении: рамка цвета оценки,
+   лёгкая заливка и цветной текст. Цвет приходит через --c (inline). */
+.result-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 30px; padding: 0 10px;
+  border: 1.5px solid var(--c); border-radius: 7px;
+  background: color-mix(in srgb, var(--c) 8%, transparent);
+  color: var(--c); font: 600 12px/1 'Inter', sans-serif;
+}
+.td-time { white-space: nowrap; }
+.result-date { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.td-time-dash { color: #c5c8d4; }
+
+/* ── Refresh button ──────────────────────────────────────────── */
+.refresh-btn {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; border-radius: 8px;
+  border: 1.5px solid var(--line); background: #fff; color: var(--ink-soft);
+  cursor: pointer; flex-shrink: 0;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.refresh-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.05); }
+.refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+.refresh-btn.spinning svg { animation: stmt-spin .8s linear infinite; }
 
 .empty-cell { text-align: center; color: var(--ink-soft); padding: 28px 16px; }
 
@@ -1397,28 +1670,88 @@ function downloadBlob(blob, filename) {
 .ep-field { display: flex; flex-direction: column; gap: 8px; }
 .ep-label { font: 600 12px/1 'Inter', sans-serif; color: #1a1d24; text-transform: uppercase; letter-spacing: .06em; }
 
-.ep-subjects { display: flex; flex-direction: column; gap: 6px; }
+.ep-subjects {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1.5px solid #e5e4e7; border-radius: 8px; padding: 6px;
+  background: #fafafb;
+}
 .ep-check {
-  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
   font-size: 13px; color: #1a1d24; user-select: none;
+  padding: 7px 8px; border-radius: 6px; transition: background .12s;
 }
+.ep-check:hover { background: rgba(59,63,224,.06); }
+/* Кастомный чек-бокс в стиль сайта (бренд-синий), вместо нативного. */
 .ep-check input[type="checkbox"] {
-  width: 16px; height: 16px; accent-color: #3b3fe0; flex-shrink: 0; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  width: 18px; height: 18px; flex-shrink: 0; cursor: pointer; margin: 0;
+  border: 1.5px solid #c5c8d4; border-radius: 5px; background: #fff;
+  display: grid; place-content: center;
+  transition: background .15s, border-color .15s;
 }
+.ep-check input[type="checkbox"]::before {
+  content: ''; width: 10px; height: 10px;
+  transform: scale(0); transition: transform .12s cubic-bezier(.2,.7,.2,1);
+  background: #fff;
+  clip-path: polygon(14% 47%, 0 60%, 39% 100%, 100% 22%, 86% 8%, 39% 70%);
+}
+.ep-check input[type="checkbox"]:checked {
+  background: linear-gradient(135deg, #2b5cff 0%, #5b3bd9 55%, #8b3df0 100%);
+  border-color: #3b3fe0;
+}
+.ep-check input[type="checkbox"]:checked::before { transform: scale(1); }
+.ep-check input[type="checkbox"]:hover { border-color: #3b3fe0; }
 .ep-check-text { line-height: 1.4; }
 .ep-hint-gray { font-size: 12px; color: #6b7280; margin: 0; font-style: italic; }
+
+.ep-label-row { display: flex; align-items: center; justify-content: space-between; }
+.ep-clear {
+  border: none; background: none; cursor: pointer; padding: 0;
+  font: 600 11px/1 'Inter', sans-serif; color: #3b3fe0; transition: opacity .15s;
+}
+.ep-clear:hover { opacity: .7; }
+
+/* ── Multiselect дисциплин (раскрывающийся список + поиск) ──────── */
+.ep-msel { position: relative; }
+.ep-msel-trigger {
+  appearance: none; width: 100%; height: 38px;
+  border: 1.5px solid #d7d9e0; border-radius: 8px;
+  background: #fff; padding: 0 34px 0 12px;
+  font: 13px/1 'Inter', sans-serif; color: #1a1d24;
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; text-align: left; gap: 8px; position: relative;
+  transition: border-color .2s cubic-bezier(.2,.7,.2,1), box-shadow .2s cubic-bezier(.2,.7,.2,1);
+}
+.ep-msel.open .ep-msel-trigger { border-color: #3b3fe0; box-shadow: 0 0 0 3px rgba(59,63,224,.12); }
+.ep-msel-trigger .placeholder { color: #9498a4; }
+.ep-msel-trigger svg {
+  width: 14px; height: 14px; color: #6b7280; flex-shrink: 0;
+  position: absolute; right: 11px; transition: transform .2s cubic-bezier(.2,.7,.2,1);
+}
+.ep-msel.open .ep-msel-trigger svg { transform: rotate(180deg); }
+
+.ep-msel-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+  background: #fff; border: 1.5px solid #d7d9e0; border-radius: 8px;
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); overflow: hidden;
+}
+.ep-msel-search-wrap { padding: 8px 8px 4px; border-bottom: 1px solid #eceef2; }
+.ep-msel-search {
+  width: 100%; height: 30px; border: 1.5px solid #d7d9e0; border-radius: 6px;
+  padding: 0 10px; font: 12.5px/1 'Inter', sans-serif; color: #1a1d24; outline: none;
+}
+.ep-msel-search:focus { border-color: #3b3fe0; }
+.ep-msel-scroll { max-height: 220px; overflow-y: auto; padding: 6px 12px 8px; display: flex; flex-direction: column; gap: 7px; }
+.ep-msel-scroll::-webkit-scrollbar { width: 4px; }
+.ep-msel-scroll::-webkit-scrollbar-thumb { background: #c5c8d4; border-radius: 4px; }
+.ep-msel-empty { font: 12.5px/1 'Inter', sans-serif; color: #6b7280; padding: 4px 0; }
 
 .ep-daterange { display: flex; flex-direction: column; gap: 8px; }
 .ep-date-wrap { display: flex; align-items: center; gap: 10px; }
 .ep-date-lbl { font: 500 13px/1 'Inter', sans-serif; color: #6b7280; width: 20px; }
-.ep-input {
-  flex: 1; height: 36px;
-  border: 1.5px solid #d7d9e0; border-radius: 8px;
-  background: #f3f4f7; padding: 0 10px;
-  font: 13px/1 'Inter', sans-serif; color: #1a1d24; outline: none;
-  transition: border-color .2s cubic-bezier(.2,.7,.2,1);
-}
-.ep-input:focus { border-color: #3b3fe0; }
+/* VueDatePicker занимает оставшуюся ширину строки. Сам инпут стилизуется
+   глобально (.dp__* в style.css), здесь — только раскладка. */
+.ep-date-wrap :deep(.dp__main) { flex: 1; min-width: 0; }
 
 .ep-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
@@ -1444,13 +1777,22 @@ function downloadBlob(blob, filename) {
 .btn-exp-lg {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   height: 42px; border-radius: 10px; border: none;
-  font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
-  transition: opacity .2s, transform .15s;
+  font: 600 13px/1 'Inter', sans-serif; color: #fff; cursor: pointer;
+  transition: transform .2s cubic-bezier(.2,.7,.2,1), box-shadow .2s cubic-bezier(.2,.7,.2,1), opacity .2s;
 }
-.btn-exp-lg:disabled { opacity: .4; cursor: not-allowed; }
+.btn-exp-lg:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .btn-exp-lg:not(:disabled):hover { transform: scale(1.02); }
-.btn-exp-lg.excel { background: #1a7340; color: #fff; }
-.btn-exp-lg.word  { background: #1a56a0; color: #fff; }
+/* В стиль кнопок дашборда: насыщенный фон + цветная тень-«подсветка». */
+.btn-exp-lg.excel {
+  background: linear-gradient(135deg, #1aa05a 0%, #0f7a43 100%);
+  box-shadow: 0 6px 18px -6px rgba(15,122,67,.6);
+}
+.btn-exp-lg.excel:not(:disabled):hover { box-shadow: 0 8px 22px -6px rgba(15,122,67,.7); }
+.btn-exp-lg.word {
+  background: linear-gradient(135deg, #2b5cff 0%, #1a56a0 100%);
+  box-shadow: 0 6px 18px -6px rgba(26,86,160,.6);
+}
+.btn-exp-lg.word:not(:disabled):hover { box-shadow: 0 8px 22px -6px rgba(26,86,160,.7); }
 
 /* ── Transitions ─────────────────────────────────────────────── */
 .fade-enter-active, .fade-leave-active { transition: opacity .3s; }
