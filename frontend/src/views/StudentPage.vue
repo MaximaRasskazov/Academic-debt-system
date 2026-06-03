@@ -119,17 +119,27 @@ function fmtTime(iso) {
 onMounted(async () => {
   connectWS()
 
-  const [debtsRes, retakesRes, discRes, notifsRes] = await Promise.allSettled([
+  const [debtsRes, retakesRes, discRes, allDiscRes, notifsRes] = await Promise.allSettled([
     debtsApi.getMy(),
     retakesApi.getMy(),
     disciplinesApi.myAsStudent(),
+    disciplinesApi.getAll({ limit: 500 }),
     notificationsApi.getAll({ limit: 30 }),
   ])
 
   myDiscs.value = discRes.status === 'fulfilled'
     ? (discRes.value.data.items ?? discRes.value.data ?? [])
     : []
-  myDiscs.value.forEach(d => { discMap.value[d.id] = d.name || d.code })
+
+  // Карта id→название строится из ПОЛНОГО справочника дисциплин, а не только
+  // из «своих»: у синхронизированных студентов нет записей student_disciplines,
+  // поэтому по их долгам/пересдачам имя не находилось и на экран попадал UUID.
+  const allDiscs = allDiscRes.status === 'fulfilled'
+    ? (allDiscRes.value.data.items ?? allDiscRes.value.data ?? [])
+    : []
+  allDiscs.forEach(d => { discMap.value[d.id] = d.name || d.code })
+  // Фолбэк, если полный справочник не загрузился — хотя бы свои дисциплины.
+  myDiscs.value.forEach(d => { if (!discMap.value[d.id]) discMap.value[d.id] = d.name || d.code })
 
   myDebts.value = debtsRes.status === 'fulfilled'
     ? (debtsRes.value.data.items ?? debtsRes.value.data ?? [])
@@ -175,7 +185,7 @@ onMounted(async () => {
 function exportDebts(fmt) {
   const headers = ['Дисциплина', 'Статус', 'Оценка', 'Дата создания']
   const rows = openDebtsList.value.map(d => [
-    discMap.value[d.discipline_id] || d.discipline_id,
+    discMap.value[d.discipline_id] || 'Дисциплина',
     statusLabel(d.status),
     d.final_grade ?? '—',
     formatDate(d.created_at),
@@ -243,7 +253,7 @@ onUnmounted(() => { ws?.close() })
                 <ul v-else class="panel-list">
                   <li v-for="d in openDebtsList" :key="d.id" :class="['panel-row', `row-${d.status}`]">
                     <div class="panel-row-main">
-                      <span class="panel-disc">{{ discMap[d.discipline_id] || d.discipline_id }}</span>
+                      <span class="panel-disc">{{ discMap[d.discipline_id] || 'Дисциплина' }}</span>
                       <span :class="['panel-badge', `badge-${d.status}`]">{{ statusLabel(d.status) }}</span>
                     </div>
                     <div class="panel-row-meta">
@@ -292,7 +302,7 @@ onUnmounted(() => { ws?.close() })
                 <ul v-else class="panel-list">
                   <li v-for="r in scheduledRetakesList" :key="r.id" :class="['panel-row', `row-retake-${r.status}`]">
                     <div class="panel-row-main">
-                      <span class="panel-disc">{{ discMap[r.discipline_id] || r.discipline_id }}</span>
+                      <span class="panel-disc">{{ discMap[r.discipline_id] || 'Дисциплина' }}</span>
                       <span :class="['panel-badge', `badge-retake-${r.status}`]">{{ retakeStatusLabel(r.status) }}</span>
                     </div>
                     <div class="panel-row-meta">
@@ -317,7 +327,7 @@ onUnmounted(() => { ws?.close() })
                 <ul v-else class="panel-list">
                   <li v-for="r in completedRetakesList" :key="r.id" class="panel-row row-retake-completed">
                     <div class="panel-row-main">
-                      <span class="panel-disc">{{ discMap[r.discipline_id] || r.discipline_id }}</span>
+                      <span class="panel-disc">{{ discMap[r.discipline_id] || 'Дисциплина' }}</span>
                       <span class="panel-badge badge-retake-completed">{{ retakeStatusLabel(r.status) }}</span>
                     </div>
                     <div class="panel-row-meta">
