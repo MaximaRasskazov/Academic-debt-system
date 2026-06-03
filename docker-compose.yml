@@ -2,19 +2,26 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: ${DB_USER:-academic}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-academic}
-      POSTGRES_DB: ${DB_NAME:-academic_debts}
-    ports:
-      # Снаружи 15432, чтобы не конфликтовать с локально установленным postgres
-      - "15432:5432"
+      POSTGRES_USER: ${DB_USER:?DB_USER is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+    expose:
+      - '5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    expose:
+      - '1025'
+    ports:
+      - '8025:8025' # Web UI для просмотра писем
     restart: unless-stopped
 
   backend:
@@ -22,31 +29,64 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      APP_ENV: ${APP_ENV:-development}
-      APP_PORT: "8080"
+      APP_ENV: production
+      APP_PORT: '8080'
       LOG_LEVEL: ${LOG_LEVEL:-info}
+
       DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: ${DB_NAME:-academic_debts}
-      DB_USER: ${DB_USER:-academic}
-      DB_PASSWORD: ${DB_PASSWORD:-academic}
-      JWT_SECRET: ${JWT_SECRET}
+      DB_PORT: '5432'
+      DB_NAME: ${DB_NAME:?DB_NAME is required}
+      DB_USER: ${DB_USER:?DB_USER is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+
+      # false — для http-демо без SSL; true — если есть HTTPS
+      COOKIE_SECURE: ${COOKIE_SECURE}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       COOKIE_PATH: ${COOKIE_PATH:-/}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
-      SEED_DEV_ACCOUNTS: ${SEED_DEV_ACCOUNTS:-false}
+
+      # Фронтенд и бэкенд на одном домене через nginx — CORS не нужен,
+      # но заголовок обязателен для WS-хендшейка.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+
+      SEED_DEV_ACCOUNTS: '${SEED_DEV_ACCOUNTS:-true}'
+
+      # SMTP — по умолчанию mailpit (письма видны на :8025).
+      # Для реальной доставки задай SMTP_HOST в .env.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@academic.local}
+
+      # Синхронизация с эмулятором деканата — опционально.
       EMULATOR_URL: ${EMULATOR_URL:-}
       EMULATOR_API_KEY: ${EMULATOR_API_KEY:-}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-5m}
-    ports:
-      - "8080:8080"
+    expose:
+      - '8080'
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ''
+    ports:
+      - '${APP_PORT:-80}:80'
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

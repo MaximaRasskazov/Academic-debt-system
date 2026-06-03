@@ -1,10 +1,12 @@
 name: Frontend CI
 
 on:
+  # release намеренно НЕ в push-триггерах: на push в release тесты и сборку
+  # ведёт release.yml. Здесь release остаётся только в pull_request, чтобы
+  # PR develop → release прогонялся перед мержем.
   push:
     branches:
       - develop
-      - release
       - 'feat/**'
       - 'integration/**'
     paths:
@@ -85,6 +87,8 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Только проверка сборки. Реальный build+push в GHCR и деплой делает
+      # release.yml на push в ветку release.
       - name: Build production image
         uses: docker/build-push-action@v6
         with:

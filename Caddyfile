@@ -1,0 +1,26 @@
+# Caddyfile для прод-стенда. Caddy сам получает и продлевает TLS-сертификаты
+# Let's Encrypt (HTTP-01) и редиректит весь HTTP (80) на HTTPS (443).
+#
+# Переменные подставляются из окружения контейнера (см. docker-compose.yml).
+
+{
+	# Email для регистрации в Let's Encrypt и уведомлений об истечении серта.
+	email {$ACME_EMAIL}
+}
+
+# Основной сайт. Caddy проксирует на frontend (nginx), который внутри сам
+# раздаёт SPA и проксирует /api/ и /ws/ на backend — отдельные маршруты
+# тут не нужны.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy frontend:80
+}
+
+# Mailpit под basic auth — наружу торчит только UI просмотра писем,
+# SMTP-порт (1025) остаётся внутренним.
+{$MAIL_DOMAIN} {
+	basic_auth {
+		{$MAILPIT_USER} {$MAILPIT_PASS_HASH}
+	}
+	reverse_proxy mailpit:8025
+}
