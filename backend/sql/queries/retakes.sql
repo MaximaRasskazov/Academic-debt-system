@@ -30,6 +30,31 @@ WHERE rp.user_id = $1
   AND r.deleted_at IS NULL
 ORDER BY r.scheduled_at DESC;
 
+-- name: ListRetakesForUserAsTeacher :many
+-- Пересдачи, где пользователь участвует как преподаватель/член комиссии.
+-- Используется для бывших студентов, повышенных до преподавателя: их
+-- старое участие kind='student' не должно «протекать» в кабинет
+-- преподавателя (видеть/грейдить пересдачу, где сам был студентом).
+SELECT DISTINCT r.*
+FROM retakes r
+JOIN retake_participants rp ON rp.retake_id = r.id
+WHERE rp.user_id = $1
+  AND rp.kind IN ('teacher', 'commission_member')
+  AND r.deleted_at IS NULL
+ORDER BY r.scheduled_at DESC;
+
+-- name: IsRetakeParticipantWithKind :one
+-- Проверка: участвует ли пользователь в пересдаче с одним из указанных
+-- kind. Нужна middleware доступа к составу/ведомости, чтобы преподаватель
+-- не открывал ведомость пересдачи, где он был только студентом.
+SELECT EXISTS (
+    SELECT 1
+    FROM retake_participants rp
+    WHERE rp.retake_id = $1
+      AND rp.user_id = $2
+      AND rp.kind = ANY(sqlc.arg('kinds')::varchar[])
+) AS is_participant;
+
 -- name: ListRetakesInPeriod :many
 -- Для сводного отчёта деканата за период: только проведённые.
 SELECT *
@@ -50,6 +75,26 @@ SET building         = COALESCE(sqlc.narg('building'),         building),
     duration_minutes = COALESCE(sqlc.narg('duration_minutes'), duration_minutes),
     notes            = COALESCE(sqlc.narg('notes'),            notes),
     updated_at       = NOW()
+WHERE id = sqlc.arg('id')
+  AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SetRetakeStatus :one
+-- Ручная установка статуса деканом (любой → любой). В отличие от
+-- MarkRetake*/Cancel здесь нет ограничения по текущему статусу: декан
+-- может откатить ошибочно завершённую пересдачу обратно в scheduled и т.п.
+-- completed_at синхронизируем со статусом: ставим NOW() при переходе в
+-- completed, сбрасываем в NULL при любом другом статусе.
+--
+-- Параметр status приводим к ::varchar в обоих местах использования.
+-- Без явного каста Postgres выводит тип $1 по-разному (как столбец status
+-- и внутри CASE-сравнения) и падает с "inconsistent types deduced for
+-- parameter $1" (SQLSTATE 42P08). Каст ::timestamptz на NULL-ветке нужен,
+-- чтобы тип CASE был однозначен.
+UPDATE retakes
+SET status       = sqlc.arg('status')::varchar,
+    completed_at = CASE WHEN sqlc.arg('status')::varchar = 'completed' THEN NOW() ELSE NULL::timestamptz END,
+    updated_at   = NOW()
 WHERE id = sqlc.arg('id')
   AND deleted_at IS NULL
 RETURNING *;

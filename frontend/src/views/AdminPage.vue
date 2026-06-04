@@ -1,10 +1,26 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import http from '../api/http'
 
 const sidebarOpen = ref(false)
+
+// id строки с открытым дропдауном выбора роли (стилизованный, не нативный)
+const openRoleId = ref(null)
+function toggleRoleDropdown(id) { openRoleId.value = openRoleId.value === id ? null : id }
+function closeRoleDropdown() { openRoleId.value = null }
+function onAdminOutside(e) {
+  if (!e.target.closest('.role-select-wrap')) openRoleId.value = null
+}
+onMounted(() => document.addEventListener('mousedown', onAdminOutside))
+onUnmounted(() => document.removeEventListener('mousedown', onAdminOutside))
+
+// Выбор роли из стилизованного дропдауна.
+function pickRole(u, slug) {
+  closeRoleDropdown()
+  changeRole(u, slug)
+}
 
 /* ─── State ──────────────────────────────────────────────────── */
 const users     = ref([])
@@ -267,16 +283,24 @@ function initials(u) {
                   </span>
                 </td>
                 <td>
-                  <div class="role-select-wrap">
-                    <select
-                      class="role-select"
-                      :value="u.role"
+                  <div class="role-select-wrap" :class="{ open: openRoleId === u.id }">
+                    <button
+                      type="button"
+                      class="role-select-trigger"
                       :disabled="savingId === u.id || u.role === 'ADMIN'"
-                      @change="changeRole(u, $event.target.value)"
+                      @click="toggleRoleDropdown(u.id)"
                     >
-                      <option v-for="r in ASSIGNABLE_ROLES" :key="r.slug" :value="r.slug">{{ r.label }}</option>
-                      <option v-if="u.role === 'ADMIN'" value="ADMIN">Администратор</option>
-                    </select>
+                      <span>{{ ROLE_LABEL[u.role] ?? u.role }}</span>
+                      <svg class="role-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div v-if="openRoleId === u.id" class="role-select-dropdown">
+                      <button
+                        v-for="r in ASSIGNABLE_ROLES" :key="r.slug"
+                        type="button" class="role-select-option"
+                        :class="{ selected: u.role === r.slug }"
+                        @click="pickRole(u, r.slug)"
+                      >{{ r.label }}</button>
+                    </div>
                     <span v-if="savingId === u.id" class="select-spinner" />
                   </div>
                 </td>
@@ -418,7 +442,7 @@ function initials(u) {
 }
 .data-table tbody tr { transition: background .12s; }
 .data-table tbody tr:hover { background: rgba(59,63,224,.03); }
-.data-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; }
+.data-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--ink); vertical-align: middle; text-align: left; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .td-soft { color: var(--ink-soft); }
 
@@ -432,20 +456,34 @@ function initials(u) {
 
 .u-badge { padding: 3px 10px; border-radius: 20px; font: 600 11px/1 'Inter', sans-serif; white-space: nowrap; }
 
-/* ── Role select ── */
-.role-select-wrap { display: flex; align-items: center; gap: 8px; }
-.role-select {
-  height: 36px; padding: 0 30px 0 12px; min-width: 160px;
+/* ── Role select (стилизованный дропдаун вместо нативного select) ── */
+.role-select-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.role-select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 36px; padding: 0 12px; min-width: 160px;
   border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: var(--card); color: var(--ink);
+  background: var(--card); color: var(--ink); text-align: left;
   font: 500 13px/1 'Inter', sans-serif; cursor: pointer; outline: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center;
   transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.role-select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
-.role-select:disabled { opacity: .6; cursor: not-allowed; background-color: #f8f9fb; }
+.role-select-trigger:hover:not(:disabled) { border-color: #a0a3b1; }
+.role-select-wrap.open .role-select-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.role-select-trigger:disabled { opacity: .6; cursor: not-allowed; background-color: #f8f9fb; }
+.role-select-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; transition: transform .2s var(--ease); }
+.role-select-wrap.open .role-select-arrow { transform: rotate(180deg); }
+.role-select-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; min-width: 160px; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); padding: 4px;
+}
+.role-select-option {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; border-radius: 6px;
+  background: none; font: 13px/1.3 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; white-space: nowrap;
+}
+.role-select-option:hover { background: rgba(59,63,224,.07); }
+.role-select-option.selected { color: var(--brand); font-weight: 600; background: rgba(59,63,224,.06); }
 .select-spinner {
   width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
   border: 2px solid var(--line); border-top-color: var(--brand);

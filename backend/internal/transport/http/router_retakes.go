@@ -6,7 +6,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/handler"
 	mw "github.com/MaximaRasskazov/Academic-debt-system/backend/internal/transport/http/middleware"
 )
@@ -52,6 +51,7 @@ func mountRetakes(r chi.Router, d Deps) {
 			r.Post("/{id}/start", h.Start)
 			r.Post("/{id}/complete", h.Complete)
 			r.Post("/{id}/cancel", h.Cancel)
+			r.Post("/{id}/status", h.SetStatus)
 			r.Post("/{id}/students", h.AddStudent)
 			r.Delete("/{id}/students/{user_id}", h.RemoveStudent)
 			r.Post("/{id}/teachers", h.AddTeacher)
@@ -93,16 +93,18 @@ func requireRetakeAccess(d Deps) func(http.Handler) http.Handler {
 				return
 			}
 
-			parts, err := d.Retakes.ListParticipants(r.Context(), retakeID)
-			if err != nil {
+			// Доступ зависит от роли: преподаватель видит пересдачу только
+			// если участвует как teacher/commission_member, студент — как
+			// student. Бывший студент, ставший преподавателем, теряет
+			// доступ к пересдачам, где он был только студентом.
+			ok, err2 := d.Retakes.CanUserAccessRetake(r.Context(), retakeID, userID)
+			if err2 != nil {
 				writeRouterError(w, http.StatusInternalServerError, "internal", "не удалось проверить доступ")
 				return
 			}
-			for _, p := range parts {
-				if pgutil.UUID(p.UserID) == userID {
-					next.ServeHTTP(w, r)
-					return
-				}
+			if ok {
+				next.ServeHTTP(w, r)
+				return
 			}
 
 			writeRouterError(w, http.StatusForbidden, "forbidden", "вы не участник этой пересдачи")

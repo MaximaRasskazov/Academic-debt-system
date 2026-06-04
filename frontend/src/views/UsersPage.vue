@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
+import FilterSelect from '../components/FilterSelect.vue'
 import http from '../api/http'
 
 const sidebarOpen = ref(false)
@@ -195,10 +196,12 @@ function initials(u) {
             <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
             <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
           </svg>
-          <select class="group-select" v-model="filterGroup">
-            <option value="">Все группы</option>
-            <option v-for="g in allGroups" :key="g" :value="g">{{ g }}</option>
-          </select>
+          <FilterSelect
+            v-model="filterGroup"
+            :options="allGroups"
+            placeholder="Все группы"
+            searchable="auto"
+          />
         </div>
 
       </div>
@@ -399,19 +402,8 @@ function initials(u) {
 .group-select-wrap {
   display: flex; align-items: center; gap: 7px;
   color: var(--ink-soft);
+  min-width: 180px; max-width: 240px;
 }
-.group-select {
-  height: 34px; padding: 0 28px 0 10px;
-  border: 1.5px solid var(--line); border-radius: var(--radius);
-  background: var(--card); color: var(--ink);
-  font: 500 13px/1 'Inter', sans-serif; cursor: pointer; outline: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  transition: border-color .2s var(--ease);
-}
-.group-select:focus { border-color: var(--brand); }
 
 /* ── Results bar ─────────────────────────────────────────────── */
 .results-bar { padding: 10px 24px 0; }

@@ -62,6 +62,12 @@ type UpdateRetakeRequest struct {
 	Notes           *string    `json:"notes,omitempty"`
 }
 
+// SetRetakeStatusRequest — POST /api/retakes/:id/status.
+// Ручная установка статуса деканом: scheduled | in_progress | completed | cancelled.
+type SetRetakeStatusRequest struct {
+	Status string `json:"status"`
+}
+
 // AddRetakeStudentRequest — POST /api/retakes/:id/students.
 type AddRetakeStudentRequest struct {
 	StudentID uuid.UUID `json:"student_id"`

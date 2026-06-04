@@ -45,6 +45,7 @@ type retakeServiceStub struct {
 	startFn            func(ctx context.Context, id, actorID uuid.UUID) error
 	completeFn         func(ctx context.Context, id, actorID uuid.UUID) error
 	cancelFn           func(ctx context.Context, id, actorID uuid.UUID) error
+	setStatusFn        func(ctx context.Context, id uuid.UUID, status string, actorID uuid.UUID) error
 	listParticipantsFn func(ctx context.Context, id uuid.UUID) ([]queries.RetakeParticipant, error)
 	addStudentFn       func(ctx context.Context, retakeID, studentID, debtID, actorID uuid.UUID) error
 	addTeacherFn       func(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
@@ -75,6 +76,12 @@ func (s *retakeServiceStub) Complete(ctx context.Context, id, actorID uuid.UUID)
 }
 func (s *retakeServiceStub) Cancel(ctx context.Context, id, actorID uuid.UUID) error {
 	return s.cancelFn(ctx, id, actorID)
+}
+func (s *retakeServiceStub) SetStatus(ctx context.Context, id uuid.UUID, status string, actorID uuid.UUID) error {
+	if s.setStatusFn == nil {
+		return nil
+	}
+	return s.setStatusFn(ctx, id, status, actorID)
 }
 func (s *retakeServiceStub) ListParticipants(ctx context.Context, id uuid.UUID) ([]queries.RetakeParticipant, error) {
 	return s.listParticipantsFn(ctx, id)

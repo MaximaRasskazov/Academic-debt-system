@@ -23,13 +23,20 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 )
 
-const teacherRoleSlug = "teacher"
+const (
+	teacherRoleSlug = "teacher"
+	studentRoleSlug = "student"
+)
 
 var (
 	ErrAlreadyPending  = errors.New("teacher_request: у пользователя уже есть активная заявка")
 	ErrRequestNotFound = errors.New("teacher_request: заявка не найдена")
 	ErrNotPending      = errors.New("teacher_request: заявка уже рассмотрена")
 	ErrReasonRequired  = errors.New("teacher_request: причина отказа обязательна")
+	// ErrHasOpenDebts — нельзя стать преподавателем, не закрыв долги.
+	// Проверяется при подаче заявки и повторно при одобрении (за время
+	// рассмотрения у студента мог появиться новый долг).
+	ErrHasOpenDebts = errors.New("teacher_request: у пользователя есть незакрытые долги")
 )
 
 type Service struct {
@@ -66,7 +73,13 @@ func (s *Service) notifyDecision(ctx context.Context, userID pgtype.UUID, kind s
 }
 
 // Create подаёт заявку от имени actorID. Один pending на пользователя.
+// Заблокировано, если у пользователя есть незакрытые долги — сперва нужно
+// закрыть задолженности, и только потом переходить в преподаватели.
 func (s *Service) Create(ctx context.Context, actorID uuid.UUID, reason *string) (queries.TeacherRoleRequest, error) {
+	if err := s.ensureNoOpenDebts(ctx, actorID); err != nil {
+		return queries.TeacherRoleRequest{}, err
+	}
+
 	existing, err := s.store.GetPendingTeacherRoleRequestForUser(ctx, pgutil.PgUUID(actorID))
 	if err != nil && !repo.IsNotFound(err) {
 		return queries.TeacherRoleRequest{}, fmt.Errorf("check pending: %w", err)
@@ -126,6 +139,12 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 
 	targetID := pgutil.UUID(req.RequestedBy)
 
+	// Повторная проверка долгов на момент одобрения: за время рассмотрения
+	// заявки студенту мог быть выставлен новый долг.
+	if err := s.ensureNoOpenDebts(ctx, targetID); err != nil {
+		return queries.TeacherRoleRequest{}, err
+	}
+
 	var approved queries.TeacherRoleRequest
 	if err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		var txErr error
@@ -149,6 +168,22 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 			CreatedBy: pgutil.PgUUID(actorID),
 		}); txErr != nil {
 			return fmt.Errorf("attach role: %w", txErr)
+		}
+
+		// Снимаем роль student: пользователь «переходит» в преподаватели,
+		// а не накапливает роли. Это убирает протекание прошлых
+		// студенческих пересдач/ведомостей в кабинет преподавателя.
+		// DetachRoleFromUser идемпотентен (no-op, если роли нет).
+		studentRole, txErr := q.GetRoleBySlug(ctx, studentRoleSlug)
+		if txErr != nil {
+			return fmt.Errorf("get student role: %w", txErr)
+		}
+		if txErr = q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+			UserID:    pgutil.PgUUID(targetID),
+			RoleID:    studentRole.ID,
+			DeletedBy: pgutil.PgUUID(actorID),
+		}); txErr != nil {
+			return fmt.Errorf("detach student role: %w", txErr)
 		}
 
 		reqIDStr := requestID.String()
@@ -212,6 +247,20 @@ func (s *Service) Reject(ctx context.Context, actorID, requestID uuid.UUID, reas
 
 	s.notifyDecision(ctx, req.RequestedBy, notify.KindTeacherRequestRejected, &reason)
 	return rejected, nil
+}
+
+// ensureNoOpenDebts возвращает ErrHasOpenDebts, если у пользователя есть
+// хотя бы один долг в статусе open. Используется при подаче и одобрении
+// заявки на роль преподавателя.
+func (s *Service) ensureNoOpenDebts(ctx context.Context, userID uuid.UUID) error {
+	n, err := s.store.CountOpenDebtsForStudent(ctx, pgutil.PgUUID(userID))
+	if err != nil {
+		return fmt.Errorf("count open debts: %w", err)
+	}
+	if n > 0 {
+		return ErrHasOpenDebts
+	}
+	return nil
 }
 
 // auditDetails сериализует payload в JSON для audit_log.details.

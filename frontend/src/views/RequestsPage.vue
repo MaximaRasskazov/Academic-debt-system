@@ -14,10 +14,11 @@ import { fmtDate as fmtDateTZ, fmtTime } from '../utils/datetime'
 const sidebarOpen = ref(false)
 
 // ── Tabs ──────────────────────────────────────────────────────
-// role   — заявки на повышение до teacher
-// change — заявки на изменение существующих пересдач
 // create — заявки преподавателей на создание новой пересдачи
-const activeTab = ref('role')
+// change — заявки на изменение существующих пересдач
+// role   — заявки на повышение до teacher
+// Порядок и дефолт: сперва заявки на пересдачу, затем изменения, затем роль.
+const activeTab = ref('create')
 
 // ── Shared dictionaries ───────────────────────────────────────
 const userMap   = ref({})
@@ -481,17 +482,14 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
       <main class="main">
         <div class="content-wrap">
 
-          <!-- ── Tabs ── -->
+          <!-- ── Tabs ── порядок: заявки на пересдачу → изменения → смена роли -->
           <div class="page-tabs">
-            <button class="tab-btn" :class="{ active: activeTab === 'role' }" @click="activeTab = 'role'">
+            <button class="tab-btn" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
-                <circle cx="8.5" cy="7" r="4"/>
-                <line x1="20" y1="8" x2="20" y2="14"/>
-                <line x1="23" y1="11" x2="17" y2="11"/>
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
               </svg>
-              Смена роли
-              <span v-if="roleCount > 0" class="tab-badge">{{ roleCount }}</span>
+              Заявки на пересдачи
+              <span v-if="createCount > 0" class="tab-badge">{{ createCount }}</span>
             </button>
 
             <button class="tab-btn" :class="{ active: activeTab === 'change' }" @click="activeTab = 'change'">
@@ -504,12 +502,15 @@ function closeDetail() { detailModal.value = null; studentsExpanded.value = fals
               <span v-if="changeCount > 0" class="tab-badge">{{ changeCount }}</span>
             </button>
 
-            <button class="tab-btn" :class="{ active: activeTab === 'create' }" @click="activeTab = 'create'">
+            <button class="tab-btn" :class="{ active: activeTab === 'role' }" @click="activeTab = 'role'">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+                <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                <circle cx="8.5" cy="7" r="4"/>
+                <line x1="20" y1="8" x2="20" y2="14"/>
+                <line x1="23" y1="11" x2="17" y2="11"/>
               </svg>
-              Заявки на пересдачи
-              <span v-if="createCount > 0" class="tab-badge">{{ createCount }}</span>
+              Смена роли
+              <span v-if="roleCount > 0" class="tab-badge">{{ roleCount }}</span>
             </button>
           </div>
 

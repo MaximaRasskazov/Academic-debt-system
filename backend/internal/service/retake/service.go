@@ -352,6 +352,62 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID, actorID uuid.UUID) e
 	return nil
 }
 
+// SetStatus вручную выставляет статус пересдачи деканом (любой → любой),
+// без ограничений переходов Start/Complete/Cancel. Нужно для исправления
+// ошибочно проставленного статуса (например, откатить случайно
+// завершённую пересдачу обратно в scheduled). При переводе в cancelled
+// рассылаем уведомления участникам — как в Cancel.
+func (s *Service) SetStatus(ctx context.Context, id uuid.UUID, status string, actorID uuid.UUID) error {
+	if !isValidStatus(status) {
+		return fmt.Errorf("%w: недопустимый статус %q", ErrInvalidInput, status)
+	}
+
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current.Status == status {
+		return nil // нечего менять
+	}
+
+	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		if _, err := q.SetRetakeStatus(ctx, queries.SetRetakeStatusParams{
+			ID:     current.ID,
+			Status: status,
+		}); err != nil {
+			return fmt.Errorf("set status: %w", err)
+		}
+		return s.audit.LogTx(ctx, q, audit.Event{
+			ActorID:    actorID,
+			Action:     "retake.status_set",
+			TargetType: entityType,
+			TargetID:   pgutil.UUID(current.ID).String(),
+		})
+	})
+	if err != nil {
+		return err
+	}
+
+	if status == StatusCancelled {
+		payload := s.retakePayloadFor(ctx, current)
+		s.notifyAllStudents(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelled, payload)
+		s.notifyAllTeachers(ctx, pgutil.UUID(current.ID), notify.KindRetakeCancelledTeacher, payload)
+	}
+
+	return nil
+}
+
+// isValidStatus проверяет, что строка — один из допустимых статусов
+// пересдачи (соответствует CHECK-constraint миграции 00015).
+func isValidStatus(s string) bool {
+	switch s {
+	case StatusScheduled, StatusInProgress, StatusCompleted, StatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // retakeFields формирует JSON-friendly срез полей для change_logs.
 func retakeFields(r queries.Retake) changelog.Fields {
 	f := changelog.Fields{

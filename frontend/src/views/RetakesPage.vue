@@ -27,7 +27,9 @@ const loadErr  = ref('')
 
 // ── Filters ───────────────────────────────────────────────
 const search       = ref('')
-const statusFilter = ref('all')
+// По умолчанию показываем активные (назначенные + идущие). Завершённые и
+// отменённые не засоряют список — их видно только по явному выбору фильтра.
+const statusFilter = ref('active')
 
 const STATUS_LABELS = {
   scheduled:   'Запланирована',
@@ -37,19 +39,26 @@ const STATUS_LABELS = {
 }
 const KIND_LABELS = { regular: 'Обычная', commission: 'С комиссией' }
 
+// 'active' — псевдостатус: scheduled + in_progress. Стоит первым и выбран
+// по умолчанию. Завершённые/отменённые — отдельными кнопками.
+const ACTIVE_STATUSES = ['scheduled', 'in_progress']
 const CHIPS = [
-  { value: 'all',         label: 'Все' },
+  { value: 'active',      label: 'Актуальные' },
   { value: 'scheduled',   label: 'Запланированные' },
   { value: 'in_progress', label: 'Идут сейчас' },
   { value: 'completed',   label: 'Завершённые' },
   { value: 'cancelled',   label: 'Отменённые' },
+  { value: 'all',         label: 'Все' },
 ]
 
+function matchesStatusFilter(r) {
+  if (statusFilter.value === 'all')    return true
+  if (statusFilter.value === 'active') return ACTIVE_STATUSES.includes(r.status)
+  return r.status === statusFilter.value
+}
+
 const filteredRetakes = computed(() => {
-  let list = retakes.value
-  if (statusFilter.value !== 'all') {
-    list = list.filter(r => r.status === statusFilter.value)
-  }
+  let list = retakes.value.filter(matchesStatusFilter)
   const q = search.value.trim().toLowerCase()
   if (q) {
     list = list.filter(r => {
@@ -57,15 +66,20 @@ const filteredRetakes = computed(() => {
       return disc.includes(q) || (r.building || '').toLowerCase().includes(q) || (r.room || '').toLowerCase().includes(q)
     })
   }
-  return list
+  // Новые сперва: по дате проведения, затем по дате создания (если есть).
+  return [...list].sort((a, b) => {
+    const ta = new Date(a.scheduled_at || a.created_at || 0).getTime()
+    const tb = new Date(b.scheduled_at || b.created_at || 0).getTime()
+    return tb - ta
+  })
 })
 
 const counts = computed(() => {
   const m = {}
   for (const c of CHIPS) {
-    m[c.value] = c.value === 'all'
-      ? retakes.value.length
-      : retakes.value.filter(r => r.status === c.value).length
+    if (c.value === 'all')         m[c.value] = retakes.value.length
+    else if (c.value === 'active') m[c.value] = retakes.value.filter(r => ACTIVE_STATUSES.includes(r.status)).length
+    else                           m[c.value] = retakes.value.filter(r => r.status === c.value).length
   }
   return m
 })
@@ -269,7 +283,7 @@ async function submitRequestChange() {
 // ── Dean edit modal ───────────────────────────────────────
 const editOpen        = ref(false)
 const editTarget      = ref(null)
-const editForm        = reactive({ building: '', room: '', hour: '09', minute: '00', duration: 90 })
+const editForm        = reactive({ building: '', room: '', date: '', hour: '09', minute: '00', duration: 90 })
 const editSaving      = ref(false)
 const editError       = ref('')
 
@@ -310,38 +324,20 @@ const editFilteredTeachers = computed(() => {
     .slice(0, 8)
 })
 
-// Status change — select-дропдаун
-const STATUS_NEXT_LABEL = {
-  in_progress: 'Начать пересдачу',
-  completed:   'Завершить',
-  cancelled:   'Отменить',
-}
-const STATUS_TRANSITIONS = {
-  scheduled:   ['in_progress', 'cancelled'],
-  in_progress: ['completed',   'cancelled'],
-}
-const availableNextStatuses = computed(() => STATUS_TRANSITIONS[editTarget.value?.status] ?? [])
-const editStatusSelect = ref('')   // текущее значение select
-const statusSaving = ref(false)
+// Ручная смена статуса деканом: любой → любой (без ограничений переходов).
+// Выбор в пикере меняет статус ТОЛЬКО локально (editStatusSelect); запрос
+// на сервер (POST /api/retakes/:id/status) уходит в saveEdit по кнопке
+// «Сохранить» — вместе с остальными изменениями пересдачи.
+const ALL_STATUSES = ['scheduled', 'in_progress', 'completed', 'cancelled']
+const editStatusSelect = ref('')   // выбранный статус (применяется по «Сохранить»)
+const statusOpen = ref(false)      // открыт ли кастомный дропдаун статуса
 
-async function changeStatus(newStatus) {
-  if (!editTarget.value || newStatus === editTarget.value.status) return
-  statusSaving.value = true
-  editError.value = ''
-  try {
-    if (newStatus === 'in_progress') await retakesApi.start(editTarget.value.id)
-    else if (newStatus === 'completed') await retakesApi.complete(editTarget.value.id)
-    else if (newStatus === 'cancelled') await retakesApi.cancel(editTarget.value.id)
-    const idx = retakes.value.findIndex(r => r.id === editTarget.value.id)
-    if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: newStatus }
-    editTarget.value = { ...editTarget.value, status: newStatus }
-    editStatusSelect.value = newStatus
-  } catch {
-    editError.value = 'Ошибка при изменении статуса'
-    editStatusSelect.value = editTarget.value.status  // откат
-  } finally {
-    statusSaving.value = false
-  }
+function toggleStatusDropdown() {
+  statusOpen.value = !statusOpen.value
+}
+function pickStatus(s) {
+  editStatusSelect.value = s
+  statusOpen.value = false
 }
 
 const STEP = 5, DMIN = 15, DMAX = 480
@@ -354,8 +350,9 @@ async function openEdit(r) {
   editForm.room     = r.room     || ''
   editForm.duration = r.duration_minutes || 90
   if (r.scheduled_at) {
-    // Предзаполняем часы/минуты временем вуза, а не зоной устройства.
+    // Предзаполняем дату/часы/минуты временем вуза, а не зоной устройства.
     const p = partsInTZ(r.scheduled_at)
+    editForm.date   = `${p.day}.${p.month}.${p.year}` // формат VueDatePicker dd.MM.yyyy
     editForm.hour   = p.hour
     editForm.minute = p.minute
   }
@@ -422,12 +419,15 @@ async function openEdit(r) {
   }
 }
 
-function closeEdit() { editOpen.value = false; editTarget.value = null }
+function closeEdit() { editOpen.value = false; editTarget.value = null; statusOpen.value = false }
 
 function handleModalOutsideClick(e) {
   if (!e.target.closest('.picker-wrap-modal')) {
     editTeacherOpen.value = false
     editStudentOpen.value = false
+  }
+  if (!e.target.closest('.status-select-wrap')) {
+    statusOpen.value = false
   }
 }
 onMounted(() => document.addEventListener('mousedown', handleModalOutsideClick))
@@ -507,14 +507,26 @@ async function saveEdit() {
     // 3) Расписание шлём только если оно реально изменилось — иначе лишний
     //    апдейт (бэк всё равно не разошлёт уведомления, но не плодим записи).
     const p = partsInTZ(editTarget.value.scheduled_at)
+    // Дата редактируется пользователем (формат dd.MM.yyyy). Если поле
+    // пустое — оставляем исходную дату пересдачи.
+    let dateForIso = `${p.year}-${p.month}-${p.day}`
+    let dateChanged = false
+    if (editForm.date) {
+      const [dd, mm, yy] = editForm.date.split('.')
+      if (dd && mm && yy) {
+        dateForIso = `${yy}-${mm}-${dd}`
+        dateChanged = dd !== p.day || mm !== p.month || yy !== p.year
+      }
+    }
     const newScheduledAt = toUtcISO(
-      `${p.year}-${p.month}-${p.day}`,
+      dateForIso,
       `${editForm.hour}:${editForm.minute}`,
     )
     const scheduleChanged =
       (editForm.building || '') !== (editTarget.value.building || '') ||
       (editForm.room || '')     !== (editTarget.value.room || '') ||
       Number(editForm.duration) !== Number(editTarget.value.duration_minutes) ||
+      dateChanged ||
       editForm.hour   !== p.hour ||
       editForm.minute !== p.minute
 
@@ -536,6 +548,14 @@ async function saveEdit() {
         }
       }
     }
+
+    // 4) Статус: шлём только если декан реально его поменял в пикере.
+    if (auth.isDean && editStatusSelect.value && editStatusSelect.value !== editTarget.value.status) {
+      await retakesApi.setStatus(id, editStatusSelect.value)
+      const idx = retakes.value.findIndex(r => r.id === id)
+      if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: editStatusSelect.value }
+    }
+
     closeEdit()
   } catch (e) {
     // Бэк-guard п.5 (последний студент / минимум преподавателей) → 409.
@@ -656,8 +676,10 @@ async function saveEdit() {
                   </svg>
                   Запросить изменения
                 </button>
-                <!-- Dean: edit — только для запланированных и идущих -->
-                <button v-if="auth.isDean && (r.status === 'scheduled' || r.status === 'in_progress')"
+                <!-- Dean: edit — доступно для любой пересдачи (декан может
+                     вручную поправить статус/расписание, в т.ч. откатить
+                     ошибочно завершённую) -->
+                <button v-if="auth.isDean"
                         class="btn-action" @click="openEdit(r)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
@@ -691,15 +713,42 @@ async function saveEdit() {
             <div class="modal-body">
               <div class="modal-disc">{{ discMap[editTarget?.discipline_id] || 'Дисциплина' }}</div>
 
-              <!-- Статус -->
+              <!-- Статус: декан выставляет вручную любой статус (кастомный дропдаун) -->
               <div class="modal-status-row">
-                <span class="status-badge" :class="'status-' + editTarget?.status">
+                <template v-if="auth.isDean">
+                  <label class="status-select-label">Статус</label>
+                  <div class="status-select-wrap" :class="{ open: statusOpen }">
+                    <button type="button"
+                            class="status-select-trigger"
+                            :class="'status-sel-' + editStatusSelect"
+                            @click="toggleStatusDropdown">
+                      <span>{{ STATUS_LABELS[editStatusSelect] || '—' }}</span>
+                      <svg class="status-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div v-if="statusOpen" class="status-select-dropdown">
+                      <button v-for="s in ALL_STATUSES" :key="s"
+                              type="button" class="status-select-option"
+                              :class="{ selected: editStatusSelect === s }"
+                              @click="pickStatus(s)">
+                        <span class="status-dot" :class="'dot-' + s" />
+                        {{ STATUS_LABELS[s] }}
+                      </button>
+                    </div>
+                  </div>
+                </template>
+                <span v-else class="status-badge" :class="'status-' + editTarget?.status">
                   {{ STATUS_LABELS[editTarget?.status] }}
                 </span>
               </div>
 
-              <!-- Время + Длительность -->
+              <!-- Дата + Время -->
               <div class="form-row">
+                <div class="field">
+                  <label>Дата</label>
+                  <VueDatePicker v-model="editForm.date" locale="ru"
+                                 format="dd.MM.yyyy" model-type="format"
+                                 :enable-time-picker="false" auto-apply />
+                </div>
                 <div class="field">
                   <label>Время</label>
                   <div class="time-picker">
@@ -710,6 +759,10 @@ async function saveEdit() {
                            maxlength="2" placeholder="00" @input="onTimeKey" @blur="onMinuteBlur" />
                   </div>
                 </div>
+              </div>
+
+              <!-- Длительность -->
+              <div class="form-row">
                 <div class="field">
                   <label>Длительность (мин)</label>
                   <div class="stepper">
@@ -1183,11 +1236,54 @@ async function saveEdit() {
   padding: 0 0 4px;
 }
 
-.modal-status-row { display: flex; align-items: center; }
+.modal-status-row { display: flex; align-items: center; gap: 10px; }
 .status-badge {
   display: inline-flex; align-items: center; padding: 4px 12px;
   border-radius: 20px; font: 600 12px/1.4 'Inter', sans-serif;
 }
+.status-select-label { font: 500 13px/1 'Inter', sans-serif; color: var(--ink); }
+
+/* Кастомный дропдаун статуса (нативный <select> заменён, чтобы не было
+   двойной стрелки и неоформленного выпадающего списка). */
+.status-select-wrap { position: relative; }
+.status-select-trigger {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 34px; min-width: 150px; padding: 0 12px;
+  border: 1.5px solid var(--line); border-radius: 20px;
+  background: var(--card); color: var(--ink);
+  font: 600 12px/1 'Inter', sans-serif; cursor: pointer; outline: none;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.status-select-trigger:hover:not(:disabled) { border-color: #a0a3b1; }
+.status-select-wrap.open .status-select-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.status-select-trigger:disabled { opacity: .6; cursor: default; }
+.status-select-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; transition: transform .2s var(--ease); }
+.status-select-wrap.open .status-select-arrow { transform: rotate(180deg); }
+/* Лёгкая подсветка триггера под текущий статус. */
+.status-sel-scheduled   { background-color: rgba(59,63,224,.08); }
+.status-sel-in_progress { background-color: rgba(245,158,11,.1); }
+.status-sel-completed   { background-color: rgba(16,185,129,.1); }
+.status-sel-cancelled   { background-color: rgba(220,38,38,.08); }
+
+.status-select-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; min-width: 180px; z-index: 100;
+  background: #fff; border: 1.5px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); padding: 4px;
+}
+.status-select-option {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; border-radius: 6px; background: none;
+  font: 500 13px/1.3 'Inter', sans-serif; color: var(--ink);
+  cursor: pointer; transition: background .12s; white-space: nowrap;
+}
+.status-select-option:hover { background: rgba(59,63,224,.07); }
+.status-select-option.selected { color: var(--brand); font-weight: 600; background: rgba(59,63,224,.06); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-scheduled   { background: #3b3fe0; }
+.dot-in_progress { background: #f59e0b; }
+.dot-completed   { background: #10b981; }
+.dot-cancelled   { background: #9ca3af; }
+.status-saving { font: 500 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .status-scheduled  { background: rgba(59,63,224,.1);  color: #3b3fe0; }
 .status-in_progress { background: rgba(245,158,11,.12); color: #b45309; }
 .status-completed  { background: rgba(16,185,129,.12); color: #065f46; }
@@ -1318,14 +1414,6 @@ async function saveEdit() {
   padding: 12px; background: var(--bg); border-radius: var(--radius);
 }
 .section-label { font: 600 12px/1 'Inter', sans-serif; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
-.status-current { font: 13px/1.4 'Inter', sans-serif; color: var(--ink); display: flex; align-items: center; gap: 8px; }
-.status-select-wrap { display: flex; align-items: center; gap: 10px; }
-.status-select {
-  appearance: auto;
-  cursor: pointer;
-}
-.status-select:disabled { opacity: .6; cursor: not-allowed; }
-.status-saving-hint { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; }
 
 .part-loading { font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .part-tags { display: flex; flex-wrap: wrap; gap: 6px; }

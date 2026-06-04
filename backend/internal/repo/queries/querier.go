@@ -124,6 +124,10 @@ type Querier interface {
 	GradeStudentParticipant(ctx context.Context, arg GradeStudentParticipantParams) (RetakeParticipant, error)
 	// Проверка наличия конкретной роли у пользователя.
 	HasRole(ctx context.Context, arg HasRoleParams) (bool, error)
+	// Проверка: участвует ли пользователь в пересдаче с одним из указанных
+	// kind. Нужна middleware доступа к составу/ведомости, чтобы преподаватель
+	// не открывал ведомость пересдачи, где он был только студентом.
+	IsRetakeParticipantWithKind(ctx context.Context, arg IsRetakeParticipantWithKindParams) (bool, error)
 	// Быстрая проверка для сервиса debts: можно ли поставить долг
 	// этому студенту по этой дисциплине.
 	IsStudentEnrolled(ctx context.Context, arg IsStudentEnrolledParams) (bool, error)
@@ -201,6 +205,11 @@ type Querier interface {
 	// Используется в личном кабинете студента и преподавателя
 	// (permission retakes.view.own).
 	ListRetakesForUser(ctx context.Context, userID pgtype.UUID) ([]Retake, error)
+	// Пересдачи, где пользователь участвует как преподаватель/член комиссии.
+	// Используется для бывших студентов, повышенных до преподавателя: их
+	// старое участие kind='student' не должно «протекать» в кабинет
+	// преподавателя (видеть/грейдить пересдачу, где сам был студентом).
+	ListRetakesForUserAsTeacher(ctx context.Context, userID pgtype.UUID) ([]Retake, error)
 	// Для сводного отчёта деканата за период: только проведённые.
 	ListRetakesInPeriod(ctx context.Context, arg ListRetakesInPeriodParams) ([]Retake, error)
 	// Шедулер: пересдачи, которые пора завершать (scheduled_at + duration < NOW()).
@@ -276,6 +285,18 @@ type Querier interface {
 	// Отзыв всех refresh-токенов, связанных с конкретным access-токеном.
 	RevokeAllRefreshTokensForAccessToken(ctx context.Context, accessTokenID pgtype.UUID) error
 	RevokeRefreshToken(ctx context.Context, id pgtype.UUID) error
+	// Ручная установка статуса деканом (любой → любой). В отличие от
+	// MarkRetake*/Cancel здесь нет ограничения по текущему статусу: декан
+	// может откатить ошибочно завершённую пересдачу обратно в scheduled и т.п.
+	// completed_at синхронизируем со статусом: ставим NOW() при переходе в
+	// completed, сбрасываем в NULL при любом другом статусе.
+	//
+	// Параметр status приводим к ::varchar в обоих местах использования.
+	// Без явного каста Postgres выводит тип $1 по-разному (как столбец status
+	// и внутри CASE-сравнения) и падает с "inconsistent types deduced for
+	// parameter $1" (SQLSTATE 42P08). Каст ::timestamptz на NULL-ветке нужен,
+	// чтобы тип CASE был однозначен.
+	SetRetakeStatus(ctx context.Context, arg SetRetakeStatusParams) (Retake, error)
 	SoftDeleteDebt(ctx context.Context, arg SoftDeleteDebtParams) error
 	SoftDeleteDiscipline(ctx context.Context, arg SoftDeleteDisciplineParams) error
 	SoftDeletePermission(ctx context.Context, arg SoftDeletePermissionParams) error
