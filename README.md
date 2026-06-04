@@ -342,9 +342,9 @@ flowchart LR
 | Участник | Роль |
 |---|---|
 | **Максим Рассказов** | Project Manager · System Analyst · Backend Developer |
-| **Саян** | Frontend Developer (Vue.js) · UI/UX Designer |
-| **Андрей** | Backend Developer · DevOps |
-| **Виталя** | Backend Developer |
+| **Саян Исмагулов** | Frontend Developer (Vue.js) · UI/UX Designer |
+| **Андрей Полуянов** | Backend Developer · DevOps |
+| **Виталя Казаков** | Backend Developer |
 
 ---
 
