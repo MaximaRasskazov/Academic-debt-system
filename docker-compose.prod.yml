@@ -1,3 +1,11 @@
+# Ротация логов для всех сервисов: до 4 файлов по 50 МБ = ~200 МБ на
+# контейнер, дальше старое затирается. Защищает диск от разрастания логов.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '50m'
+    max-file: '4'
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -14,6 +22,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
     restart: unless-stopped
 
   mailpit:
@@ -21,6 +30,7 @@ services:
     expose:
       - '1025'
       - '8025'
+    logging: *default-logging
     restart: unless-stopped
 
   backend:
@@ -74,6 +84,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+    logging: *default-logging
     restart: unless-stopped
 
   frontend:
@@ -83,6 +94,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   caddy:
@@ -104,6 +116,7 @@ services:
     depends_on:
       - frontend
       - mailpit
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
