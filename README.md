@@ -212,18 +212,15 @@ make reset         # полный сброс с подтверждением (vo
 
 ## 🔑 Демо-аккаунты
 
-При `SEED_DEV_ACCOUNTS=true` (по умолчанию в dev) доступны 7 аккаунтов. Пароль у всех — `password`.
+При `SEED_DEV_ACCOUNTS=true` (по умолчанию в dev) сидятся **только** `admin` и `dean` — этих ролей нет в эмуляторе деканата, а без них некому залогиниться и запустить синхронизацию. Пароль у обоих — `password`.
 
-| Email | Роль | Группа |
+| Email | Роль | Уровень |
 |---|---|---|
-| `admin@academic.local` | admin | — |
-| `dean@academic.local` | dean | — |
-| `teacher1@academic.local` | teacher | — |
-| `teacher2@academic.local` | teacher | — |
-| `student1@academic.local` | student | БСБО-01-22 |
-| `student2@academic.local` | student | БСБО-01-22 |
-| `student3@academic.local` | student | БСБО-02-22 |
+| `admin@academic.local` | admin | 1000 |
+| `dean@academic.local` | dean | 700 |
 
+> 👨‍🎓 **Студенты и преподаватели не сидятся** — они целиком приходят из эмулятора деканата через `sync.Service` (см. [синхронизация](#-конфигурация)). На свежей БД без настроенного эмулятора их не будет.
+>
 > ⚠️ В production держите `SEED_DEV_ACCOUNTS=false`.
 
 ---
@@ -278,7 +275,7 @@ make reset         # полный сброс с подтверждением (vo
 
 ## ✅ Качество и тестирование
 
-- **Backend** — интеграционные тесты против реального Postgres (`go test -race -cover`), 85+ тестов, покрытие ключевых сервисов 75–90%.
+- **Backend** — интеграционные тесты против реального Postgres (`go test -race -cover`), 200+ тестов, покрытие ключевых сервисов 75–90%.
 - **Frontend** — unit-тесты на Vitest (stores, утилиты форматирования и дат).
 - **Линтинг и безопасность** — `gofmt`, `go vet`, `golangci-lint`, `govulncheck` в CI на каждый PR.
 
