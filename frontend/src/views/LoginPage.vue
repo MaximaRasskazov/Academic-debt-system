@@ -238,11 +238,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
 
             <div class="field">
               <div class="field-row">
-                <label for="password">Пароль</label>
-                <span class="helper">
-                  Забыли пароль?
-                  <a href="#" @click.prevent="goRecover">Восстановить</a>
-                </span>
+                <label for="password">Пароль</label> 
               </div>
               <input id="password" class="input" type="password" autocomplete="current-password"
                      v-model="form.password" :disabled="loading" />
@@ -254,7 +250,7 @@ onUnmounted(() => { clearInterval(resendTimer) })
                 <svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3.2L13 5"/></svg>
               </span>
               <span>Я соглашаюсь на использование cookie согласно
-                <a href="#" @click.prevent>политике</a></span>
+                <a href="https://yandex.ru/legal/cookies_policy/ru/" @click.prevent>политике</a></span>
             </label>
 
             <p v-if="!form.consent && triedSubmit" class="form-error">Необходимо согласие на использование cookie.</p>
@@ -264,10 +260,6 @@ onUnmounted(() => { clearInterval(resendTimer) })
               {{ loading ? 'Входим…' : 'Войти' }}
             </button>
 
-            <p class="register-hint">
-              Нет аккаунта?
-              <RouterLink to="/register">Зарегистрироваться</RouterLink>
-            </p>
           </form>
 
           <!-- RECOVER · EMAIL -->
