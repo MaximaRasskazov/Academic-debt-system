@@ -263,11 +263,6 @@ onUnmounted(() => { clearInterval(resendTimer) })
             <button class="submit" type="submit" :disabled="!canSubmit || loading">
               {{ loading ? 'Входим…' : 'Войти' }}
             </button>
-
-            <p class="register-hint">
-              Нет аккаунта?
-              <RouterLink to="/register">Зарегистрироваться</RouterLink>
-            </p>
           </form>
 
           <!-- RECOVER · EMAIL -->
@@ -726,18 +721,6 @@ form {
   margin-top: -6px;
   text-align: left;
 }
-
-.register-hint {
-  text-align: center;
-  font-size: 12px;
-  color: var(--ink-soft);
-  margin-top: 4px;
-}
-.register-hint a {
-  color: var(--link);
-  text-decoration: none;
-}
-.register-hint a:hover { text-decoration: underline; }
 
 /* Success */
 .success {
