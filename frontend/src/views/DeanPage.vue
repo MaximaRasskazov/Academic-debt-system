@@ -1072,6 +1072,10 @@ onUnmounted(() => document.removeEventListener('mousedown', handleOutsideClick))
 }
 .dropdown-search:focus { border-color: var(--brand); }
 .dropdown-scroll { max-height: 200px; overflow-y: auto; }
+.dropdown-scroll::-webkit-scrollbar { width: 4px; }
+.dropdown-scroll::-webkit-scrollbar-track { background: transparent; }
+.dropdown-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.dropdown-scroll::-webkit-scrollbar-thumb:hover { background: #a0a3b1; }
 .dropdown-empty { padding: 10px 14px; font: 13px/1 'Inter', sans-serif; color: var(--ink-soft); }
 
 .custom-select-option {

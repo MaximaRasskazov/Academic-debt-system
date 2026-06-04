@@ -108,6 +108,32 @@ func (q *Queries) GetRetakeByID(ctx context.Context, id pgtype.UUID) (Retake, er
 	return i, err
 }
 
+const isRetakeParticipantWithKind = `-- name: IsRetakeParticipantWithKind :one
+SELECT EXISTS (
+    SELECT 1
+    FROM retake_participants rp
+    WHERE rp.retake_id = $1
+      AND rp.user_id = $2
+      AND rp.kind = ANY($3::varchar[])
+) AS is_participant
+`
+
+type IsRetakeParticipantWithKindParams struct {
+	RetakeID pgtype.UUID `json:"retake_id"`
+	UserID   pgtype.UUID `json:"user_id"`
+	Kinds    []string    `json:"kinds"`
+}
+
+// Проверка: участвует ли пользователь в пересдаче с одним из указанных
+// kind. Нужна middleware доступа к составу/ведомости, чтобы преподаватель
+// не открывал ведомость пересдачи, где он был только студентом.
+func (q *Queries) IsRetakeParticipantWithKind(ctx context.Context, arg IsRetakeParticipantWithKindParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isRetakeParticipantWithKind, arg.RetakeID, arg.UserID, arg.Kinds)
+	var is_participant bool
+	err := row.Scan(&is_participant)
+	return is_participant, err
+}
+
 const listRetakes = `-- name: ListRetakes :many
 SELECT id, discipline_id, kind, min_teachers, building, room, scheduled_at, duration_minutes, status, completed_at, created_by, notes, created_at, updated_at, deleted_at, deleted_by
 FROM retakes
@@ -176,6 +202,57 @@ ORDER BY r.scheduled_at DESC
 // (permission retakes.view.own).
 func (q *Queries) ListRetakesForUser(ctx context.Context, userID pgtype.UUID) ([]Retake, error) {
 	rows, err := q.db.Query(ctx, listRetakesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Retake
+	for rows.Next() {
+		var i Retake
+		if err := rows.Scan(
+			&i.ID,
+			&i.DisciplineID,
+			&i.Kind,
+			&i.MinTeachers,
+			&i.Building,
+			&i.Room,
+			&i.ScheduledAt,
+			&i.DurationMinutes,
+			&i.Status,
+			&i.CompletedAt,
+			&i.CreatedBy,
+			&i.Notes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.DeletedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRetakesForUserAsTeacher = `-- name: ListRetakesForUserAsTeacher :many
+SELECT DISTINCT r.id, r.discipline_id, r.kind, r.min_teachers, r.building, r.room, r.scheduled_at, r.duration_minutes, r.status, r.completed_at, r.created_by, r.notes, r.created_at, r.updated_at, r.deleted_at, r.deleted_by
+FROM retakes r
+JOIN retake_participants rp ON rp.retake_id = r.id
+WHERE rp.user_id = $1
+  AND rp.kind IN ('teacher', 'commission_member')
+  AND r.deleted_at IS NULL
+ORDER BY r.scheduled_at DESC
+`
+
+// Пересдачи, где пользователь участвует как преподаватель/член комиссии.
+// Используется для бывших студентов, повышенных до преподавателя: их
+// старое участие kind='student' не должно «протекать» в кабинет
+// преподавателя (видеть/грейдить пересдачу, где сам был студентом).
+func (q *Queries) ListRetakesForUserAsTeacher(ctx context.Context, userID pgtype.UUID) ([]Retake, error) {
+	rows, err := q.db.Query(ctx, listRetakesForUserAsTeacher, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +465,56 @@ WHERE id = $1
 func (q *Queries) MarkRetakeInProgress(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, markRetakeInProgress, id)
 	return err
+}
+
+const setRetakeStatus = `-- name: SetRetakeStatus :one
+UPDATE retakes
+SET status       = $1::varchar,
+    completed_at = CASE WHEN $1::varchar = 'completed' THEN NOW() ELSE NULL::timestamptz END,
+    updated_at   = NOW()
+WHERE id = $2
+  AND deleted_at IS NULL
+RETURNING id, discipline_id, kind, min_teachers, building, room, scheduled_at, duration_minutes, status, completed_at, created_by, notes, created_at, updated_at, deleted_at, deleted_by
+`
+
+type SetRetakeStatusParams struct {
+	Status string      `json:"status"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// Ручная установка статуса деканом (любой → любой). В отличие от
+// MarkRetake*/Cancel здесь нет ограничения по текущему статусу: декан
+// может откатить ошибочно завершённую пересдачу обратно в scheduled и т.п.
+// completed_at синхронизируем со статусом: ставим NOW() при переходе в
+// completed, сбрасываем в NULL при любом другом статусе.
+//
+// Параметр status приводим к ::varchar в обоих местах использования.
+// Без явного каста Postgres выводит тип $1 по-разному (как столбец status
+// и внутри CASE-сравнения) и падает с "inconsistent types deduced for
+// parameter $1" (SQLSTATE 42P08). Каст ::timestamptz на NULL-ветке нужен,
+// чтобы тип CASE был однозначен.
+func (q *Queries) SetRetakeStatus(ctx context.Context, arg SetRetakeStatusParams) (Retake, error) {
+	row := q.db.QueryRow(ctx, setRetakeStatus, arg.Status, arg.ID)
+	var i Retake
+	err := row.Scan(
+		&i.ID,
+		&i.DisciplineID,
+		&i.Kind,
+		&i.MinTeachers,
+		&i.Building,
+		&i.Room,
+		&i.ScheduledAt,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.CompletedAt,
+		&i.CreatedBy,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DeletedBy,
+	)
+	return i, err
 }
 
 const softDeleteRetake = `-- name: SoftDeleteRetake :exec

@@ -37,15 +37,15 @@ const myRetakes  = ref([])
 const discMap    = ref({})
 
 const stats = ref([
+  { key: 'closed',  label: 'Мои закрытые предметы', value: '—', accent: '#10b981' },
   { key: 'debts',   label: 'Мои долги',           value: '—', accent: '#e63c5a' },
   { key: 'discs',   label: 'Мои дисциплины',      value: '—', accent: '#3b3fe0' },
   { key: 'retakes', label: 'Назначено пересдач',  value: '—', accent: '#f59e0b' },
-  { key: 'done',    label: 'Завершённые пересдачи', value: '—', accent: '#10b981' },
 ])
 
 // ── Active panel ──────────────────────────────────────────
-// Раскрываемые панели: долги / дисциплины / назначенные / завершённые пересдачи
-const PANEL_KEYS = ['debts', 'discs', 'retakes', 'done']
+// Раскрываемые панели: закрытые предметы / долги / дисциплины / назначенные пересдачи
+const PANEL_KEYS = ['closed', 'debts', 'discs', 'retakes']
 const activePanel = ref(null)
 
 function togglePanel(key) {
@@ -54,12 +54,18 @@ function togglePanel(key) {
 }
 
 // ── Производные списки для панелей ────────────────────────
+// Закрытые предметы: долги, закрытые оценкой (graded). Сортируем по дате
+// закрытия (свежие сверху); fallback на created_at.
+const closedSubjectsList = computed(() =>
+  myDebts.value
+    .filter(d => d.status === 'graded')
+    .slice()
+    .sort((a, b) => new Date(b.graded_at || b.created_at || 0) - new Date(a.graded_at || a.created_at || 0))
+)
 // Долги: без закрытых (graded). Показываем актуальные/отменённые.
 const openDebtsList = computed(() => myDebts.value.filter(d => d.status !== 'graded'))
 // Назначенные пересдачи: без завершённых.
 const scheduledRetakesList = computed(() => myRetakes.value.filter(r => r.status === 'scheduled' || r.status === 'in_progress'))
-// Завершённые пересдачи.
-const completedRetakesList = computed(() => myRetakes.value.filter(r => r.status === 'completed'))
 
 // ── Feed ──────────────────────────────────────────────────
 const feed         = ref([])
@@ -174,11 +180,13 @@ onMounted(async () => {
   }
   feedLoading.value = false
 
+  const closedCount = myDebts.value.filter(d => d.status === 'graded').length
+
   stats.value = [
+    { key: 'closed',  label: 'Мои закрытые предметы', value: closedCount,        accent: '#10b981' },
     { key: 'debts',   label: 'Мои долги',            value: openDebts,           accent: '#e63c5a' },
     { key: 'discs',   label: 'Мои дисциплины',       value: myDiscs.value.length, accent: '#3b3fe0' },
     { key: 'retakes', label: 'Назначено пересдач',   value: scheduledCount,      accent: '#f59e0b' },
-    { key: 'done',    label: 'Завершённые пересдачи', value: completedCount,     accent: '#10b981' },
   ]
 })
 
@@ -229,6 +237,30 @@ onUnmounted(() => { ws?.close() })
                 @click="togglePanel(s.key)"
               />
             </div>
+
+            <!-- Panel: Мои закрытые предметы (долги, закрытые оценкой) -->
+            <Transition name="panel">
+              <div v-if="activePanel === 'closed'" class="panel-card">
+                <div class="panel-head">
+                  <h3 class="panel-title">Мои закрытые предметы</h3>
+                  <button class="panel-close" @click="activePanel = null">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+                <EmptyPlate v-if="closedSubjectsList.length === 0" icon="check" text="Закрытых предметов пока нет" />
+                <ul v-else class="panel-list">
+                  <li v-for="d in closedSubjectsList" :key="d.id" class="panel-row row-graded">
+                    <div class="panel-row-main">
+                      <span class="panel-disc">{{ discMap[d.discipline_id] || 'Дисциплина' }}</span>
+                      <span class="grade-pill">{{ d.final_grade ?? '—' }}</span>
+                    </div>
+                    <div class="panel-row-meta">
+                      <span class="panel-date">Закрыт: {{ fmtDate(d.graded_at || d.created_at) }}</span>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </Transition>
 
             <!-- Panel: Мои долги (без закрытых) -->
             <Transition name="panel">
@@ -304,31 +336,6 @@ onUnmounted(() => { ws?.close() })
                     <div class="panel-row-main">
                       <span class="panel-disc">{{ discMap[r.discipline_id] || 'Дисциплина' }}</span>
                       <span :class="['panel-badge', `badge-retake-${r.status}`]">{{ retakeStatusLabel(r.status) }}</span>
-                    </div>
-                    <div class="panel-row-meta">
-                      <span class="panel-date">{{ fmtDate(r.scheduled_at) }} {{ fmtTime(r.scheduled_at) }}</span>
-                      <span v-if="r.building || r.room" class="panel-room">{{ r.building ? `корп. ${r.building}` : '' }}{{ r.room ? ` ауд. ${r.room}` : '' }}</span>
-                    </div>
-                  </li>
-                </ul>
-              </div>
-            </Transition>
-
-            <!-- Panel: Завершённые пересдачи -->
-            <Transition name="panel">
-              <div v-if="activePanel === 'done'" class="panel-card">
-                <div class="panel-head">
-                  <h3 class="panel-title">Завершённые пересдачи</h3>
-                  <button class="panel-close" @click="activePanel = null">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                  </button>
-                </div>
-                <EmptyPlate v-if="completedRetakesList.length === 0" icon="calendar" text="Завершённых пересдач нет" />
-                <ul v-else class="panel-list">
-                  <li v-for="r in completedRetakesList" :key="r.id" class="panel-row row-retake-completed">
-                    <div class="panel-row-main">
-                      <span class="panel-disc">{{ discMap[r.discipline_id] || 'Дисциплина' }}</span>
-                      <span class="panel-badge badge-retake-completed">{{ retakeStatusLabel(r.status) }}</span>
                     </div>
                     <div class="panel-row-meta">
                       <span class="panel-date">{{ fmtDate(r.scheduled_at) }} {{ fmtTime(r.scheduled_at) }}</span>
@@ -509,6 +516,15 @@ onUnmounted(() => { ws?.close() })
 .panel-date { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .panel-room { font: 11px/1 'Inter', sans-serif; color: var(--ink-soft); }
 .panel-grade { font: 600 12px/1 'Inter', sans-serif; color: #2e7d32; }
+
+/* ── Закрытые предметы: оценка-пилюля ── */
+.grade-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 24px; padding: 0 8px; flex-shrink: 0;
+  background: #d1fae5; color: #065f46; border-radius: 8px;
+  font: 700 14px/1 'Inter', sans-serif;
+}
+.row-graded { border-left: 3px solid #10b981; }
 
 /* ── Discipline rows (панель «Мои дисциплины») ── */
 .panel-row--disc {

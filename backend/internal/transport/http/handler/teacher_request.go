@@ -138,6 +138,8 @@ func mapTeacherRequestError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "not_pending", "заявка уже рассмотрена")
 	case errors.Is(err, teacherrequest.ErrReasonRequired):
 		writeError(w, http.StatusBadRequest, "reason_required", "причина отказа обязательна")
+	case errors.Is(err, teacherrequest.ErrHasOpenDebts):
+		writeError(w, http.StatusConflict, "has_open_debts", "сначала закройте все долги — стать преподавателем с незакрытыми долгами нельзя")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", "внутренняя ошибка сервиса")
 	}

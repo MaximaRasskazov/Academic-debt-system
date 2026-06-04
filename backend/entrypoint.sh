@@ -55,11 +55,17 @@ goose -dir /app/sql/migrations postgres "${DB_URL}" up
 # и удалит то, что только что вставил.
 if [ "${SEED_DEV_ACCOUNTS:-false}" = "true" ]; then
     echo "[entrypoint] seeding dev accounts (SEED_DEV_ACCOUNTS=true)..."
-    SEED_UP=$(sed '/-- +goose Down/,$d' /app/sql/seeds/00001_seed_dev_accounts.sql)
-    echo "${SEED_UP}" | PGPASSWORD="${DB_PASSWORD}" psql \
-        -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
-        -v ON_ERROR_STOP=1 \
-        --quiet
+    # Накатываем все сид-файлы по порядку имён (00001, 00002, ...).
+    # Каждый идемпотентен (ON CONFLICT / NOT EXISTS), секцию +goose Down
+    # отрезаем sed'ом, чтобы psql не удалил только что вставленное.
+    for SEED_FILE in /app/sql/seeds/*.sql; do
+        echo "[entrypoint]   applying $(basename "${SEED_FILE}")..."
+        SEED_UP=$(sed '/-- +goose Down/,$d' "${SEED_FILE}")
+        echo "${SEED_UP}" | PGPASSWORD="${DB_PASSWORD}" psql \
+            -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
+            -v ON_ERROR_STOP=1 \
+            --quiet
+    done
 fi
 
 echo "[entrypoint] starting server..."

@@ -29,6 +29,7 @@ type RetakeService interface {
 	Start(ctx context.Context, id, actorID uuid.UUID) error
 	Complete(ctx context.Context, id, actorID uuid.UUID) error
 	Cancel(ctx context.Context, id, actorID uuid.UUID) error
+	SetStatus(ctx context.Context, id uuid.UUID, status string, actorID uuid.UUID) error
 	ListParticipants(ctx context.Context, retakeID uuid.UUID) ([]queries.RetakeParticipant, error)
 	AddStudent(ctx context.Context, retakeID, studentID, debtID, actorID uuid.UUID) error
 	AddTeacher(ctx context.Context, retakeID, teacherID, actorID uuid.UUID) error
@@ -272,6 +273,42 @@ func (h *RetakeHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Cancel(r.Context(), id, userID); err != nil {
+		mapRetakeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetStatus godoc
+//
+//	@Summary	Установить статус пересдачи вручную (декан)
+//	@Description	Любой статус → любой, без ограничений переходов.
+//	@Tags		retakes
+//	@Accept		json
+//	@Param		id		path	string						true	"UUID пересдачи"
+//	@Param		body	body	dto.SetRetakeStatusRequest	true	"Новый статус"
+//	@Success	204
+//	@Failure	400	{object}	dto.ErrorResponse
+//	@Security	BearerAuth
+//	@Router		/api/retakes/{id}/status [post]
+func (h *RetakeHandler) SetStatus(w http.ResponseWriter, r *http.Request) {
+	userID, ok := mw.UserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
+		return
+	}
+	id, ok := parseURLUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var req dto.SetRetakeStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", "тело запроса не JSON")
+		return
+	}
+
+	if err := h.svc.SetStatus(r.Context(), id, req.Status, userID); err != nil {
 		mapRetakeError(w, err)
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/timeutil"
 )
 
 // retakePayload — общая часть payload'а для retake-уведомлений.
@@ -113,7 +114,7 @@ func (s *Service) retakePayloadFor(ctx context.Context, r queries.Retake) retake
 	p := retakeBasePayload(
 		pgutil.UUID(r.ID),
 		pgutil.UUID(r.DisciplineID),
-		r.ScheduledAt.Time.Format("2006-01-02 15:04"),
+		timeutil.FormatDateTime(r.ScheduledAt.Time),
 		r.Building, r.Room,
 	)
 	p["duration_minutes"] = r.DurationMinutes

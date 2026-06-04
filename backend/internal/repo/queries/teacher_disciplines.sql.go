@@ -127,7 +127,7 @@ func (q *Queries) ListDisciplinesForTeacher(ctx context.Context, teacherID pgtyp
 }
 
 const listTeachersForDiscipline = `-- name: ListTeachersForDiscipline :many
-SELECT u.id, u.email, u.password_hash, u.first_name, u.last_name, u.middle_name, u.birthday, u.group_name, u.created_at, u.updated_at
+SELECT u.id, u.email, u.password_hash, u.first_name, u.last_name, u.middle_name, u.birthday, u.group_name, u.created_at, u.updated_at, u.external_id
 FROM users u
 JOIN teacher_disciplines td ON td.teacher_id = u.id
 WHERE td.discipline_id = $1
@@ -155,6 +155,7 @@ func (q *Queries) ListTeachersForDiscipline(ctx context.Context, disciplineID pg
 			&i.GroupName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ExternalID,
 		); err != nil {
 			return nil, err
 		}

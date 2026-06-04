@@ -27,6 +27,10 @@ export const retakesApi = {
   cancel: (id) =>
     http.post(`/api/retakes/${id}/cancel`),
 
+  // Декан: ручная установка статуса (любой → любой).
+  setStatus: (id, status) =>
+    http.post(`/api/retakes/${id}/status`, { status }),
+
   getParticipants: (id) =>
     http.get(`/api/retakes/${id}/participants`),
 

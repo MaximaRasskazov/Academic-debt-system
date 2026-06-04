@@ -43,7 +43,7 @@ func (q *Queries) CountUsers(ctx context.Context, arg CountUsersParams) (int64, 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, first_name, last_name, middle_name, birthday, group_name)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
+RETURNING id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at, external_id
 `
 
 type CreateUserParams struct {
@@ -78,12 +78,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.GroupName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExternalID,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
+SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at, external_id
 FROM users
 WHERE LOWER(email) = LOWER($1)
 `
@@ -104,12 +105,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 		&i.GroupName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExternalID,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
+SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at, external_id
 FROM users
 WHERE id = $1
 `
@@ -128,51 +130,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.GroupName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExternalID,
 	)
 	return i, err
 }
 
-const listUsersByIDs = `-- name: ListUsersByIDs :many
-SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
-FROM users
-WHERE id = ANY($1::uuid[])
-`
-
-// Батч-выборка пользователей по списку ID. Используется в report.Service
-// вместо N одиночных GetUserByID.
-func (q *Queries) ListUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]User, error) {
-	rows, err := q.db.Query(ctx, listUsersByIDs, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []User
-	for rows.Next() {
-		var i User
-		if err := rows.Scan(
-			&i.ID,
-			&i.Email,
-			&i.PasswordHash,
-			&i.FirstName,
-			&i.LastName,
-			&i.MiddleName,
-			&i.Birthday,
-			&i.GroupName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUsers = `-- name: ListUsers :many
-SELECT DISTINCT u.id, u.email, u.password_hash, u.first_name, u.last_name, u.middle_name, u.birthday, u.group_name, u.created_at, u.updated_at
+SELECT DISTINCT u.id, u.email, u.password_hash, u.first_name, u.last_name, u.middle_name, u.birthday, u.group_name, u.created_at, u.updated_at, u.external_id
 FROM users u
 LEFT JOIN role_user ru ON ru.user_id = u.id AND ru.deleted_at IS NULL
 LEFT JOIN roles r      ON r.id = ru.role_id  AND r.deleted_at  IS NULL
@@ -234,6 +198,47 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, e
 			&i.GroupName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ExternalID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsersByIDs = `-- name: ListUsersByIDs :many
+SELECT id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at, external_id
+FROM users
+WHERE id = ANY($1::uuid[])
+`
+
+// Батч-выборка пользователей по списку ID. Используется в report.Service
+// вместо N одиночных GetUserByID.
+func (q *Queries) ListUsersByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsersByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.PasswordHash,
+			&i.FirstName,
+			&i.LastName,
+			&i.MiddleName,
+			&i.Birthday,
+			&i.GroupName,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ExternalID,
 		); err != nil {
 			return nil, err
 		}
@@ -271,7 +276,7 @@ SET first_name  = COALESCE($1,  first_name),
     group_name  = COALESCE($5,  group_name),
     updated_at  = NOW()
 WHERE id = $6
-RETURNING id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at
+RETURNING id, email, password_hash, first_name, last_name, middle_name, birthday, group_name, created_at, updated_at, external_id
 `
 
 type UpdateUserProfileParams struct {
@@ -306,6 +311,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.GroupName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExternalID,
 	)
 	return i, err
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/timeutil"
 )
 
 const (
@@ -424,7 +425,7 @@ func (s *Service) retakePayload(ctx context.Context, r queries.Retake) map[strin
 	p := map[string]any{
 		"retake_id":        pgutil.UUID(r.ID).String(),
 		"discipline_id":    pgutil.UUID(r.DisciplineID).String(),
-		"scheduled_at":     r.ScheduledAt.Time.Format("2006-01-02 15:04"),
+		"scheduled_at":     timeutil.FormatDateTime(r.ScheduledAt.Time),
 		"building":         r.Building,
 		"room":             r.Room,
 		"duration_minutes": r.DurationMinutes,

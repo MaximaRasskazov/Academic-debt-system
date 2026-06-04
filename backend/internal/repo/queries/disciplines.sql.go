@@ -197,8 +197,8 @@ WHERE id = ANY($1::uuid[])
 
 // Батч-выборка дисциплин по списку ID. Используется в report.Service
 // вместо N одиночных GetDisciplineByID.
-func (q *Queries) ListDisciplinesByIDs(ctx context.Context, ids []pgtype.UUID) ([]Discipline, error) {
-	rows, err := q.db.Query(ctx, listDisciplinesByIDs, ids)
+func (q *Queries) ListDisciplinesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]Discipline, error) {
+	rows, err := q.db.Query(ctx, listDisciplinesByIDs, dollar_1)
 	if err != nil {
 		return nil, err
 	}
