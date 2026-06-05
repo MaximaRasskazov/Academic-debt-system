@@ -15,6 +15,11 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![Caddy](https://img.shields.io/badge/Caddy-TLS-1F88C0?logo=caddy&logoColor=white)
 
+**🌐 Живой стенд**
+
+[![Сайт](https://img.shields.io/badge/Сайт-academic.poluyanov.net-2ea44f?style=flat&logo=googlechrome&logoColor=white)](https://academic.poluyanov.net)
+[![Почта](https://img.shields.io/badge/Почта-mail.academic.poluyanov.net-1f6feb?style=flat&logo=maildotru&logoColor=white)](https://mail.academic.poluyanov.net)
+
 </div>
 
 ---
