@@ -198,17 +198,16 @@ make sqlc                     # перегенерировать internal/repo/q
 
 ## Демо-аккаунты для разработки
 
-При `SEED_DEV_ACCOUNTS=true` (по умолчанию в `.env.example`) после `make setup` доступны 7 аккаунтов с паролем `password`:
+При `SEED_DEV_ACCOUNTS=true` (по умолчанию в `.env.example`) после `make setup` доступны 4 аккаунта — по одному на роль, пароль `password`:
 
-| Email | Роль |
-|---|---|
-| `admin@academic.local` | admin |
-| `dean@academic.local` | dean |
-| `teacher1@academic.local` | teacher |
-| `teacher2@academic.local` | teacher |
-| `student1@academic.local` | student (группа БСБО-01-22) |
-| `student2@academic.local` | student (БСБО-01-22) |
-| `student3@academic.local` | student (БСБО-02-22) |
+| Email | Роль | Группа |
+|---|---|---|
+| `admin@academic.local` | admin | — |
+| `dean@academic.local` | dean | — |
+| `teacher@academic.local` | teacher | — |
+| `student@academic.local` | student | БСБО-01-22 |
+
+`teacher` и `student` нужны для проверки их интерфейсов без эмулятора: преподаватель ведёт пару демо-дисциплин (MATH-101, PROG-201), у студента — два открытых долга по ним (сиды `00002`/`00003`). Реальные студенты и преподаватели приходят из эмулятора через `sync.Service`.
 
 ## Архитектурные инварианты
 
