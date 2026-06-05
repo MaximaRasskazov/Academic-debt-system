@@ -85,7 +85,10 @@ async function loadDebtTable() {
   debtTableLoading.value = true
   try {
     const [debtsRes, usersRes, discsRes] = await Promise.allSettled([
-      fetchAllPages(debtsApi.getAll),
+      // pageSize 200 = максимум, который отдаёт бэк (/api/debts maxLimit).
+      // Больший pageSize ломал бы догрузку: бэк вернул бы меньше, чем
+      // запросили, и цикл остановился бы, не добрав остальные страницы.
+      fetchAllPages(debtsApi.getAll, {}, 200),
       fetchAllPages(usersApi.getAll, {}, 1000),
       fetchAllPages(disciplinesApi.getAll),
     ])

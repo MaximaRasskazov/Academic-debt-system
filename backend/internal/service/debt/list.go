@@ -100,8 +100,15 @@ func (s *Service) SummaryByDiscipline(ctx context.Context) ([]queries.SummaryDeb
 }
 
 func normalizeLimit(v int32) int32 {
-	if v <= 0 || v > maxLimit {
+	if v <= 0 {
 		return defaultLimit
+	}
+	if v > maxLimit {
+		// Запрос больше максимума упираем в maxLimit, а не схлопываем в
+		// defaultLimit — иначе limit=500 молча отдавал бы 50 строк, и
+		// постраничная догрузка на фронте останавливалась после первой
+		// страницы (декан видел только 50 долгов из всех).
+		return maxLimit
 	}
 	return v
 }
